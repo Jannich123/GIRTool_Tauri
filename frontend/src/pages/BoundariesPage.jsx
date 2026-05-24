@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ export default function BoundariesPage() {
     if (!projectId) return
     try {
       setXlsxStatus('saving')
-      await axios.post(`/api/boundaries/${projectId}/save`, { boundaries: list })
+      await invoke('save_boundaries', { projectId, boundaries: list })
       setXlsxStatus('saved')
       clearTimeout(xlsxTimerRef.current)
       xlsxTimerRef.current = setTimeout(() => setXlsxStatus('idle'), 2500)
@@ -203,10 +203,8 @@ export default function BoundariesPage() {
     if (!projectId) return
     try {
       setXlsxStatus('loading')
-      const res = await axios.post(`/api/boundaries/${projectId}/load-from-excel`, {
-        existing: boundaries,
-      })
-      const merged = res.data.boundaries ?? []
+      const res = await invoke('load_boundaries_from_excel', { projectId })
+      const merged = res.boundaries ?? []
       saveBoundaries(merged)
       // Select first new boundary added (if any)
       const existingIds = new Set(boundaries.map(b => b.id))
@@ -216,8 +214,8 @@ export default function BoundariesPage() {
       clearTimeout(xlsxTimerRef.current)
       xlsxTimerRef.current = setTimeout(() => setXlsxStatus('idle'), 2500)
     } catch (err) {
-      const msg = err.response?.data?.detail ?? 'Failed to load from Excel'
-      alert(msg)
+      console.error(err)
+      alert(err ?? 'Failed to load from Excel')
       setXlsxStatus('idle')
     }
   }
@@ -225,9 +223,10 @@ export default function BoundariesPage() {
   async function openExcel() {
     if (!projectId) return
     try {
-      await axios.get(`/api/boundaries/${projectId}/open-excel`)
+      await invoke('open_boundaries_excel', { projectId })
     } catch (err) {
-      alert(err.response?.data?.detail ?? 'Could not open file')
+      console.error(err)
+      alert(err ?? 'Could not open file')
     }
   }
 
