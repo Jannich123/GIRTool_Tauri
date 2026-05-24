@@ -36,9 +36,10 @@ pub fn run() {
             // database
             commands::database::connect,
             commands::database::disconnect,
-            commands::database::connection_status,
+            commands::database::db_status,
             commands::database::browse_folder,
             commands::database::test_folder,
+            commands::database::refresh_project,
             // projects
             commands::projects::list_projects,
             // points

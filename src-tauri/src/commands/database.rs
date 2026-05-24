@@ -2,15 +2,17 @@
 //
 // Mirrors backend/routers/database.py from the Python reference build:
 //
-//   * connect           — validates an ODBC connection and stores config in
-//                         AppState; persists the config to
-//                         %APPDATA%\GIRTool\settings.json on success.
-//   * disconnect        — clears in-memory state (config + connected flag).
-//   * connection_status — returns the live state for the Settings page.
-//   * browse_folder     — opens a native OS folder picker via
-//                         tauri-plugin-dialog and returns the chosen path.
-//   * test_folder       — verifies a folder exists and is writable by
-//                         creating + deleting a probe file.
+//   * connect            — validates an ODBC connection and stores config in
+//                          AppState; persists the config to
+//                          %APPDATA%\GIRTool\settings.json on success.
+//   * disconnect         — clears in-memory state (config + connected flag).
+//   * db_status          — returns the live state for the Settings/App page.
+//   * browse_folder      — opens a native OS folder picker via
+//                          tauri-plugin-dialog and returns the chosen path.
+//   * test_folder        — verifies a folder exists and is writable by
+//                          creating + deleting a probe file.
+//   * refresh_project    — placeholder hook called by the Sidebar refresh
+//                          button; triggers a refreshKey bump on the frontend.
 
 use std::path::{Path, PathBuf};
 
@@ -26,12 +28,13 @@ use crate::state::{AppState, DbConfig};
 pub struct ConnectArgs {
     pub server:        String,
     pub database:      String,
+    #[serde(rename = "authMethod")]
     pub auth_method:   String,
     #[serde(default)]
     pub username:      Option<String>,
     #[serde(default)]
     pub password:      Option<String>,
-    #[serde(default)]
+    #[serde(rename = "outputFolder", default)]
     pub output_folder: Option<String>,
 }
 
@@ -42,6 +45,7 @@ pub struct ConnectResult {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusResult {
     pub connected:     bool,
     pub server:        String,
@@ -129,8 +133,10 @@ pub async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns live connection/configuration status.
+/// Frontend calls this as `db_status` (registered below under that name).
 #[tauri::command]
-pub async fn connection_status(state: State<'_, AppState>) -> Result<StatusResult, String> {
+pub async fn db_status(state: State<'_, AppState>) -> Result<StatusResult, String> {
     let connected = *state.connected.lock().unwrap();
     let cfg = state.db.lock().unwrap().clone().unwrap_or_default();
 
@@ -194,4 +200,16 @@ pub async fn test_folder(path: String) -> Result<FolderResult, String> {
         valid:   true,
         message: format!("Folder is accessible: {path}"),
     })
+}
+
+/// Called by the Sidebar "Refresh data" button.
+/// Returns Ok(()) so the frontend can bump its refreshKey.
+#[tauri::command]
+pub async fn refresh_project(
+    _project_id: String,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Currently a no-op — the frontend re-fetches data on its own after
+    // receiving Ok. Future: invalidate any server-side caches here.
+    Ok(())
 }
