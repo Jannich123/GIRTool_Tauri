@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
 
@@ -40,11 +40,11 @@ export default function PointsPage({ setPage }) {
     setLoading(true); setError('')
     try {
       const ids = selectedProjects.map(p => p.ProjectId)
-      const params = ids.map(id => `project_ids=${id}`).join('&')
-      const res = await axios.get(`/api/points/?${params}`)
-      setPoints(res.data)
+      const res = await invoke('get_points', { projectIds: ids })
+      setPoints(res)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load points')
+      console.error(err)
+      setError(err || 'Failed to load points')
     } finally {
       setLoading(false)
     }
