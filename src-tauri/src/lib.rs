@@ -80,6 +80,13 @@ pub fn run() {
             commands::charts::save_chart_config,
             // map
             commands::map::wfs_proxy,
+            // boundaries
+            commands::boundaries::save_boundaries,
+            commands::boundaries::load_boundaries_from_excel,
+            commands::boundaries::open_boundaries_excel,
+            // session
+            commands::session::get_session,
+            commands::session::patch_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GIRTool");
