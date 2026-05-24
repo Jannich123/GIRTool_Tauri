@@ -11,8 +11,10 @@
 //   commands/sharepoint.rs — SharePoint / Graph API auth & sync
 //   commands/colors.rs     — Colors & Symbols workbook
 //   commands/columns.rs    — column dictionary
-//   commands/charts.rs     — chart config persistence
-//   commands/map.rs        — map / WFS proxy
+//   commands/charts.rs     — chart config persistence + query runner
+//   commands/map.rs        — WFS proxy
+//   commands/boundaries.rs — boundaries xlsx
+//   commands/session.rs    — session persistence
 
 mod commands;
 mod db;
@@ -49,6 +51,8 @@ pub fn run() {
             commands::queries::save_query,
             commands::queries::delete_query,
             // grouping
+            commands::grouping::list_group_systems,
+            commands::grouping::save_group_systems,
             commands::grouping::get_grouping,
             commands::grouping::save_grouping,
             commands::grouping::open_grouping_excel,
@@ -57,6 +61,8 @@ pub fn run() {
             commands::strata::ensure_strata_file,
             commands::strata::load_strata,
             commands::strata::update_strata,
+            commands::strata::get_strata_layers,
+            commands::strata::get_strata_point_layers,
             // download
             commands::download::download_data,
             commands::download::save_session,
@@ -71,11 +77,17 @@ pub fn run() {
             commands::sharepoint::sp_sync_up,
             // colors
             commands::colors::open_colors_excel,
+            commands::colors::load_colors,
+            commands::colors::save_colors,
             // columns
-            commands::columns::get_columns,
+            commands::columns::get_column_dictionary,
             // charts
             commands::charts::get_chart_config,
             commands::charts::save_chart_config,
+            commands::charts::run_chart_query,
+            commands::charts::save_statistics,
+            commands::charts::open_statistics,
+            commands::charts::open_datasheet,
             // map
             commands::map::wfs_proxy,
             // boundaries

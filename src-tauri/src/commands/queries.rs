@@ -62,6 +62,14 @@ const DEFAULT_QUERIES_JSON: &str = r#"[
   {"fname":"GrainSizes","SQLScript":"SELECT B.[PointId], A.[SampleId], CAST(C.[PointNo] AS VARCHAR(MAX)) AS [PointNo], B.[SampleNo], round(B.[Depth1],3) as [Depth], round(C.[Z1] - B.[Depth1],3) as [Level], round(A.[Distance],2) as [Distance], A.[D10], A.[D15], A.[D20], A.[D25], A.[D30], A.[D50], A.[D60], A.[D75], A.[D90], A.[UC], A.[UCc], A.[Clayf], A.[Siltf], A.[Sandf], A.[Gravelf], A.[Cobblesf] FROM (#DB#[GrainSizes] A inner join #DB#[Samples] B on A.SampleId = B.SampleId) inner join #DB#[Points] C on B.PointId = C.PointId where C.ProjectID IN (#projectid#) #pointfilter# ORDER BY PointNo ASC, SampleNo ASC, Depth1 ASC, Distance ASC","pointfilter":"B.PointId IN (#pointid#)","apply_strata":"Yes"}
 ]"#;
 
+/// Public helper: load the query list for use by other command modules.
+pub fn load_queries(state: &AppState) -> Vec<Query> {
+    match queries_path(state) {
+        Ok(p) => read_queries(&p),
+        Err(_) => default_queries(),
+    }
+}
+
 // ── File path ─────────────────────────────────────────────────────────────────
 
 fn queries_path(state: &AppState) -> Result<PathBuf, String> {
