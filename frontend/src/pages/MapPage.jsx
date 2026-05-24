@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Marker, Popup, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import proj4 from 'proj4'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 
@@ -240,16 +241,7 @@ async function loadWFS(wfsUrl, epsg, projectIds) {
     url.searchParams.set('CQL_FILTER',
       `ProjectId IN (${projectIds.map(id => `'${id}'`).join(',')})`)
   }
-  const proxyRes = await fetch('/api/map/wfs-proxy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: url.toString() }),
-  })
-  if (!proxyRes.ok) {
-    const err = await proxyRes.json().catch(() => ({}))
-    throw new Error(err.detail || `Proxy error ${proxyRes.status}`)
-  }
-  const gj = await proxyRes.json()
+  const gj = await invoke('wfs_proxy', { url: url.toString() })
   return (gj.features || []).map(f => {
     const coords = f.geometry?.coordinates
     if (!coords) return null
