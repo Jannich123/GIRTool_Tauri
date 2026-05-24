@@ -38,7 +38,11 @@
     ],
     "windows": {
       "wix": {},
-      "nsis": {}
+      "nsis": {
+        "installerHooks": "nsis/hooks.nsh",
+        "installMode": "perMachine",
+        "shortcutName": "GIRTool"
+      }
     }
   },
   "plugins": {
