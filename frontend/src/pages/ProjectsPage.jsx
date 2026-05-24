@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useDragSelect } from '../hooks/useDragSelect'
 
@@ -36,10 +36,11 @@ export default function ProjectsPage({ setPage }) {
   async function fetchProjects() {
     setLoading(true); setError('')
     try {
-      const res = await axios.get('/api/projects/')
-      setProjects(res.data)
+      const res = await invoke('list_projects')
+      setProjects(res)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load projects')
+      console.error(err)
+      setError(err || 'Failed to load projects')
     } finally {
       setLoading(false)
     }
