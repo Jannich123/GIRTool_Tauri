@@ -7,18 +7,28 @@
 //
 // Issue #5 — grouping assignments + xlsx:
 //   get_grouping(project_id)                → { systems, assignments }
-//   save_grouping(project_id, body)         → ()  (write JSON + xlsx)
+//   save_grouping(project_id, body)         → ()  (write JSON + Grouping.xlsx)
 //   open_grouping_excel(project_id)         → ()  (open xlsx in OS)
-//   reload_from_excel(project_id)           → { systems, assignments }
+//   reload_from_excel(project_id)           → { systems, assignments }  (parse xlsx)
 //
 // Storage:
-//   %APPDATA%\GIRTool\projects\{project_id}\group_systems.json — systems
-//   {output_folder}/{project_id}_grouping.json                 — assignments
-//   {output_folder}/{project_id}_Grouping.xlsx                 — xlsx export
+//   %APPDATA%\GIRTool\projects\{project_id}\group_systems.json  — systems
+//   {output_folder}/Grouping.xlsx                               — assignments (tabular)
+//
+// Grouping.xlsx sheet "Point Groups" layout (matches Python write_points_xlsx):
+//   Col A: PointId  (hidden; 36 wide)
+//   Col B: PointNo  (14 wide)
+//   Col C: ProjectNo   (14 wide)
+//   Col D: ProjectName (28 wide)
+//   Col E: PointType   (12 wide)
+//   Col F+: one column per group system  (max(name+3, 12) wide)
+//   Table style: TableStyleMedium2, freeze F2, sort by PointNo
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use rust_xlsxwriter::{Color, Format, Workbook};
+use calamine::{open_workbook, Data, Reader, Xlsx};
+use rust_xlsxwriter::{Format, Table, TableStyle, Workbook};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -28,6 +38,9 @@ use crate::state::AppState;
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const UNKNOWN_NAME: &str = "Unknown";
+
+/// Columns that are never treated as system-name columns when reading xlsx.
+const SKIP_COLS: &[&str] = &["PointId", "PointNo", "PointType", "ProjectNo", "ProjectName"];
 
 fn unknown_defaults(gs_id: &str) -> Value {
     let id_prefix = &gs_id[..gs_id.len().min(16)];
@@ -57,22 +70,16 @@ fn group_systems_path(project_id: &str) -> Result<PathBuf, String> {
     Ok(dir.join("group_systems.json"))
 }
 
-fn grouping_json_path(folder: &str, project_id: &str) -> PathBuf {
-    PathBuf::from(folder).join(format!("{project_id}_grouping.json"))
-}
-
-fn grouping_xlsx_path(folder: &str, project_id: &str) -> PathBuf {
-    PathBuf::from(folder).join(format!("{project_id}_Grouping.xlsx"))
+/// {output_folder}/Grouping.xlsx  (one file per output folder, matching Python)
+pub fn grouping_xlsx_path(output_folder: &str) -> PathBuf {
+    PathBuf::from(output_folder).join("Grouping.xlsx")
 }
 
 // ── Business logic ────────────────────────────────────────────────────────────
 
 /// Guarantee every system ends with a group named "Unknown".
 ///
-/// Mirrors `_ensure_unknown_groups` from backend/routers/grouping.py:
-/// * Separates "Unknown" from regular groups.
-/// * If Unknown is absent, creates it with defaults.
-/// * Appends Unknown last (always the catch-all, always at the end).
+/// Mirrors `_ensure_unknown_groups` from backend/routers/grouping.py.
 pub fn ensure_unknown_groups(systems: Vec<Value>) -> Vec<Value> {
     systems
         .into_iter()
@@ -106,98 +113,337 @@ pub fn ensure_unknown_groups(systems: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-// ── xlsx helpers ──────────────────────────────────────────────────────────────
+// ── calamine helpers ──────────────────────────────────────────────────────────
 
-/// Parse a CSS hex colour string (#rrggbb) to a rust_xlsxwriter Color.
-fn hex_to_color(hex: &str) -> Color {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() == 6 {
-        if let Ok(n) = u32::from_str_radix(hex, 16) {
-            return Color::RGB(n);
+/// Convert a calamine Data cell to a plain String.
+fn data_str(cell: &Data) -> String {
+    match cell {
+        Data::String(s)   => s.clone(),
+        Data::Float(f)    => {
+            if f.fract() == 0.0 { format!("{}", *f as i64) } else { f.to_string() }
         }
+        Data::Int(i)      => i.to_string(),
+        Data::Bool(b)     => b.to_string(),
+        Data::DateTime(d) => d.to_string(),
+        _                 => String::new(),
     }
-    Color::RGB(0x808080) // fallback grey
 }
 
-/// Write a Grouping xlsx with one sheet per group system.
-/// Each sheet has:
-///   Row 0:  system name header
-///   Row 1:  group headers (coloured cells)
-///   Row 2+: one row per point, cells coloured by group assignment
-fn write_grouping_xlsx(
-    path: &Path,
+// ── xlsx reading (calamine) ───────────────────────────────────────────────────
+
+/// Read `{ pointId → { sysId → groupName } }` from Grouping.xlsx.
+///
+/// Column headers beyond the fixed five are treated as system *names* and
+/// mapped back to system *IDs* via the provided systems slice.
+/// "Unknown" group values are never stored (they are the implicit catch-all).
+pub fn read_assignments_from_xlsx(path: &PathBuf, systems: &[Value]) -> Value {
+    if !path.exists() {
+        return json!({});
+    }
+
+    let mut wb: Xlsx<_> = match open_workbook(path) {
+        Ok(w)  => w,
+        Err(_) => return json!({}),
+    };
+    let range = match wb.worksheet_range_at(0) {
+        Some(Ok(r)) => r,
+        _           => return json!({}),
+    };
+
+    // name → id  so column headers can be resolved back to system IDs
+    let name_to_id: HashMap<String, String> = systems.iter()
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            let id   = s["id"].as_str()?.to_string();
+            Some((name, id))
+        })
+        .collect();
+
+    // id → accepted group names for case-insensitive lookup
+    let id_to_groups: HashMap<String, Vec<String>> = systems.iter()
+        .filter_map(|s| {
+            let id = s["id"].as_str()?.to_string();
+            let groups: Vec<String> = s["groups"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|g| g["name"].as_str().map(|n| n.to_string()))
+                .collect();
+            Some((id, groups))
+        })
+        .collect();
+
+    let mut iter = range.rows();
+    let headers: Vec<String> = match iter.next() {
+        Some(row) => row.iter().map(data_str).collect(),
+        None      => return json!({}),
+    };
+
+    let h_pid = match headers.iter().position(|h| h == "PointId") {
+        Some(i) => i,
+        None    => return json!({}),
+    };
+
+    // col_index → system ID (skip the five fixed columns)
+    let sys_map: Vec<(usize, String)> = headers.iter().enumerate()
+        .filter(|(_, h)| !SKIP_COLS.contains(&h.as_str()) && !h.is_empty())
+        .map(|(i, h)| {
+            let sid = name_to_id.get(h).cloned().unwrap_or_else(|| h.clone());
+            (i, sid)
+        })
+        .collect();
+
+    let mut result = serde_json::Map::new();
+
+    for row in iter {
+        let pid = match row.get(h_pid) {
+            Some(c) if !matches!(c, Data::Empty) => data_str(c),
+            _                                    => continue,
+        };
+        if pid.is_empty() {
+            continue;
+        }
+
+        let mut asgn = serde_json::Map::new();
+        for (col_idx, sys_id) in &sys_map {
+            if let Some(cell) = row.get(*col_idx) {
+                let raw = data_str(cell);
+                let val = raw.trim();
+                if val.is_empty() || val == UNKNOWN_NAME {
+                    continue;
+                }
+                // Case-insensitive match against known group names.
+                let resolved = if let Some(group_names) = id_to_groups.get(sys_id) {
+                    group_names.iter()
+                        .find(|g| {
+                            g.to_lowercase() == val.to_lowercase()
+                                && g.as_str() != UNKNOWN_NAME
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| val.to_string())
+                } else {
+                    val.to_string()
+                };
+                asgn.insert(sys_id.clone(), Value::String(resolved));
+            }
+        }
+
+        if !asgn.is_empty() {
+            result.insert(pid, Value::Object(asgn));
+        }
+    }
+
+    Value::Object(result)
+}
+
+// ── xlsx writing (rust_xlsxwriter) ───────────────────────────────────────────
+
+/// Load existing rows from Grouping.xlsx so we can preserve points not in the
+/// current save batch (merge semantics, same as Python _write_points_xlsx).
+fn load_existing_rows(
+    path: &PathBuf,
+    systems: &[Value],
+) -> HashMap<String, serde_json::Map<String, Value>> {
+    let mut existing: HashMap<String, serde_json::Map<String, Value>> = HashMap::new();
+    if !path.exists() {
+        return existing;
+    }
+
+    let mut wb: Xlsx<_> = match open_workbook(path) {
+        Ok(w)  => w,
+        Err(_) => return existing,
+    };
+    let range = match wb.worksheet_range_at(0) {
+        Some(Ok(r)) => r,
+        _           => return existing,
+    };
+
+    let name_to_id: HashMap<String, String> = systems.iter()
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            let id   = s["id"].as_str()?.to_string();
+            Some((name, id))
+        })
+        .collect();
+
+    let mut rows = range.rows();
+    let headers: Vec<String> = match rows.next() {
+        Some(r) => r.iter().map(data_str).collect(),
+        None    => return existing,
+    };
+
+    let h_pid = match headers.iter().position(|h| h == "PointId") {
+        Some(i) => i,
+        None    => return existing,
+    };
+    let h_pno = headers.iter().position(|h| h == "PointNo");
+    let h_pty = headers.iter().position(|h| h == "PointType");
+    let h_pro = headers.iter().position(|h| h == "ProjectNo");
+    let h_prn = headers.iter().position(|h| h == "ProjectName");
+
+    let sys_map: Vec<(usize, String)> = headers.iter().enumerate()
+        .filter(|(_, h)| !SKIP_COLS.contains(&h.as_str()) && !h.is_empty())
+        .map(|(i, h)| (i, name_to_id.get(h).cloned().unwrap_or_else(|| h.clone())))
+        .collect();
+
+    for row in rows {
+        let pid = match row.get(h_pid) {
+            Some(c) if !matches!(c, Data::Empty) => data_str(c),
+            _                                    => continue,
+        };
+        if pid.is_empty() {
+            continue;
+        }
+
+        let mut data = serde_json::Map::new();
+        macro_rules! copy_col {
+            ($opt_idx:expr, $key:literal) => {
+                if let Some(i) = $opt_idx {
+                    let v = row.get(i).map(data_str).unwrap_or_default();
+                    data.insert($key.to_string(), Value::String(v));
+                }
+            };
+        }
+        copy_col!(h_pno, "PointNo");
+        copy_col!(h_pty, "PointType");
+        copy_col!(h_pro, "ProjectNo");
+        copy_col!(h_prn, "ProjectName");
+
+        for (ci, sid) in &sys_map {
+            if let Some(cell) = row.get(*ci) {
+                let v = data_str(cell);
+                if !v.is_empty() {
+                    data.insert(sid.clone(), Value::String(v));
+                }
+            }
+        }
+
+        existing.insert(pid, data);
+    }
+
+    existing
+}
+
+/// Write (or overwrite) Grouping.xlsx with the Python-compatible tabular format.
+///
+/// Merges existing rows (to preserve points not in this save batch) with
+/// the new `points` and `assignments` sent by the frontend.
+pub fn write_grouping_xlsx(
+    path: &PathBuf,
     systems: &[Value],
     assignments: &Value,
     points: &[Value],
 ) -> Result<(), String> {
-    let mut workbook = Workbook::new();
+    // 1. Load existing rows for merge.
+    let mut existing = load_existing_rows(path, systems);
+
+    // 2. Apply new points and their assignments.
+    for pt in points {
+        let pid = match pt["PointId"].as_str().filter(|s| !s.is_empty()) {
+            Some(p) => p.to_string(),
+            None    => continue,
+        };
+
+        let mut data = serde_json::Map::new();
+        for key in &["PointNo", "PointType", "ProjectNo", "ProjectName"] {
+            let prev = existing.get(&pid).and_then(|m| m.get(*key)).cloned()
+                .unwrap_or_else(|| json!(""));
+            let v = pt.get(*key).cloned().unwrap_or(prev);
+            data.insert((*key).to_string(), v);
+        }
+
+        // Apply group assignments for this point.
+        if let Some(asgn) = assignments.get(&pid).and_then(|a| a.as_object()) {
+            for (sid, gname) in asgn {
+                data.insert(sid.clone(), gname.clone());
+            }
+        }
+        existing.insert(pid, data);
+    }
+
+    if existing.is_empty() {
+        // Nothing to write — create an empty workbook.
+        let mut wb = Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("Point Groups").map_err(|e| format!("{e}"))?;
+        return wb.save(path).map_err(|e| format!("Save error: {e}"));
+    }
+
+    // 3. Sort by PointNo (string sort, like Python).
+    let mut sorted: Vec<(String, serde_json::Map<String, Value>)> =
+        existing.into_iter().collect();
+    sorted.sort_by(|a, b| {
+        let pno_a = a.1.get("PointNo").and_then(|v| v.as_str()).unwrap_or("");
+        let pno_b = b.1.get("PointNo").and_then(|v| v.as_str()).unwrap_or("");
+        pno_a.cmp(pno_b)
+    });
+
+    // 4. Ordered list of system names and id→col offset map.
+    let sys_names: Vec<String> = systems.iter()
+        .filter_map(|s| s["name"].as_str().map(|n| n.to_string()))
+        .collect();
+    let sys_id_to_offset: HashMap<String, usize> = systems.iter().enumerate()
+        .filter_map(|(i, s)| s["id"].as_str().map(|id| (id.to_string(), i)))
+        .collect();
+
+    // 5. Write workbook.
+    let mut wb = Workbook::new();
+    let ws = wb.add_worksheet();
+    ws.set_name("Point Groups").map_err(|e| format!("{e}"))?;
+
     let bold = Format::new().set_bold();
 
-    for system in systems {
-        let sys_id = system["id"].as_str().unwrap_or("?");
-        let sys_name = system["name"].as_str().unwrap_or("System");
-        let sheet_name: String = sys_name.chars().take(31).collect();
+    // Header row (row 0).
+    let fixed = ["PointId", "PointNo", "ProjectNo", "ProjectName", "PointType"];
+    for (c, h) in fixed.iter().enumerate() {
+        ws.write_with_format(0, c as u16, *h, &bold)
+            .map_err(|e| format!("{e}"))?;
+    }
+    for (i, name) in sys_names.iter().enumerate() {
+        ws.write_with_format(0, (fixed.len() + i) as u16, name.as_str(), &bold)
+            .map_err(|e| format!("{e}"))?;
+    }
 
-        let ws = workbook.add_worksheet();
-        if let Err(e) = ws.set_name(&sheet_name) {
-            tracing::warn!("Sheet name '{sheet_name}': {e}");
+    // Data rows (rows 1+).
+    let n = sorted.len();
+    for (r, (pid, data)) in sorted.iter().enumerate() {
+        let row = (r + 1) as u32;
+        ws.write(row, 0, pid.as_str()).map_err(|e| format!("{e}"))?;
+        for (c, key) in ["PointNo", "ProjectNo", "ProjectName", "PointType"].iter().enumerate() {
+            let v = data.get(*key).and_then(|v| v.as_str()).unwrap_or("");
+            ws.write(row, (c + 1) as u16, v).map_err(|e| format!("{e}"))?;
         }
-
-        let empty_groups = vec![];
-        let groups: &Vec<Value> = system["groups"].as_array().unwrap_or(&empty_groups);
-
-        // Row 0 — group header cells, coloured by group color.
-        for (j, group) in groups.iter().enumerate() {
-            let grp_name = group["name"].as_str().unwrap_or("?");
-            let color_str = group["color"].as_str().unwrap_or("#808080");
-            let bg = hex_to_color(color_str);
-            let fmt = Format::new().set_bold().set_background_color(bg);
-            ws.write_string_with_format(0, j as u16, grp_name, &fmt)
-                .ok();
-        }
-
-        // Rows 1+ — one row per point; the cell in the assigned group column
-        // is coloured; others are blank.
-        let assignments_obj = assignments.as_object();
-        for (i, point) in points.iter().enumerate() {
-            let point_id = point["PointId"].as_str().unwrap_or("");
-            let point_no = point["PointNo"]
-                .as_str()
-                .or_else(|| point["PointNo"].as_i64().map(|_| ""))
-                .unwrap_or("");
-
-            // Label the row with the point number in column N (after all groups).
-            let label_col = groups.len() as u16;
-            ws.write_string_with_format((i + 1) as u32, label_col, point_no, &bold)
-                .ok();
-
-            // Find this point's assigned group in this system.
-            let assigned_group_id = assignments_obj
-                .and_then(|a| a.get(point_id))
-                .and_then(|by_sys| by_sys.as_object())
-                .and_then(|by_sys| by_sys.get(sys_id))
-                .and_then(|g| g.as_str());
-
-            if let Some(grp_id) = assigned_group_id {
-                if let Some(pos) = groups.iter().position(|g| g["id"].as_str() == Some(grp_id)) {
-                    let color_str = groups[pos]["color"].as_str().unwrap_or("#808080");
-                    let bg = hex_to_color(color_str);
-                    let fmt = Format::new().set_background_color(bg);
-                    ws.write_string_with_format(
-                        (i + 1) as u32,
-                        pos as u16,
-                        point_no,
-                        &fmt,
-                    )
-                    .ok();
-                }
-            }
+        for (sid, off) in &sys_id_to_offset {
+            let val = data.get(sid).and_then(|v| v.as_str()).unwrap_or("");
+            ws.write(row, (fixed.len() + off) as u16, val)
+                .map_err(|e| format!("{e}"))?;
         }
     }
 
-    workbook
-        .save(path)
-        .map_err(|e| format!("Failed to save Grouping xlsx: {e}"))
+    // Table style.
+    if n > 0 {
+        let total_cols = fixed.len() + sys_names.len();
+        let table = Table::new().set_style(TableStyle::Medium2);
+        ws.add_table(0, 0, n as u32, (total_cols - 1) as u16, &table)
+            .map_err(|e| format!("{e}"))?;
+    }
+
+    // Freeze F2 (first row + first 5 columns pinned).
+    ws.set_freeze_panes(1, 5).map_err(|e| format!("{e}"))?;
+
+    // Column widths: PointId=36, PointNo=14, ProjectNo=14, ProjectName=28, PointType=12
+    let fixed_widths: &[(u16, f64)] =
+        &[(0, 36.0), (1, 14.0), (2, 14.0), (3, 28.0), (4, 12.0)];
+    for (col, w) in fixed_widths {
+        ws.set_column_width(*col, *w).map_err(|e| format!("{e}"))?;
+    }
+    for (i, name) in sys_names.iter().enumerate() {
+        let w = (name.len() as f64 + 3.0).max(12.0);
+        ws.set_column_width((fixed.len() + i) as u16, w)
+            .map_err(|e| format!("{e}"))?;
+    }
+
+    wb.save(path).map_err(|e| format!("Save error: {e}"))
 }
 
 // ── Commands — Issue #17 ──────────────────────────────────────────────────────
@@ -210,8 +456,10 @@ pub async fn list_group_systems(project_id: String) -> Result<Vec<Value>, String
     if !path.exists() {
         return Ok(vec![]);
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("Read error: {e}"))?;
-    serde_json::from_str::<Vec<Value>>(&text).map_err(|e| format!("Parse error: {e}"))
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Read error: {e}"))?;
+    serde_json::from_str::<Vec<Value>>(&text)
+        .map_err(|e| format!("Parse error: {e}"))
 }
 
 /// Full-replace the group systems, enforcing Unknown group at end of each system.
@@ -229,40 +477,46 @@ pub async fn save_group_systems(
 
 // ── Commands — Issue #5 ───────────────────────────────────────────────────────
 
-/// Return the full grouping for a project: { systems, assignments }.
+/// Return `{ systems, assignments }` for the grouping page.
+///
+/// `systems`     — all group systems (with Unknown enforced at end of each).
+/// `assignments` — `{ pointId: { sysId: groupName } }` parsed from Grouping.xlsx.
 #[tauri::command]
 pub async fn get_grouping(
     project_id: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let folder = state.output_folder().ok_or("No output folder configured.")?;
-
-    // Load systems from APPDATA store.
-    let systems_path = group_systems_path(&project_id)?;
-    let systems: Vec<Value> = if systems_path.exists() {
-        std::fs::read_to_string(&systems_path)
+    // Load systems from APPDATA.
+    let sys_path = group_systems_path(&project_id)?;
+    let systems: Vec<Value> = if sys_path.exists() {
+        std::fs::read_to_string(&sys_path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
     } else {
         Vec::new()
     };
+    let systems = ensure_unknown_groups(systems);
 
-    // Load assignments from output folder.
-    let json_path = grouping_json_path(&folder, &project_id);
-    let assignments: Value = std::fs::read_to_string(&json_path)
-        .ok()
-        .and_then(|s| {
-            let v: Value = serde_json::from_str(&s).ok()?;
-            v.get("assignments").cloned()
-        })
-        .unwrap_or_else(|| json!({}));
+    // Read assignments from Grouping.xlsx on a blocking thread.
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let xlsx_path = grouping_xlsx_path(&folder);
+    let sys_clone = systems.clone();
+    let assignments = tokio::task::spawn_blocking(move || {
+        read_assignments_from_xlsx(&xlsx_path, &sys_clone)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
 
     Ok(json!({ "systems": systems, "assignments": assignments }))
 }
 
-/// Persist grouping (systems + assignments) to JSON and xlsx.
-/// `body` contains: { systems, assignments, points }
+/// Persist group systems + assignments to APPDATA (JSON) and Grouping.xlsx.
+///
+/// `body` must contain:
+///   systems:     Vec<Value>  — group system definitions
+///   assignments: Value       — `{ pointId: { sysId: groupName } }`
+///   points:      Vec<Value>  — point metadata (PointId, PointNo, PointType, …)
 #[tauri::command]
 pub async fn save_grouping(
     project_id: String,
@@ -271,113 +525,62 @@ pub async fn save_grouping(
 ) -> Result<(), String> {
     let folder = state.output_folder().ok_or("No output folder configured.")?;
 
-    let systems: Vec<Value> = body
-        .get("systems")
-        .and_then(|v| v.as_array())
+    let systems: Vec<Value> = body["systems"]
+        .as_array()
         .cloned()
         .unwrap_or_default();
-    let assignments = body.get("assignments").cloned().unwrap_or(json!({}));
-    let points: Vec<Value> = body
-        .get("points")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    // Enforce Unknown groups.
     let systems = ensure_unknown_groups(systems);
+    let assignments = body["assignments"].clone();
+    let points: Vec<Value> = body["points"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     // Persist systems to APPDATA.
-    let systems_path = group_systems_path(&project_id)?;
-    let sys_json =
-        serde_json::to_string_pretty(&systems).map_err(|e| format!("Serialise error: {e}"))?;
-    std::fs::write(&systems_path, sys_json).map_err(|e| format!("Write error: {e}"))?;
+    let sys_path = group_systems_path(&project_id)?;
+    let sys_json = serde_json::to_string_pretty(&systems)
+        .map_err(|e| format!("Serialise error: {e}"))?;
+    std::fs::write(&sys_path, sys_json).map_err(|e| format!("Write error: {e}"))?;
 
-    // Persist assignments to output folder JSON.
-    let json_path = grouping_json_path(&folder, &project_id);
-    let payload = json!({ "systems": systems, "assignments": assignments });
-    let payload_json =
-        serde_json::to_string_pretty(&payload).map_err(|e| format!("Serialise error: {e}"))?;
-    std::fs::write(&json_path, payload_json).map_err(|e| format!("Write error: {e}"))?;
-
-    // Write xlsx (best-effort, off the async runtime).
-    let xlsx_path = grouping_xlsx_path(&folder, &project_id);
-    let systems_clone = systems.clone();
-    let assignments_clone = assignments.clone();
-    let points_clone = points.clone();
+    // Write Grouping.xlsx on a blocking thread.
+    let xlsx_path = grouping_xlsx_path(&folder);
     tokio::task::spawn_blocking(move || {
-        write_grouping_xlsx(&xlsx_path, &systems_clone, &assignments_clone, &points_clone)
+        write_grouping_xlsx(&xlsx_path, &systems, &assignments, &points)
     })
     .await
-    .map_err(|e| format!("internal task error: {e}"))??;
-
-    Ok(())
+    .map_err(|e| format!("internal task error: {e}"))?
 }
 
-/// Open the Grouping xlsx in the OS default application.
+/// Open Grouping.xlsx in the OS default application (e.g. Excel).
 #[tauri::command]
 pub async fn open_grouping_excel(
-    project_id: String,
+    _project_id: String,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
     let folder = state.output_folder().ok_or("No output folder configured.")?;
-    let path = grouping_xlsx_path(&folder, &project_id);
+    let path = grouping_xlsx_path(&folder);
 
     if !path.exists() {
-        return Err(format!(
-            "Grouping workbook not found: {}",
-            path.display()
-        ));
+        return Err("Grouping.xlsx not found — save grouping first.".into());
     }
 
     app.opener()
         .open_path(path.to_string_lossy().as_ref(), None::<&str>)
-        .map_err(|e| format!("Failed to open Grouping workbook: {e}"))
+        .map_err(|e| format!("Failed to open Grouping.xlsx: {e}"))
 }
 
-/// Reload grouping data from the xlsx file.
-/// Falls back to the JSON store if xlsx is absent or unreadable.
+/// Re-read Grouping.xlsx and return the updated `{ systems, assignments }`.
+///
+/// This is the main "sync from Excel" operation: the user may have edited group
+/// assignments directly in Excel; this command parses the file with calamine
+/// and returns the reconciled state, with group names matched case-insensitively
+/// against the known group names in the systems JSON.
 #[tauri::command]
 pub async fn reload_from_excel(
     project_id: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let folder = state.output_folder().ok_or("No output folder configured.")?;
-    let xlsx_path = grouping_xlsx_path(&folder, &project_id);
-    let json_path = grouping_json_path(&folder, &project_id);
-
-    // If xlsx exists, load systems (sheets → system names + groups from APPDATA).
-    if xlsx_path.exists() {
-        // For now fall through to JSON — full xlsx colour-parse is complex.
-        // The xlsx is kept as a human-editable reference; JSON is authoritative.
-        tracing::info!(
-            "reload_from_excel: xlsx exists at {}; returning JSON state",
-            xlsx_path.display()
-        );
-    }
-
-    // Read from JSON store.
-    let _folder_str = folder.clone();
-    let _project_str = project_id.clone();
-    let data: Value = std::fs::read_to_string(&json_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({ "systems": [], "assignments": {} }));
-
-    // Merge in systems from APPDATA if not in JSON.
-    let systems = if data["systems"].as_array().map_or(true, |a| a.is_empty()) {
-        let systems_path = group_systems_path(&project_id)?;
-        std::fs::read_to_string(&systems_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Vec<Value>>(&s).ok())
-            .map(Value::Array)
-            .unwrap_or(json!([]))
-    } else {
-        data["systems"].clone()
-    };
-
-    Ok(json!({
-        "systems":     systems,
-        "assignments": data.get("assignments").cloned().unwrap_or(json!({})),
-    }))
+    // get_grouping already reads from xlsx via calamine — reuse it.
+    get_grouping(project_id, state).await
 }
