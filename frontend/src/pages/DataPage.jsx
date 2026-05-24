@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
 const EMPTY_QUERY = { fname: '', SQLScript: '', pointfilter: '', apply_strata: 'No' }
@@ -47,21 +47,23 @@ export default function DataPage() {
   async function fetchQueries() {
     setLoadingQ(true); setError('')
     try {
-      const res = await axios.get(`/api/queries/${projectId}`)
-      setQueries(res.data)
+      const res = await invoke('list_queries', { projectId })
+      setQueries(res)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load queries')
+      console.error(err)
+      setError(err || 'Failed to load queries')
     } finally { setLoadingQ(false) }
   }
 
   async function saveAllQueries(updated) {
     setSavingQuery(true); setQuerySaved(false)
     try {
-      await axios.post(`/api/queries/${projectId}`, updated)
+      await invoke('save_query', { projectId, query: updated })
       setQuerySaved(true)
       setTimeout(() => setQuerySaved(false), 2500)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save queries')
+      console.error(err)
+      setError(err || 'Failed to save queries')
     } finally { setSavingQuery(false) }
   }
 
@@ -123,10 +125,11 @@ export default function DataPage() {
     setSavingData(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
     try {
-      const res = await axios.post(`/api/download/${projectId}`, buildPayload(queryNames))
-      setSaveResult(res.data)
+      const res = await invoke('download_data', { projectId, query: buildPayload(queryNames) })
+      setSaveResult(res)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Save failed — check the backend log.')
+      console.error(err)
+      setError(err || 'Save failed — check the backend log.')
     } finally { setSavingData(false) }
   }
 
@@ -134,20 +137,22 @@ export default function DataPage() {
     setAppending(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
     try {
-      const res = await axios.post(`/api/download/${projectId}/append`, buildPayload(queryNames))
-      setAppendResult(res.data)
+      const res = await invoke('append_data', { projectId, query: buildPayload(queryNames) })
+      setAppendResult(res)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Append failed — check the backend log.')
+      console.error(err)
+      setError(err || 'Append failed — check the backend log.')
     } finally { setAppending(false) }
   }
 
   async function handleReaddStrata() {
     setReaddingStrata(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     try {
-      const res = await axios.post(`/api/download/${projectId}/readd-strata`, buildPayload([]))
-      setReaddResult(res.data)
+      const res = await invoke('readd_strata', { projectId, query: buildPayload([]) })
+      setReaddResult(res)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Re-add strata failed — check the backend log.')
+      console.error(err)
+      setError(err || 'Re-add strata failed — check the backend log.')
     } finally { setReaddingStrata(false) }
   }
 
