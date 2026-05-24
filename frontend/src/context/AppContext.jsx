@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 
 const AppContext = createContext(null)
 
@@ -93,8 +93,8 @@ export function AppProvider({ children }) {
 
   // Fetch column dictionary once on mount (cached server-side).
   useEffect(() => {
-    axios.get('/api/columns/dictionary')
-      .then(r => setColDict(r.data ?? {}))
+    invoke('get_column_dictionary')
+      .then(r => setColDict(r ?? {}))
       .catch(() => {})
   }, [])
 
@@ -102,8 +102,8 @@ export function AppProvider({ children }) {
   useEffect(() => {
     const pid = selectedProjects[0]?.ProjectId
     if (!pid) { setBoundaries([]); return }
-    axios.get(`/api/session/${pid}`)
-      .then(r => setBoundaries(Array.isArray(r.data?.boundaries) ? r.data.boundaries : []))
+    invoke('get_session', { projectId: pid })
+      .then(r => setBoundaries(Array.isArray(r?.boundaries) ? r.boundaries : []))
       .catch(() => setBoundaries([]))
   }, [selectedProjects])  // eslint-disable-line
 
@@ -118,7 +118,7 @@ export function AppProvider({ children }) {
     boundariesRef.current = list   // keep ref in sync before the timer fires
     clearTimeout(boundariesTimerRef.current)
     boundariesTimerRef.current = setTimeout(() => {
-      axios.patch(`/api/session/${pid}`, { boundaries: boundariesRef.current }).catch(() => {})
+      invoke('patch_session', { projectId: pid, patch: { boundaries: boundariesRef.current } }).catch(() => {})
     }, 500)
   }, [])
 
@@ -178,15 +178,15 @@ export function AppProvider({ children }) {
       try {
         setXlsxSaveStatus('saving')
         const pid = selectedProjectsRef.current[0]?.ProjectId
-        const url = pid
-          ? `/api/colors/save?project_id=${encodeURIComponent(pid)}`
-          : '/api/colors/save'
-        await axios.post(url, {
-          type_styles:         typeStylesRef.current,
-          group_systems:       groupSystems,
-          strata_layer_colors: {
-            primary:   _buildFullStrataDict('primary'),
-            secondary: _buildFullStrataDict('secondary'),
+        await invoke('save_colors', {
+          projectId: pid,
+          body: {
+            type_styles:         typeStylesRef.current,
+            group_systems:       groupSystems,
+            strata_layer_colors: {
+              primary:   _buildFullStrataDict('primary'),
+              secondary: _buildFullStrataDict('secondary'),
+            },
           },
         })
         setXlsxSaveStatus('saved')
@@ -199,8 +199,8 @@ export function AppProvider({ children }) {
 
   // Poll SharePoint status once on mount so every page knows the connection state
   const refreshSpStatus = useCallback(() => {
-    axios.get('/api/sharepoint/status')
-      .then(r => setSpConnected(!!r.data.authenticated))
+    invoke('sp_status')
+      .then(r => setSpConnected(!!r.authenticated))
       .catch(() => setSpConnected(false))
   }, [])
 
