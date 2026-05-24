@@ -8,6 +8,10 @@ frontend/.vite/
 
 # Tauri build output
 src-tauri/target/
+src-tauri/gen/
+
+# Claude Code local state
+.claude/
 
 # Secrets
 .env

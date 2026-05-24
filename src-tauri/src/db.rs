@@ -3,7 +3,7 @@
 
 use crate::state::DbConfig;
 use anyhow::{Context, Result};
-use odbc_api::{Connection, Environment};
+use odbc_api::Environment;
 
 /// Build an ODBC connection string from the stored config.
 pub fn connection_string(cfg: &DbConfig) -> String {
