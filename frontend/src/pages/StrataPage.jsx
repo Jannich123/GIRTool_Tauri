@@ -16,7 +16,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 
@@ -100,20 +100,14 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
 
   const projectIds  = selectedProjects.map(p => p.ProjectId)
   const pointIds    = selectedPoints.map(p => String(p.PointId))
-  const primaryPid  = projectIds[0]
-  const pidParam    = primaryPid ? `?project_id=${encodeURIComponent(primaryPid)}` : ''
 
   // Load available types on project/point change
   useEffect(() => {
     if (!projectIds.length) { setTypes([]); setChecked({}); setPreview({}); onDataLoaded({}); return }
     setLoadingTypes(true); setTypeErr('')
-    const params = [
-      ...projectIds.map(id => `project_ids=${encodeURIComponent(id)}`),
-      ...pointIds.map(id  => `point_ids=${encodeURIComponent(id)}`),
-    ].join('&')
-    axios.get(`/api/strata/types?${params}`)
-      .then(r => setTypes(r.data))
-      .catch(e => setTypeErr(e.response?.data?.detail || 'Failed to load strata types'))
+    invoke('get_strata_types')
+      .then(r => setTypes(r))
+      .catch(e => setTypeErr(e || 'Failed to load strata types'))
       .finally(() => setLoadingTypes(false))
   }, [JSON.stringify(projectIds), JSON.stringify(pointIds)]) // eslint-disable-line
 
@@ -126,12 +120,14 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   useEffect(() => {
     if (!checkedSelections.length) { setPreview({}); return }
     setLoadingData(true)
-    axios.post('/api/strata/data', {
-      project_ids: projectIds,
-      point_ids:   pointIds,
-      selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+    invoke('get_strata_data', {
+      body: {
+        project_ids: projectIds,
+        point_ids:   pointIds,
+        selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+      },
     })
-      .then(r => { setPreview(r.data) })
+      .then(r => { setPreview(r) })
       .catch(() => {})
       .finally(() => setLoadingData(false))
   }, [JSON.stringify(checkedSelections.map(selKey))]) // eslint-disable-line
@@ -145,14 +141,17 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   async function handleDownload() {
     setDownloading(true); setDlMsg(null); setTransferMsg(null); setOpenMsg(null)
     try {
-      const r = await axios.post(`/api/strata/download${pidParam}`, {
-        project_ids: projectIds,
-        point_ids:   pointIds,
-        selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+      const r = await invoke('download_strata', {
+        body: {
+          project_ids: projectIds,
+          point_ids:   pointIds,
+          selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+        },
       })
-      setDlMsg({ ok: true, text: `Saved to ${r.data.path}` })
+      setDlMsg({ ok: true, text: `Saved to ${r.path}` })
     } catch (e) {
-      setDlMsg({ ok: false, text: e.response?.data?.detail || 'Download failed' })
+      console.error(e)
+      setDlMsg({ ok: false, text: e || 'Download failed' })
     } finally {
       setDownloading(false)
     }
@@ -164,18 +163,21 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   async function handleTransfer() {
     setTransferring(true); setTransferMsg(null); setDlMsg(null); setOpenMsg(null)
     try {
-      const r = await axios.post(`/api/strata/transfer${pidParam}`, {
-        project_ids: projectIds,
-        point_ids:   pointIds,
-        selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+      const r = await invoke('transfer_strata', {
+        body: {
+          project_ids: projectIds,
+          point_ids:   pointIds,
+          selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+        },
       })
-      const { transferred, skipped, total } = r.data
+      const { transferred, skipped, total } = r
       const skipNote = skipped > 0 ? `, skipped ${skipped} (already in sheet)` : ''
       setTransferMsg({ ok: true, text: `Transferred ${transferred} new row${transferred !== 1 ? 's' : ''}${skipNote}. Strata sheet now has ${total} rows.` })
       // Refresh layer lists in FilterContext so Colors & Symbols shows the new values.
       refreshStrataLayers()
     } catch (e) {
-      setTransferMsg({ ok: false, text: e.response?.data?.detail || 'Transfer failed' })
+      console.error(e)
+      setTransferMsg({ ok: false, text: e || 'Transfer failed' })
     } finally {
       setTransferring(false)
     }
@@ -184,9 +186,10 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   async function handleOpenFile() {
     setOpenMsg(null)
     try {
-      await axios.post(`/api/strata/open${pidParam}`)
+      await invoke('open_strata')
     } catch (e) {
-      setOpenMsg({ ok: false, text: e.response?.data?.detail || 'Could not open strata.xlsx' })
+      console.error(e)
+      setOpenMsg({ ok: false, text: e || 'Could not open strata.xlsx' })
     }
   }
 
@@ -372,8 +375,6 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
 function ErrorTab({ onErrorCountChange }) {
   const { selectedProjects } = useApp()
   const { refreshStrataLayers } = useFilter()
-  const projectId = selectedProjects[0]?.ProjectId
-  const pidParam  = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
 
   const [rows,    setRows]    = useState([])
   const [loading, setLoading] = useState(false)
@@ -396,11 +397,12 @@ function ErrorTab({ onErrorCountChange }) {
   async function loadStrata() {
     setLoading(true); setLoadMsg(null); setSaveMsg(null)
     try {
-      const r = await axios.get(`/api/strata/load${pidParam}`)
-      setRows(r.data)
-      setLoadMsg({ ok: true, text: `Loaded ${r.data.length} row${r.data.length !== 1 ? 's' : ''} from the Strata sheet` })
+      const r = await invoke('load_strata')
+      setRows(r)
+      setLoadMsg({ ok: true, text: `Loaded ${r.length} row${r.length !== 1 ? 's' : ''} from the Strata sheet` })
     } catch (e) {
-      setLoadMsg({ ok: false, text: e.response?.data?.detail || 'Failed to load Strata sheet' })
+      console.error(e)
+      setLoadMsg({ ok: false, text: e || 'Failed to load Strata sheet' })
     } finally {
       setLoading(false)
     }
@@ -409,12 +411,13 @@ function ErrorTab({ onErrorCountChange }) {
   async function saveCorrections() {
     setSaving(true); setSaveMsg(null)
     try {
-      const r = await axios.post(`/api/strata/update${pidParam}`, { rows })
-      setSaveMsg({ ok: true, text: `Saved ${r.data.rows} row${r.data.rows !== 1 ? 's' : ''} back to the Strata sheet` })
+      const r = await invoke('update_strata', { rows })
+      setSaveMsg({ ok: true, text: `Saved ${r.rows} row${r.rows !== 1 ? 's' : ''} back to the Strata sheet` })
       // Re-read the Strata sheet so Colors & Symbols layer lists stay current.
       refreshStrataLayers()
     } catch (e) {
-      setSaveMsg({ ok: false, text: e.response?.data?.detail || 'Failed to save corrections' })
+      console.error(e)
+      setSaveMsg({ ok: false, text: e || 'Failed to save corrections' })
     } finally {
       setSaving(false)
     }

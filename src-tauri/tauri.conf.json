@@ -40,8 +40,7 @@
       "wix": {},
       "nsis": {
         "installerHooks": "nsis/hooks.nsh",
-        "installMode": "perMachine",
-        "shortcutName": "GIRTool"
+        "installMode": "perMachine"
       }
     }
   },

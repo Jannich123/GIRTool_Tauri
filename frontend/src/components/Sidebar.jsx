@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
 const NAV_MAIN = [
@@ -24,7 +24,7 @@ export default function Sidebar({ page, setPage }) {
     if (!selectedProjects.length) return
     setRefreshing(true)
     try {
-      await axios.post(`/api/projects/${selectedProjects[0].ProjectId}/refresh`)
+      await invoke('refresh_project', { projectId: selectedProjects[0].ProjectId })
       bumpRefresh()
     } catch { /* ignore */ } finally {
       setRefreshing(false)

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import axios from 'axios'
+import { invoke } from './tauri-api'
 import { AppProvider, useApp } from './context/AppContext'
 import { FilterProvider }     from './context/FilterContext'
 import Sidebar        from './components/Sidebar'
@@ -32,12 +32,20 @@ function Shell() {
 
   // On load, probe the backend and restore connection state
   useEffect(() => {
-    axios.get('/api/database/status').then(r => {
-      if (r.data.configured) {
+    invoke('db_status').then(r => {
+      if (r.configured) {
         // Try to reconnect using saved settings
         const saved = localStorage.getItem('db_settings')
         if (saved) {
-          axios.post('/api/database/connect', JSON.parse(saved))
+          const s = JSON.parse(saved)
+          invoke('connect', {
+            server:       s.server,
+            database:     s.database,
+            authMethod:   s.auth_method,
+            username:     s.username,
+            password:     s.password,
+            outputFolder: s.output_folder,
+          })
             .then(() => { setConnected(true); setPage('projects') })
             .catch(() => setPage('settings'))
         }

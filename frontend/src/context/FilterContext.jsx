@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from './AppContext'
 
 const FilterContext = createContext(null)
@@ -30,23 +30,22 @@ export function FilterProvider({ children }) {
 
   const fetchGroupData = useCallback(() => {
     if (!projectId) return
-    axios.get(`/api/grouping/${projectId}`).then(r => {
-      setGroupSystems(r.data.systems     || [])
-      setGroupAssignments(r.data.assignments || {})
+    invoke('get_grouping', { projectId }).then(r => {
+      setGroupSystems(r.systems     || [])
+      setGroupAssignments(r.assignments || {})
     }).catch(() => {})
   }, [projectId])
 
   const fetchStrataLayers = useCallback(() => {
-    const pidQ = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
-    axios.get(`/api/strata/layers${pidQ}`)
+    invoke('get_strata_layers', { projectId })
       .then(r => {
-        const layers = r.data || { primary: [], secondary: [] }
+        const layers = r || { primary: [], secondary: [] }
         setStrataLayers(layers)
         setStrataLayersList(layers)   // push to AppContext for xlsx save
       })
       .catch(() => {})
-    axios.get(`/api/strata/point-layers${pidQ}`)
-      .then(r => setPointStrataLayers(r.data?.point_layers || {}))
+    invoke('get_strata_point_layers', { projectId })
+      .then(r => setPointStrataLayers(r?.point_layers || {}))
       .catch(() => {})
   }, [projectId, setStrataLayersList])
 
@@ -60,8 +59,7 @@ export function FilterProvider({ children }) {
       return
     }
     const ids = selectedProjects.map(p => p.ProjectId)
-    const qs  = ids.map(id => `project_ids=${id}`).join('&')
-    axios.get(`/api/points/?${qs}`).then(r => setAllPoints(r.data)).catch(() => {})
+    invoke('get_points', { projectIds: ids }).then(r => setAllPoints(r)).catch(() => {})
     fetchGroupData()
     fetchStrataLayers()
     setCheckedPtIds(null)

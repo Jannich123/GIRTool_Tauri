@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 
@@ -115,16 +115,19 @@ export default function ColorsPage() {
     if (!projectId) return
     setSaveStatus('saving'); setSaveError('')
     try {
-      await axios.post(`/api/grouping/${projectId}`, {
-        systems:     sys,
-        assignments: assignmentsRef.current,
-        points:      [],          // preserves existing point rows in points.xlsx
+      await invoke('save_grouping', {
+        projectId,
+        body: {
+          systems:     sys,
+          assignments: assignmentsRef.current,
+          points:      [],          // preserves existing point rows in points.xlsx
+        },
       })
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2500)
       refreshGroupData()   // push updated group colours into FilterContext → charts update live
     } catch (e) {
-      setSaveError(e.response?.data?.detail || 'Save failed')
+      setSaveError(e || 'Save failed')
       setSaveStatus('error')
     }
   }
@@ -141,11 +144,7 @@ export default function ColorsPage() {
   const refreshFromXlsx = useCallback(async () => {
     setRefreshing(true)
     try {
-      const loadUrl = projectId
-        ? `/api/colors/load?project_id=${encodeURIComponent(projectId)}`
-        : '/api/colors/load'
-      const r = await axios.get(loadUrl)
-      const d = r.data
+      const d = await invoke('load_colors')
 
       // Apply type styles
       if (d.type_styles && Object.keys(d.type_styles).length) {
@@ -190,10 +189,13 @@ export default function ColorsPage() {
           })
           // Persist the updated group system colors back to grouping backend
           if (projectId) {
-            axios.post(`/api/grouping/${projectId}`, {
-              systems:     next,
-              assignments: assignmentsRef.current,
-              points:      [],
+            invoke('save_grouping', {
+              projectId,
+              body: {
+                systems:     next,
+                assignments: assignmentsRef.current,
+                points:      [],
+              },
             }).catch(() => {})
           }
           return next
@@ -210,11 +212,11 @@ export default function ColorsPage() {
     initialized.current = false
     setLoading(true)
     setSystems([]); setAssignments({}); setSaveStatus('idle')
-    axios.get(`/api/grouping/${projectId}`)
+    invoke('get_grouping', { projectId })
       .then(r => {
-        const sys = r.data.systems || []
+        const sys = r.systems || []
         setSystems(sys)
-        setAssignments(r.data.assignments || {})
+        setAssignments(r.assignments || {})
         // Auto-save Colors_&_Symbols.xlsx on initial load so the file exists
         // even before the user makes any manual edits.
         scheduleColorsXlsxSave(sys)
@@ -298,7 +300,7 @@ export default function ColorsPage() {
         <button
           className="btn-secondary btn-sm"
           onClick={() =>
-            axios.post('/api/colors/open', { sheet_name: activeTabSheetName })
+            invoke('open_colors_excel', { sheet: activeTabSheetName })
               .catch(() => alert('Could not open file. Make sure Colors & Symbols has been saved first.'))
           }
           title="Open Colors_&_Symbols.xlsx in Excel at the current tab"
