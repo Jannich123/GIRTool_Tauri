@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import Plot from 'react-plotly.js'
@@ -1365,7 +1365,7 @@ export default function ChartsPage() {
     localStorage.setItem(`girtool_charts_${projectId}`, JSON.stringify(clean))
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      axios.patch(`/api/session/${projectId}`, { charts: clean }).catch(() => {})
+      invoke('patch_session', { projectId, patch: { charts: clean } }).catch(() => {})
     }, 500)
   }, [projectId])
 
@@ -1374,8 +1374,8 @@ export default function ChartsPage() {
   useEffect(() => {
     if (!projectId) return
     setQueries([])
-    axios.get(`/api/queries/${projectId}`)
-      .then(r => setQueries(r.data))
+    invoke('list_queries', { projectId })
+      .then(r => setQueries(r))
       .catch(() => {})
   }, [projectId, refreshKey])
 
@@ -1397,8 +1397,8 @@ export default function ChartsPage() {
       return true
     }
 
-    axios.get(`/api/session/${projectId}`)
-      .then(r => { if (!applyRestored(r.data?.charts)) throw new Error('no charts') })
+    invoke('get_session', { projectId })
+      .then(r => { if (!applyRestored(r?.charts)) throw new Error('no charts') })
       .catch(() => {
         const raw = localStorage.getItem(`girtool_charts_${projectId}`)
         if (raw) try { applyRestored(JSON.parse(raw)) } catch {}
@@ -1462,23 +1462,26 @@ export default function ChartsPage() {
 
     updateChart(id, { loading: true, error: '', columns: [], rows: [] })
     try {
-      const res = await axios.post(`/api/charts/${projectId}`, {
-        project_ids: selectedProjects.map(p => p.ProjectId),
-        point_ids:   selectedPoints.map(p => p.PointId),
-        query_name:  chart.queryName,
+      const res = await invoke('run_chart_query', {
+        projectId,
+        query: {
+          project_ids: selectedProjects.map(p => p.ProjectId),
+          point_ids:   selectedPoints.map(p => p.PointId),
+          query_name:  chart.queryName,
+        },
       })
-      const axisUpdates = needsAutoAxes ? autoAxes(res.data.columns) : {}
+      const axisUpdates = needsAutoAxes ? autoAxes(res.columns) : {}
       updateChart(id, {
-        columns:  res.data.columns,
-        rows:     res.data.rows,
-        truncated: res.data.truncated,
-        loading:  false,
+        columns:   res.columns,
+        rows:      res.rows,
+        truncated: res.truncated,
+        loading:   false,
         ...axisUpdates,
       })
     } catch (err) {
       updateChart(id, {
         loading: false,
-        error:   err.response?.data?.detail || 'Failed to load data',
+        error:   err || 'Failed to load data',
       })
     }
   }
@@ -1509,8 +1512,8 @@ export default function ChartsPage() {
             stats:      groups,
           }
         })
-      const res = await axios.post(`/api/charts/${projectId}/save-statistics`, { charts: chartsData })
-      if (res.data?.skipped) {
+      const res = await invoke('save_statistics', { projectId, stats: { charts: chartsData } })
+      if (res?.skipped) {
         setStatsAutoStatus('idle')   // no output folder — nothing written, no indicator needed
       } else {
         setStatsAutoStatus('saved')
@@ -1553,9 +1556,12 @@ export default function ChartsPage() {
     const chartsForSave = allChartsData.find(c => c.name === chart.name)
       ? allChartsData
       : [chartPayload, ...allChartsData]
-    await axios.post(`/api/charts/${projectId}/open-statistics`, {
-      sheet_name: chart.name,
-      charts:     chartsForSave,
+    await invoke('open_statistics', {
+      projectId,
+      stats: {
+        sheet_name: chart.name,
+        charts:     chartsForSave,
+      },
     })
   }, [projectId, filteredPtIds, checkedStrataPrimary, checkedStrataSecondary, groupAssignments])
 
@@ -1586,13 +1592,9 @@ export default function ChartsPage() {
   async function openDatasheet() {
     if (!projectId || !activeChart?.queryName) return
     try {
-      const r = await fetch('/api/download/open-datasheet', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ project_id: projectId, query_name: activeChart.queryName }),
-      })
-      if (!r.ok) alert('Datasheet not found for this chart.')
-    } catch {
+      await invoke('open_datasheet', { path: activeChart.queryName })
+    } catch (err) {
+      console.error(err)
       alert('Could not open datasheet.')
     }
   }
