@@ -1,0 +1,52 @@
+[package]
+name    = "girtool"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "girtool_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "girtool"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri        = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell   = "2"
+tauri-plugin-dialog  = "2"
+tauri-plugin-fs      = "2"
+tauri-plugin-opener  = "2"
+
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+tokio        = { version = "1", features = ["full"] }
+anyhow       = "1"
+thiserror    = "1"
+
+# SQL Server / ODBC
+odbc-api     = { version = "8", features = ["narrow"] }
+
+# Excel reading (load existing xlsx)
+calamine     = { version = "0.24", features = ["dates"] }
+
+# Excel writing
+rust_xlsxwriter = { version = "0.75", features = ["serde"] }
+
+# HTTP client (SharePoint / Graph API)
+reqwest      = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Date/time
+chrono       = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto       = true
+strip     = true
