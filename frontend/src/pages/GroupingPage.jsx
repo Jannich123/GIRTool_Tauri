@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { useDragSelect } from '../hooks/useDragSelect'
@@ -99,16 +99,19 @@ export default function GroupingPage() {
     if (!projectId) return
     setSaveStatus('saving'); setSaveError('')
     try {
-      await axios.post(`/api/grouping/${projectId}`, {
-        systems:     sys,
-        assignments: asgn,
-        points:      pointsRef.current.map(p => ({
-          PointId:     p.PointId,
-          PointNo:     p.PointNo     || '',
-          PointType:   p.PointType   || '',
-          ProjectNo:   p.ProjectNo   || '',
-          ProjectName: selectedProjects.find(sp => sp.ProjectId === p.ProjectId)?.Title || '',
-        })),
+      await invoke('save_grouping', {
+        projectId,
+        body: {
+          systems:     sys,
+          assignments: asgn,
+          points:      pointsRef.current.map(p => ({
+            PointId:     p.PointId,
+            PointNo:     p.PointNo     || '',
+            PointType:   p.PointType   || '',
+            ProjectNo:   p.ProjectNo   || '',
+            ProjectName: selectedProjects.find(sp => sp.ProjectId === p.ProjectId)?.Title || '',
+          })),
+        },
       })
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2500)
@@ -116,7 +119,8 @@ export default function GroupingPage() {
       // reflect the latest grouping without requiring a page reload.
       refreshGroupData()
     } catch (e) {
-      setSaveError(e.response?.data?.detail || 'Save failed')
+      console.error(e)
+      setSaveError(e || 'Save failed')
       setSaveStatus('error')
     }
   }
@@ -145,9 +149,9 @@ export default function GroupingPage() {
     if (!projectId) return
     setRefreshing(true)
     try {
-      const res = await axios.post(`/api/grouping/${projectId}/reload-from-excel`)
-      setSystems(res.data.systems || [])
-      setAssignments(res.data.assignments || {})
+      const res = await invoke('reload_from_excel', { projectId })
+      setSystems(res.systems || [])
+      setAssignments(res.assignments || {})
       refreshGroupData()
     } catch {
       alert('Could not reload from Excel.')
@@ -161,9 +165,8 @@ export default function GroupingPage() {
   useEffect(() => {
     if (!selectedProjects.length) { setPoints([]); return }
     setPointsLoading(true)
-    const params = selectedProjects.map(p => `project_ids=${p.ProjectId}`).join('&')
-    axios.get(`/api/points/?${params}`)
-      .then(r => setPoints(r.data || []))
+    invoke('get_points', { projectIds: selectedProjects.map(p => p.ProjectId) })
+      .then(r => setPoints(r || []))
       .catch(() => setPoints([]))
       .finally(() => setPointsLoading(false))
   }, [selectedProjects])
@@ -175,11 +178,11 @@ export default function GroupingPage() {
     initialized.current = false
     setLoading(true)
     setSystems([]); setAssignments({}); setSaveStatus('idle')
-    axios.get(`/api/grouping/${projectId}`)
+    invoke('get_grouping', { projectId })
       .then(r => {
-        const sys = r.data.systems || []
+        const sys = r.systems || []
         setSystems(sys)
-        setAssignments(r.data.assignments || {})
+        setAssignments(r.assignments || {})
         setActiveGsId(sys[0]?.id ?? null)
         setCollapsedSystems(new Set(sys.map(gs => gs.id)))
       })
@@ -414,7 +417,7 @@ export default function GroupingPage() {
         <div style={{ flex: 1 }} />
         <button
           className="btn-secondary btn-sm"
-          onClick={() => axios.get(`/api/grouping/${projectId}/open-excel`)
+          onClick={() => invoke('open_grouping_excel', { projectId })
             .catch(() => alert('Grouping.xlsx not found — save grouping first.'))}
           disabled={!projectId}
           title="Open points.xlsx in Excel"
