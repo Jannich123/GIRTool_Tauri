@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import axios from 'axios'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
 export default function SettingsPage({ setPage }) {
@@ -24,16 +24,16 @@ export default function SettingsPage({ setPage }) {
 
   // Load saved SP config on mount
   useEffect(() => {
-    axios.get('/api/sharepoint/status')
+    invoke('sp_status')
       .then(r => {
-        if (r.data.site_url || r.data.tenant_id)
+        if (r.site_url || r.tenant_id)
           setSpForm({
-            tenant_id:   r.data.tenant_id   || '',
-            client_id:   r.data.client_id   || '',
-            site_url:    r.data.site_url    || '',
-            folder_path: r.data.folder_path || '',
+            tenant_id:   r.tenant_id   || '',
+            client_id:   r.client_id   || '',
+            site_url:    r.site_url    || '',
+            folder_path: r.folder_path || '',
           })
-        if (r.data.authenticated) setSpAuthStatus('authenticated')
+        if (r.authenticated) setSpAuthStatus('authenticated')
       })
       .catch(() => {})
   }, [])
@@ -50,52 +50,54 @@ export default function SettingsPage({ setPage }) {
     setSpMsg(''); setSpUserCode(''); setSpVerifyUrl('')
     clearInterval(spPollTimer.current)
     try {
-      const r = await axios.post('/api/sharepoint/initiate', spForm)
+      const r = await invoke('sp_initiate', { config: spForm })
 
       // Silent re-auth (token still valid in cache)
-      if (r.data.silent) {
+      if (r.silent) {
         setSpAuthStatus('authenticated')
         setSpMsg('Re-authenticated from cached token.')
         refreshSpStatus()
         return
       }
 
-      setSpUserCode(r.data.user_code)
-      setSpVerifyUrl(r.data.verification_uri)
+      setSpUserCode(r.user_code)
+      setSpVerifyUrl(r.verification_uri)
       setSpAuthStatus('pending')
       setSpMsg('')
 
       // Poll every 4 s until authenticated or error
       spPollTimer.current = setInterval(async () => {
         try {
-          const poll = await axios.post('/api/sharepoint/poll')
-          if (poll.data.status === 'authenticated') {
+          const poll = await invoke('sp_poll')
+          if (poll.status === 'authenticated') {
             clearInterval(spPollTimer.current)
             setSpAuthStatus('authenticated')
             setSpMsg('Authenticated successfully.')
             setSpUserCode('')
             refreshSpStatus()
-          } else if (poll.data.status === 'error') {
+          } else if (poll.status === 'error') {
             clearInterval(spPollTimer.current)
             setSpAuthStatus('error')
-            setSpMsg(poll.data.message || 'Authentication failed')
+            setSpMsg(poll.message || 'Authentication failed')
           }
-        } catch {
+        } catch (err) {
+          console.error(err)
           clearInterval(spPollTimer.current)
           setSpAuthStatus('error')
           setSpMsg('Polling failed')
         }
       }, 4000)
     } catch (err) {
+      console.error(err)
       setSpAuthStatus('error')
-      setSpMsg(err.response?.data?.detail || 'Could not start authentication')
+      setSpMsg(err || 'Could not start authentication')
     }
   }
 
   const spDisconnect = async () => {
     clearInterval(spPollTimer.current)
     try {
-      await axios.post('/api/sharepoint/disconnect')
+      await invoke('sp_disconnect')
     } catch { /* ignore */ }
     setSpAuthStatus('idle')
     setSpMsg('')
@@ -109,35 +111,38 @@ export default function SettingsPage({ setPage }) {
   const spListFiles = async () => {
     setSpSyncStatus('listing')
     try {
-      const r = await axios.post('/api/sharepoint/list')
-      setSpFiles(r.data.files || [])
-      setSpSyncStatus(`Found ${r.data.count} file(s)`)
+      const r = await invoke('sp_list')
+      setSpFiles(r.files || [])
+      setSpSyncStatus(`Found ${r.count} file(s)`)
     } catch (err) {
-      setSpSyncStatus('Error: ' + (err.response?.data?.detail || err.message))
+      console.error(err)
+      setSpSyncStatus('Error: ' + (err || 'Unknown error'))
     }
   }
 
   const spSyncDown = async () => {
     setSpSyncStatus('Downloading from SharePoint…')
     try {
-      const r = await axios.post('/api/sharepoint/sync-down')
-      const ok  = r.data.synced?.length || 0
-      const err = r.data.errors?.length || 0
-      setSpSyncStatus(`Downloaded ${ok} file(s)${err ? `, ${err} error(s)` : ''}`)
+      const r        = await invoke('sp_sync_down')
+      const ok       = r.synced?.length || 0
+      const errCount = r.errors?.length || 0
+      setSpSyncStatus(`Downloaded ${ok} file(s)${errCount ? `, ${errCount} error(s)` : ''}`)
     } catch (err) {
-      setSpSyncStatus('Error: ' + (err.response?.data?.detail || err.message))
+      console.error(err)
+      setSpSyncStatus('Error: ' + (err || 'Unknown error'))
     }
   }
 
   const spSyncUp = async () => {
     setSpSyncStatus('Uploading to SharePoint…')
     try {
-      const r = await axios.post('/api/sharepoint/sync-up')
-      const ok  = r.data.uploaded?.length || 0
-      const err = r.data.errors?.length   || 0
-      setSpSyncStatus(`Uploaded ${ok} file(s)${err ? `, ${err} error(s)` : ''}`)
+      const r        = await invoke('sp_sync_up')
+      const ok       = r.uploaded?.length || 0
+      const errCount = r.errors?.length   || 0
+      setSpSyncStatus(`Uploaded ${ok} file(s)${errCount ? `, ${errCount} error(s)` : ''}`)
     } catch (err) {
-      setSpSyncStatus('Error: ' + (err.response?.data?.detail || err.message))
+      console.error(err)
+      setSpSyncStatus('Error: ' + (err || 'Unknown error'))
     }
   }
 
@@ -145,15 +150,23 @@ export default function SettingsPage({ setPage }) {
   const connect = async () => {
     setStatus('testing'); setMessage('')
     try {
-      const res = await axios.post('/api/database/connect', form)
+      const res = await invoke('connect', {
+        server:       form.server,
+        database:     form.database,
+        authMethod:   form.auth_method,
+        username:     form.username,
+        password:     form.password,
+        outputFolder: form.output_folder,
+      })
       saveConnection(form)
       setConnected(true)
       setStatus('ok')
-      setMessage(res.data.message)
+      setMessage(res.message)
     } catch (err) {
+      console.error(err)
       setConnected(false)
       setStatus('error')
-      setMessage(err.response?.data?.detail || 'Connection failed')
+      setMessage(err || 'Connection failed')
     }
   }
 
@@ -161,15 +174,13 @@ export default function SettingsPage({ setPage }) {
   const browseFolder = async () => {
     setBrowsingFolder(true)
     try {
-      const res = await axios.get('/api/database/browse-folder', {
-        params: { initialdir: form.output_folder || '' },
-      })
-      if (res.data.path) {
-        setForm(prev => ({ ...prev, output_folder: res.data.path }))
+      const res = await invoke('browse_folder', { initial: form.output_folder || '' })
+      if (res.path) {
+        setForm(prev => ({ ...prev, output_folder: res.path }))
       }
     } catch (err) {
-      const detail = err?.response?.data?.detail || err?.message || 'Unknown error'
-      alert(`Browse failed: ${detail}`)
+      console.error(err)
+      alert(`Browse failed: ${err || 'Unknown error'}`)
     } finally {
       setBrowsingFolder(false)
     }
@@ -180,21 +191,27 @@ export default function SettingsPage({ setPage }) {
     setFolderStatus('testing'); setFolderMsg(''); setRestoredSession(null)
     try {
       // 1. Verify the folder is accessible
-      const folderRes = await axios.post('/api/database/test-folder', { path: form.output_folder })
+      const folderRes = await invoke('test_folder', { path: form.output_folder })
 
       // 2. Persist settings (folder + rest of connection)
       const updated = { ...form }
       saveConnection(updated)
-      await axios.post('/api/database/connect', updated)
+      await invoke('connect', {
+        server:       updated.server,
+        database:     updated.database,
+        authMethod:   updated.auth_method,
+        username:     updated.username,
+        password:     updated.password,
+        outputFolder: updated.output_folder,
+      })
 
       // 3. Ensure strata.xlsx exists in this folder (fire and forget)
-      axios.post('/api/strata/ensure-file').catch(() => {})
+      invoke('ensure_strata_file').catch(() => {})
 
       // 4. Look for sessions saved in this folder
       let sessions = []
       try {
-        const sessRes = await axios.get('/api/download/sessions')
-        sessions = sessRes.data || []
+        sessions = await invoke('list_sessions') || []
       } catch {
         // folder may be empty — not an error
       }
@@ -211,17 +228,18 @@ export default function SettingsPage({ setPage }) {
         const names = projects.map(p => `${p.ProjectNo} – ${p.Title}`).join(', ')
         const when  = latest.saved_at ? ` (saved ${latest.saved_at.replace('T', ' ')})` : ''
         setFolderStatus('ok')
-        setFolderMsg(`${folderRes.data.message} — session restored: ${names || 'no projects'}${when}`)
+        setFolderMsg(`${folderRes.message} — session restored: ${names || 'no projects'}${when}`)
 
         // Navigate to Projects so the user can see/adjust the restored selection
         if (setPage) setTimeout(() => setPage('projects'), 1200)
       } else {
         setFolderStatus('ok')
-        setFolderMsg(`${folderRes.data.message} — no saved sessions found in this folder yet`)
+        setFolderMsg(`${folderRes.message} — no saved sessions found in this folder yet`)
       }
     } catch (err) {
+      console.error(err)
       setFolderStatus('error')
-      setFolderMsg(err.response?.data?.detail || 'Folder not accessible')
+      setFolderMsg(err || 'Folder not accessible')
     }
   }
 
