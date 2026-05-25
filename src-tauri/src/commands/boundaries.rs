@@ -8,6 +8,7 @@
 // save so users can edit boundaries in Excel and re-import them.
 //
 // Commands:
+//   get_boundaries(project_id)                   → Vec<Value>  read JSON store
 //   save_boundaries(project_id, boundaries)      → ()   write JSON + xlsx
 //   load_boundaries_from_excel(project_id)       → Vec<Value>  read xlsx
 //   open_boundaries_excel(project_id)            → ()   open xlsx in OS
@@ -197,6 +198,24 @@ fn read_boundaries_xlsx(path: &Path) -> Result<Vec<Value>, String> {
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
+
+/// Fast read of boundaries from the canonical JSON store.
+///
+/// Returns an empty array when the file does not exist yet.  This is the
+/// preferred hot-path used by the UI on project load; `load_boundaries_from_excel`
+/// is reserved for the "import from Excel" workflow.
+#[tauri::command]
+pub async fn get_boundaries(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let json_path = boundaries_json_path(&folder, &project_id);
+    match std::fs::read_to_string(&json_path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("Parse error: {e}")),
+        Err(_) => Ok(json!([])),
+    }
+}
 
 /// Persist boundaries to JSON and xlsx.
 #[tauri::command]

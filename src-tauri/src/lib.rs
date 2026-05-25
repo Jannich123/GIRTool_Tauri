@@ -91,6 +91,7 @@ pub fn run() {
             // map
             commands::map::wfs_proxy,
             // boundaries
+            commands::boundaries::get_boundaries,
             commands::boundaries::save_boundaries,
             commands::boundaries::load_boundaries_from_excel,
             commands::boundaries::open_boundaries_excel,
