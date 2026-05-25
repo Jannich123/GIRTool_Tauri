@@ -89,9 +89,7 @@ pub fn ensure_unknown_groups(systems: Vec<Value>) -> Vec<Value> {
             let groups: Vec<Value> = gs["groups"]
                 .as_array()
                 .unwrap_or(&empty)
-                .iter()
-                .cloned()
-                .collect();
+                .to_vec();
 
             let regular: Vec<Value> = groups
                 .iter()

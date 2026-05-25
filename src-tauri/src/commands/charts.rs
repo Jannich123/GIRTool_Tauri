@@ -278,7 +278,7 @@ fn write_cell(ws: &mut Worksheet, row: u32, col: u16, val: &Value) {
             let _ = ws.write_string(row, col, s);
         }
         other => {
-            let _ = ws.write_string(row, col, &other.to_string());
+            let _ = ws.write_string(row, col, other.to_string());
         }
     }
 }

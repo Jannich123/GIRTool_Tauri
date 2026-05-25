@@ -60,6 +60,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[allow(dead_code)]
     pub fn has_output_folder(&self) -> bool {
         self.db
             .lock()

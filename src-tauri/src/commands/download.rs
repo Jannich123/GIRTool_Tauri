@@ -49,6 +49,7 @@ pub struct DownloadRequest {
     pub projects_meta: Vec<Value>,
     /// Point metadata for group-column injection (PointId, PointNo, …).
     #[serde(default)]
+    #[allow(dead_code)]
     pub points_meta: Vec<Value>,
 }
 
@@ -171,7 +172,7 @@ fn load_strata_lookup(output_folder: &str, project_id: &str) -> HashMap<String, 
 /// empty, the columns are added with "Unknown" as the filler value.
 fn apply_strata_columns(
     columns: &mut Vec<String>,
-    rows: &mut Vec<Vec<Value>>,
+    rows: &mut [Vec<Value>],
     strata_lookup: &HashMap<String, Vec<(f64, f64, String, String)>>,
 ) {
     // Find PointId and Depth column indices BEFORE pushing new columns.
@@ -225,8 +226,11 @@ fn data_str(c: &Data) -> String {
     }
 }
 
+/// Lookup type: `(system_names, { pointId → { sys_name: group_name } })`.
+type GroupLookup = (Vec<String>, HashMap<String, HashMap<String, String>>);
+
 /// Read Grouping.xlsx and build `{ pointId → { sys_name: group_name } }`.
-fn load_group_lookup(grouping_path: &Path) -> Option<(Vec<String>, HashMap<String, HashMap<String, String>>)> {
+fn load_group_lookup(grouping_path: &Path) -> Option<GroupLookup> {
     if !grouping_path.exists() {
         return None;
     }
@@ -280,7 +284,7 @@ fn load_group_lookup(grouping_path: &Path) -> Option<(Vec<String>, HashMap<Strin
 /// Append one column per group system to each row, matched by PointId.
 fn apply_group_columns(
     columns: &mut Vec<String>,
-    rows: &mut Vec<Vec<Value>>,
+    rows: &mut [Vec<Value>],
     grouping_path: &Path,
 ) {
     let pid_idx = match columns.iter().position(|c| c.to_lowercase() == "pointid") {
@@ -404,7 +408,7 @@ fn write_cell(ws: &mut rust_xlsxwriter::Worksheet, row: u32, col: u16, val: &Val
         Value::Bool(b)   => { let _ = ws.write_boolean(row, col, *b); }
         Value::Number(n) => { if let Some(f) = n.as_f64() { let _ = ws.write_number(row, col, f); } }
         Value::String(s) => { let _ = ws.write_string(row, col, s); }
-        other            => { let _ = ws.write_string(row, col, &other.to_string()); }
+        other            => { let _ = ws.write_string(row, col, other.to_string()); }
     }
 }
 
