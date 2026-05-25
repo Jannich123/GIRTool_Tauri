@@ -18,22 +18,11 @@
 //   {output_folder}/Datasheets/{fname}.xlsx   — exported datasheets
 //   {output_folder}/GIRTool_settings.json     — session / download metadata
 //
-// ── Strata schema note (see issue #6) ────────────────────────────────────────
+// ── Strata source (issue #6) ─────────────────────────────────────────────────
 //
-// `strata.rs::update_strata` currently receives and writes whatever `rows`
-// shape the frontend sends — which is a flat array of SQL rows:
-//   [ { "PointId": "...", "From": 0.0, "To": 1.5,
-//       "Interpretation": "Sand", "Description": "Fine" }, ... ]
-//
-// `strata.rs::ensure_strata_file` creates a file with:
-//   { "layers": {}, "point_layers": {} }
-//
-// These two shapes are INCOMPATIBLE: after update_strata runs, get_strata_point_layers
-// can no longer find "point_layers".  The fix belongs in issue #6 (strata.rs
-// refactor).  For now, load_strata_lookup (below) handles BOTH formats:
-//   • Format A — nested: { "point_layers": { "<pid>": [ {from,to,primary,secondary} ] } }
-//   • Format B — flat array: [ { "PointId", "From", "To", "Interpretation", "Description" } ]
-// Any other format produces an empty lookup (strata columns filled with "Unknown").
+// As of issue #6 the strata master is stored in {output_folder}/strata.xlsx
+// (Strata_GIRTool template, see commands/strata.rs).  load_strata_lookup
+// below reads the "Strata" sheet of that workbook.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -134,105 +123,78 @@ fn build_sql(
 
 // ── Strata-column injection ───────────────────────────────────────────────────
 
-/// Load strata intervals from `{output_folder}/{project_id}_strata.json`.
+/// Load strata intervals from the Strata master sheet in
+/// `{output_folder}/strata.xlsx` (see `commands/strata.rs`).
 ///
-/// Handles two on-disk formats (see module-level doc):
-///   Format A — nested: { "point_layers": { "<pid>": [ {from,to,primary,secondary} ] } }
-///   Format B — flat array: [ { "PointId", "From", "To", "Interpretation", "Description" } ]
+/// The `_project_id` argument is kept for backward compatibility with the old
+/// per-project JSON store but is ignored — strata.xlsx is shared across
+/// projects, matching the Python build.
 ///
 /// Returns a map of pointId → sorted Vec<(from, to, primary, secondary)>.
-/// Returns an empty map when the file is absent, empty, or has an unrecognised format.
+/// Returns an empty map when the file is absent or has no usable rows.
 pub(crate) fn load_strata_lookup(
     output_folder: &str,
-    project_id: &str,
+    _project_id: &str,
 ) -> HashMap<String, Vec<(f64, f64, String, String)>> {
-    let path = PathBuf::from(output_folder).join(format!("{project_id}_strata.json"));
-    let data: Value = match std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-    {
-        Some(v) => v,
-        None => return HashMap::new(),
+    use calamine::open_workbook_auto;
+
+    let path = PathBuf::from(output_folder).join("strata.xlsx");
+    if !path.exists() {
+        return HashMap::new();
+    }
+
+    let mut wb = match open_workbook_auto(&path) {
+        Ok(w) => w,
+        Err(_) => return HashMap::new(),
+    };
+    let range = match wb.worksheet_range("Strata") {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
     };
 
     let mut lookup: HashMap<String, Vec<(f64, f64, String, String)>> = HashMap::new();
 
-    // ── Format A: { "point_layers": { pid: [ {from,to,primary,secondary} ] } } ──
-    if let Some(point_layers) = data.get("point_layers").and_then(|v| v.as_object()) {
-        for (pid, layers) in point_layers {
-            if let Some(arr) = layers.as_array() {
-                let mut intervals = Vec::new();
-                for layer in arr {
-                    let from = layer
-                        .get("from")
-                        .or_else(|| layer.get("depthFrom"))
-                        .and_then(|v| v.as_f64());
-                    let to = layer
-                        .get("to")
-                        .or_else(|| layer.get("depthTo"))
-                        .and_then(|v| v.as_f64());
-                    let primary = layer
-                        .get("primary")
-                        .or_else(|| layer.get("layer"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Unknown")
-                        .to_string();
-                    let secondary = layer
-                        .get("secondary")
-                        .or_else(|| layer.get("description"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Unknown")
-                        .to_string();
-                    if let (Some(f), Some(t)) = (from, to) {
-                        intervals.push((f, t, primary, secondary));
-                    }
-                }
-                if !intervals.is_empty() {
-                    lookup.insert(pid.clone(), intervals);
-                }
+    // Columns: A=ProjectId B=PointId C=PointNo D=From E=To F=Primary G=Secondary
+    for row in range.rows().skip(1) {
+        let pid = match row.get(1) {
+            Some(Data::String(s)) if !s.is_empty() => s.clone(),
+            Some(Data::Int(i))                     => i.to_string(),
+            Some(Data::Float(f))                   => {
+                if f.fract() == 0.0 { format!("{}", *f as i64) } else { f.to_string() }
             }
-        }
-        return lookup;
+            _ => continue,
+        };
+        let from = match row.get(3) {
+            Some(Data::Float(f)) => *f,
+            Some(Data::Int(i))   => *i as f64,
+            _ => continue,
+        };
+        let to = match row.get(4) {
+            Some(Data::Float(f)) => *f,
+            Some(Data::Int(i))   => *i as f64,
+            _ => continue,
+        };
+        let primary = row
+            .get(5)
+            .and_then(|c| match c {
+                Data::String(s) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
+        let secondary = row
+            .get(6)
+            .and_then(|c| match c {
+                Data::String(s) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        lookup.entry(pid).or_default().push((from, to, primary, secondary));
     }
 
-    // ── Format B: flat array of SQL rows ─────────────────────────────────────
-    // Each row: { PointId, From, To, Interpretation/Layer, Description/Secondary }
-    if let Some(rows) = data.as_array() {
-        for row in rows {
-            // Accept both "PointId" and "PointID" capitalizations.
-            let pid = row
-                .get("PointId")
-                .or_else(|| row.get("PointID"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let from = row
-                .get("From")
-                .and_then(|v| v.as_f64());
-            let to = row
-                .get("To")
-                .and_then(|v| v.as_f64());
-            let primary = row
-                .get("Interpretation")
-                .or_else(|| row.get("Layer"))
-                .or_else(|| row.get("primary"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
-                .to_string();
-            let secondary = row
-                .get("Description")
-                .or_else(|| row.get("secondary"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
-                .to_string();
-
-            if let (Some(pid), Some(f), Some(t)) = (pid, from, to) {
-                lookup.entry(pid).or_default().push((f, t, primary, secondary));
-            }
-        }
-        // Sort each point's intervals by depth-from for binary-search correctness.
-        for intervals in lookup.values_mut() {
-            intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        }
+    // Sort each point's intervals by depth-from.
+    for intervals in lookup.values_mut() {
+        intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     }
 
     lookup

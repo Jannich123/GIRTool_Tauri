@@ -61,6 +61,11 @@ pub fn run() {
             commands::strata::ensure_strata_file,
             commands::strata::load_strata,
             commands::strata::update_strata,
+            commands::strata::get_strata_types,
+            commands::strata::get_strata_data,
+            commands::strata::download_strata,
+            commands::strata::transfer_strata,
+            commands::strata::open_strata,
             commands::strata::get_strata_layers,
             commands::strata::get_strata_point_layers,
             // download
