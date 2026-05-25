@@ -35,9 +35,10 @@
 //   • Format B — flat array: [ { "PointId", "From", "To", "Interpretation", "Description" } ]
 // Any other format produces an empty lookup (strata columns filled with "Unknown").
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use calamine::{open_workbook, Data, Reader, Xlsx};
 use rust_xlsxwriter::{Format, Table, TableColumn, TableStyle, Workbook};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -141,7 +142,7 @@ fn build_sql(
 ///
 /// Returns a map of pointId → sorted Vec<(from, to, primary, secondary)>.
 /// Returns an empty map when the file is absent, empty, or has an unrecognised format.
-fn load_strata_lookup(
+pub(crate) fn load_strata_lookup(
     output_folder: &str,
     project_id: &str,
 ) -> HashMap<String, Vec<(f64, f64, String, String)>> {
@@ -254,7 +255,7 @@ fn strata_at(
 }
 
 /// Extract PointId + Depth from a row-object, inject Primary/Secondary Layer columns.
-fn apply_strata_columns(
+pub(crate) fn apply_strata_columns(
     columns: &mut Vec<String>,
     rows: &mut Vec<Vec<Value>>,
     strata_lookup: &HashMap<String, Vec<(f64, f64, String, String)>>,
@@ -354,7 +355,7 @@ fn write_cell(ws: &mut rust_xlsxwriter::Worksheet, row: u32, col: u16, val: &Val
 
 // ── Conversion: Vec<Value> rows-as-objects → (columns, Vec<Vec<Value>>) ───────
 
-fn objects_to_columnar(rows: Vec<Value>) -> (Vec<String>, Vec<Vec<Value>>) {
+pub(crate) fn objects_to_columnar(rows: Vec<Value>) -> (Vec<String>, Vec<Vec<Value>>) {
     if rows.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -379,6 +380,271 @@ fn objects_to_columnar(rows: Vec<Value>) -> (Vec<String>, Vec<Vec<Value>>) {
         .collect();
 
     (columns, data)
+}
+
+/// Inverse of [`objects_to_columnar`].  Rebuild row-objects from a parallel
+/// `columns` slice and a positional `rows` matrix.
+pub(crate) fn columnar_to_objects(columns: &[String], rows: Vec<Vec<Value>>) -> Vec<Value> {
+    rows.into_iter()
+        .map(|r| {
+            let mut obj = serde_json::Map::new();
+            for (i, col) in columns.iter().enumerate() {
+                obj.insert(col.clone(), r.get(i).cloned().unwrap_or(Value::Null));
+            }
+            Value::Object(obj)
+        })
+        .collect()
+}
+
+/// Convert a calamine `Data` cell to a plain `String` (or empty for null/error).
+fn data_str(cell: &Data) -> String {
+    match cell {
+        Data::String(s)   => s.clone(),
+        Data::Float(f)    => {
+            if f.fract() == 0.0 { format!("{}", *f as i64) } else { f.to_string() }
+        }
+        Data::Int(i)      => i.to_string(),
+        Data::Bool(b)     => b.to_string(),
+        Data::DateTime(d) => d.to_string(),
+        _                 => String::new(),
+    }
+}
+
+/// Convert a calamine `Data` cell into a `serde_json::Value` (preserves type
+/// where reasonable so the frontend gets numbers as numbers, not strings).
+fn data_to_value(cell: &Data) -> Value {
+    match cell {
+        Data::String(s)   => Value::String(s.clone()),
+        Data::Float(f)    => json!(f),
+        Data::Int(i)      => json!(i),
+        Data::Bool(b)     => Value::Bool(*b),
+        Data::DateTime(d) => Value::String(d.to_string()),
+        Data::Empty | Data::Error(_) | Data::DateTimeIso(_) | Data::DurationIso(_) => Value::Null,
+    }
+}
+
+/// Append one column per group system to each row, matched by PointId.
+///
+/// Mirrors Python `_apply_group_columns` in `backend/routers/download.py`.
+/// Reads `{output_folder}/Grouping.xlsx`; column headers beyond the fixed five
+/// (`PointId`, `PointNo`, `ProjectNo`, `ProjectName`, `PointType`) are treated
+/// as group-system names and appended to `columns`.  For each row, the value
+/// for that point in that system is appended, or `"Unknown"` if the point is
+/// not present in Grouping.xlsx.
+///
+/// No-ops silently when:
+///   * Grouping.xlsx does not exist
+///   * the SQL result has no `PointId` column
+///   * Grouping.xlsx has no system-name columns
+pub(crate) fn apply_group_columns(
+    output_folder: &str,
+    columns: &mut Vec<String>,
+    rows: &mut Vec<Vec<Value>>,
+) {
+    let path = PathBuf::from(output_folder).join("Grouping.xlsx");
+    if !path.exists() {
+        return;
+    }
+
+    let mut wb: Xlsx<_> = match open_workbook(&path) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    let range = match wb.worksheet_range_at(0) {
+        Some(Ok(r)) => r,
+        _ => return,
+    };
+
+    let mut iter = range.rows();
+    let headers: Vec<String> = match iter.next() {
+        Some(r) => r.iter().map(data_str).collect(),
+        None => return,
+    };
+
+    let pid_idx = match headers.iter().position(|h| h == "PointId") {
+        Some(i) => i,
+        None => return,
+    };
+
+    // Columns beyond the fixed 5 are system-name columns.
+    let skip: HashSet<&str> = ["PointId", "PointNo", "ProjectNo", "ProjectName", "PointType"]
+        .into_iter()
+        .collect();
+    let sys_cols: Vec<(usize, String)> = headers
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| !h.is_empty() && !skip.contains(h.as_str()))
+        .map(|(i, h)| (i, h.clone()))
+        .collect();
+
+    if sys_cols.is_empty() {
+        return;
+    }
+
+    // Build pointId → { sys_name → value } from the xlsx data rows.
+    let mut assignments: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for row in iter {
+        let pid = match row.get(pid_idx) {
+            Some(c) if !matches!(c, Data::Empty) => data_str(c),
+            _ => continue,
+        };
+        if pid.is_empty() {
+            continue;
+        }
+        let mut entry = HashMap::new();
+        for (ci, sys_name) in &sys_cols {
+            if let Some(cell) = row.get(*ci) {
+                let v = data_str(cell);
+                if !v.is_empty() {
+                    entry.insert(sys_name.clone(), v);
+                }
+            }
+        }
+        assignments.insert(pid, entry);
+    }
+
+    // Find PointId in the SQL result (case-insensitive).
+    let result_pid_idx = match columns.iter().position(|c| c.eq_ignore_ascii_case("pointid")) {
+        Some(i) => i,
+        None => return,
+    };
+
+    // Append system columns to the header.
+    for (_, sys_name) in &sys_cols {
+        columns.push(sys_name.clone());
+    }
+
+    // Append per-row values for each system column.
+    for row in rows.iter_mut() {
+        let pid = row
+            .get(result_pid_idx)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        for (_, sys_name) in &sys_cols {
+            let val = pid
+                .as_ref()
+                .and_then(|p| assignments.get(p))
+                .and_then(|m| m.get(sys_name))
+                .cloned()
+                .unwrap_or_else(|| "Unknown".to_string());
+            row.push(Value::String(val));
+        }
+    }
+}
+
+/// Merge user-added columns from a previously-saved datasheet xlsx into the
+/// SQL result rows.
+///
+/// Mirrors Python `_merge_formula_columns` in `backend/routers/download.py`.
+/// Looks for `{output_folder}/Datasheets/{query_name}.xlsx` first, then
+/// `{output_folder}/{query_name}.xlsx`.  For any column header in the file
+/// that is NOT in the current SQL result, its cached computed value is merged
+/// into each row by matching the `PointId` column.
+///
+/// Calamine returns cached computed values for formula cells, which is exactly
+/// what we want (equivalent to Python's `data_only=True`).
+///
+/// No-ops silently when the file is absent or has no extra columns.
+pub(crate) fn merge_formula_columns(
+    output_folder: &str,
+    query_name: &str,
+    columns: &mut Vec<String>,
+    rows: &mut Vec<Vec<Value>>,
+) {
+    let target = format!("{query_name}.xlsx");
+    let path = {
+        let primary = PathBuf::from(output_folder).join("Datasheets").join(&target);
+        if primary.exists() {
+            primary
+        } else {
+            let fallback = PathBuf::from(output_folder).join(&target);
+            if fallback.exists() {
+                fallback
+            } else {
+                return;
+            }
+        }
+    };
+
+    let mut wb: Xlsx<_> = match open_workbook(&path) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    let range = match wb.worksheet_range_at(0) {
+        Some(Ok(r)) => r,
+        _ => return,
+    };
+
+    let mut iter = range.rows();
+    let xlsx_headers: Vec<String> = match iter.next() {
+        Some(r) => r.iter().map(data_str).collect(),
+        None => return,
+    };
+
+    // Determine which xlsx columns are NEW (not already in the SQL result).
+    let sql_set: HashSet<String> = columns.iter().map(|s| s.to_lowercase()).collect();
+    let new_cols: Vec<(usize, String)> = xlsx_headers
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| !h.is_empty() && !sql_set.contains(&h.to_lowercase()))
+        .map(|(i, h)| (i, h.clone()))
+        .collect();
+
+    if new_cols.is_empty() {
+        return;
+    }
+
+    let xlsx_pid_idx = match xlsx_headers
+        .iter()
+        .position(|h| h.eq_ignore_ascii_case("pointid"))
+    {
+        Some(i) => i,
+        None => return,
+    };
+
+    // pointId → { col_name → value }
+    let mut extra: HashMap<String, HashMap<String, Value>> = HashMap::new();
+    for row in iter {
+        let pid = row.get(xlsx_pid_idx).map(data_str).unwrap_or_default();
+        if pid.is_empty() {
+            continue;
+        }
+        let mut entry = HashMap::new();
+        for (ci, name) in &new_cols {
+            if let Some(cell) = row.get(*ci) {
+                entry.insert(name.clone(), data_to_value(cell));
+            }
+        }
+        extra.insert(pid, entry);
+    }
+
+    let result_pid_idx = match columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("pointid"))
+    {
+        Some(i) => i,
+        None => return,
+    };
+
+    for (_, name) in &new_cols {
+        columns.push(name.clone());
+    }
+
+    for row in rows.iter_mut() {
+        let pid = row
+            .get(result_pid_idx)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        for (_, name) in &new_cols {
+            let val = pid
+                .as_ref()
+                .and_then(|p| extra.get(p))
+                .and_then(|m| m.get(name))
+                .cloned()
+                .unwrap_or(Value::Null);
+            row.push(val);
+        }
+    }
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
