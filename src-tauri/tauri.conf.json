@@ -28,7 +28,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "msi"],
+    "publisher": "GIRTool",
+    "copyright": "© 2024 GIRTool",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -36,11 +38,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [],
     "windows": {
-      "wix": {},
+      "wix": {
+        "language": "en-US",
+        "upgradeCode": "F78BF8E8-87BB-4F94-8EB4-3D1429C0110D"
+      },
       "nsis": {
         "installerHooks": "nsis/hooks.nsh",
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "startMenuFolder": "GIRTool",
+        "languages": ["English"]
       }
     }
   },
@@ -48,7 +56,13 @@
     "shell": { "open": true },
     "dialog": {},
     "fs": {
-      "scope": ["$APPDATA/**", "$DOCUMENT/**", "$DESKTOP/**", "$DOWNLOAD/**"]
-    }
+      "scope": [
+        "$APPDATA/**",
+        "$DOCUMENT/**",
+        "$DESKTOP/**",
+        "$DOWNLOAD/**"
+      ]
+    },
+    "opener": {}
   }
 }
