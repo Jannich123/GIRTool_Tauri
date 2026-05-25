@@ -264,12 +264,15 @@ fn write_style_sheet(
         ws.write_string_with_format(ri, 0, &r.name, &plain)
             .map_err(|e| format!("Write error: {e}"))?;
 
-        // Color column: cell background ONLY (no text — fill is the source of truth).
+        // Color column: write the hex string AS the cell value, AND apply a
+        // matching background fill. calamine cannot read cell fills, so the
+        // text value is what survives a save → load round-trip; the fill is
+        // purely for visual feedback in Excel.
         let color_fmt = Format::new()
             .set_font_name("Calibri")
             .set_font_size(10)
             .set_background_color(Color::RGB(parse_hex(&r.color)));
-        ws.write_blank(ri, 1, &color_fmt)
+        ws.write_string_with_format(ri, 1, &r.color, &color_fmt)
             .map_err(|e| format!("Color cell error: {e}"))?;
 
         ws.write_string_with_format(ri, 2, &r.symbol, &plain)
@@ -389,7 +392,9 @@ fn write_point_type_row(
         .set_font_name("Calibri")
         .set_font_size(10)
         .set_background_color(Color::RGB(parse_hex(&color)));
-    ws.write_blank(ri, 1, &color_fmt)
+    // Write hex value as cell text so save→load round-trip works (calamine
+    // cannot read cell fills); fill is purely for visual feedback in Excel.
+    ws.write_string_with_format(ri, 1, &color, &color_fmt)
         .map_err(|e| format!("Color cell error: {e}"))?;
     ws.write_string_with_format(ri, 2, &symbol, plain)
         .map_err(|e| format!("Write error: {e}"))?;
