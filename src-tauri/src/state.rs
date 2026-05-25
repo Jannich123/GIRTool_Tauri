@@ -14,11 +14,49 @@ pub struct DbConfig {
     pub output_folder: String,
 }
 
+// ── SharePoint state ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct SpConfig {
+    pub tenant_id:   String,
+    pub client_id:   String,
+    pub site_url:    String,
+    pub folder_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpToken {
+    pub access_token:  String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_in:    u64,
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum SpPollStatus {
+    #[default]
+    Idle,
+    Pending,
+    Authenticated,
+    Error(String),
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SpState {
+    pub config:      SpConfig,
+    pub token:       Option<SpToken>,
+    pub poll_status: SpPollStatus,
+}
+
+// ── App state ─────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Default)]
 pub struct AppState {
-    pub db:  Mutex<Option<DbConfig>>,
+    pub db:        Mutex<Option<DbConfig>>,
     /// True once a successful connection has been established
     pub connected: Mutex<bool>,
+    pub sp:        Mutex<SpState>,
 }
 
 impl AppState {
