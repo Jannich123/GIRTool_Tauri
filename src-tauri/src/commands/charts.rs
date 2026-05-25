@@ -340,9 +340,13 @@ pub async fn open_statistics(
 // ── open_datasheet ────────────────────────────────────────────────────────────
 
 /// Open an existing xlsx datasheet in the OS default application.
-/// `path` is either a full file-system path or, when it looks like a bare
-/// query name (no path separators), we resolve it against the output folder as
-/// `{output_folder}/{path}.xlsx`.
+///
+/// `path` is either:
+///   • A full file-system path — used as-is.
+///   • A bare query name (no path separators, e.g. "WaterLevels") —
+///     resolved in priority order matching Python download.py:610-613:
+///       1. {output_folder}/Datasheets/{name}.xlsx   ← download_data writes here
+///       2. {output_folder}/{name}.xlsx               ← legacy / fallback
 #[tauri::command]
 pub async fn open_datasheet(
     path: String,
@@ -352,11 +356,19 @@ pub async fn open_datasheet(
     let resolved: PathBuf = if path.contains(std::path::MAIN_SEPARATOR)
         || path.contains('/')
     {
+        // Caller supplied a full path — use it directly.
         PathBuf::from(&path)
     } else {
-        // Treat as a query name → resolve against the output folder.
+        // Bare query name: try Datasheets/ subfolder first, then root.
         let folder = state.output_folder().ok_or("No output folder configured.")?;
-        PathBuf::from(&folder).join(format!("{path}.xlsx"))
+        let primary = PathBuf::from(&folder)
+            .join("Datasheets")
+            .join(format!("{path}.xlsx"));
+        if primary.exists() {
+            primary
+        } else {
+            PathBuf::from(&folder).join(format!("{path}.xlsx"))
+        }
     };
 
     if !resolved.exists() {
