@@ -198,9 +198,7 @@ async fn try_refresh(client: &Client, cfg: &SpConfig, refresh_tok: &str) -> Opti
         ("scope",         SCOPES),
     ];
     let body: Value = client.post(&url).form(&params).send().await.ok()?.json().await.ok()?;
-    if body.get("access_token").is_none() {
-        return None;
-    }
+    body.get("access_token")?;
     Some(SpToken {
         access_token:  body["access_token"].as_str().unwrap_or("").to_string(),
         refresh_token: body.get("refresh_token")
