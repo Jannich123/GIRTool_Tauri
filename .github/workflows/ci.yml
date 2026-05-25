@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "feature/**"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Rust type-check (fast; no ODBC driver install needed) ─────────────────────
+  check:
+    name: cargo check (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  # ── Unit tests (no DB connection required) ────────────────────────────────────
+  test:
+    name: cargo test --lib (Windows)
+    runs-on: windows-latest
+    needs: check
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo test (lib, no integration)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
+
+  # ── Clippy lint ───────────────────────────────────────────────────────────────
+  clippy:
+    name: clippy (Windows)
+    runs-on: windows-latest
+    needs: check
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry + build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo clippy
+        run: >
+          cargo clippy
+          --manifest-path src-tauri/Cargo.toml
+          --all-targets
+          -- -D warnings
