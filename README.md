@@ -84,6 +84,42 @@ GIRTool_Tauri/
 
 ---
 
+## Building a release installer
+
+```powershell
+# One-time: install the Tauri CLI
+cargo install tauri-cli --locked
+
+# Build both NSIS (.exe) and WiX MSI (.msi) installers
+cargo tauri build
+```
+
+Output artefacts land in `src-tauri/target/release/bundle/`:
+| Format | Path | Install location |
+|---|---|---|
+| NSIS `.exe` | `bundle/nsis/GIRTool_x.y.z_x64-setup.exe` | `C:\Program Files\GIRTool\` |
+| WiX `.msi` | `bundle/msi/GIRTool_x.y.z_x64_en-US.msi` | `C:\Program Files\GIRTool\` |
+
+### What the NSIS installer does
+1. **ODBC check** — detects whether Microsoft ODBC Driver 17 for SQL Server is installed; if not, downloads and installs it silently from Microsoft (network required).
+2. **Install files** — copies the app to `Program Files\GIRTool\` (requires elevation).
+3. **Shortcuts** — creates a Desktop shortcut and a Start Menu entry under `GIRTool\`.
+4. **Defender exclusion** — adds the install directory to Windows Defender exclusions so Excel file operations are not slowed by real-time AV scanning.
+5. **Uninstall** — available via Add/Remove Programs; removes the Defender exclusion automatically.
+
+### WiX MSI
+The MSI installer uses upgrade code `F78BF8E8-87BB-4F94-8EB4-3D1429C0110D` so subsequent versions upgrade cleanly in-place without leaving orphaned entries in Add/Remove Programs.
+
+### Automated releases
+Pushing a version tag triggers the release workflow:
+```powershell
+git tag v1.0.0
+git push --tags
+```
+GitHub Actions builds both installers and publishes them as a GitHub Release.
+
+---
+
 ## Development status
 
 See [GitHub Issues](https://github.com/Jannich123/GIRTool_Tauri/issues) for the full task list.
