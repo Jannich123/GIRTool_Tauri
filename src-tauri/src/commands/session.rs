@@ -22,7 +22,7 @@
 //   patch_session(project_id, patch)  → ()  shallow-merge allowed keys only
 
 use serde_json::{json, Map, Value};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::state::AppState;
 
@@ -35,6 +35,7 @@ const PATCHABLE_KEYS: &[&str] = &[
     "filters",
     "strata",
     "selected_projects",
+    "map",
 ];
 
 // ── Path helper ───────────────────────────────────────────────────────────────
@@ -64,7 +65,75 @@ fn write_settings(output_folder: &str, settings: &Map<String, Value>) -> Result<
         .map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
-// ── Commands ──────────────────────────────────────────────────────────────────
+// ── Top-level selection persistence (project / point picker state) ────────────
+//
+// Stored at the TOP LEVEL of GIRTool_settings.json (not inside `sessions`) so
+// the app can restore which projects + points were active on the next launch:
+//
+//   {
+//     "selected_projects": [{ProjectId, ProjectNo, Title}, ...],
+//     "selected_points":   [{PointId, PointNo, PointType}, ...],
+//     "sessions":          { ... per-project chart/boundary state ... }
+//   }
+//
+// Both keys are independent — pass `Some` to overwrite, `None` to leave
+// untouched.
+
+/// Save the user's project / point selection at the top level of
+/// GIRTool_settings.json.  Either argument may be `None` to update only the
+/// other one (e.g. ProjectsPage saves projects+clears points; PointsPage
+/// saves only points without disturbing the project selection).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn save_selection(
+    selected_projects: Option<Value>,
+    selected_points:   Option<Value>,
+    state:             State<'_, AppState>,
+) -> Result<(), String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+
+    tokio::task::spawn_blocking(move || {
+        let mut settings = read_settings(&folder);
+        if let Some(v) = selected_projects {
+            settings.insert("selected_projects".to_string(), v);
+        }
+        if let Some(v) = selected_points {
+            settings.insert("selected_points".to_string(), v);
+        }
+        settings.insert(
+            "saved_at".to_string(),
+            json!(chrono::Utc::now().to_rfc3339()),
+        );
+        write_settings(&folder, &settings)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
+/// Restore the persisted project / point selection.  Returns an object with
+/// `selectedProjects` and `selectedPoints` arrays (camelCase to match the
+/// frontend's state names).  Returns empty arrays if no output folder is
+/// configured or the file does not exist.
+#[tauri::command]
+pub async fn load_selection(state: State<'_, AppState>) -> Result<Value, String> {
+    let folder = match state.output_folder() {
+        Some(f) => f,
+        None => return Ok(json!({ "selectedProjects": [], "selectedPoints": [] })),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        let settings = read_settings(&folder);
+        json!({
+            "selectedProjects": settings.get("selected_projects").cloned().unwrap_or(json!([])),
+            "selectedPoints":   settings.get("selected_points").cloned().unwrap_or(json!([])),
+        })
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
+
+    Ok(result)
+}
+
+// ── Per-project session commands ──────────────────────────────────────────────
 
 /// Return the session object for a project from GIRTool_settings.json.
 ///
@@ -100,12 +169,21 @@ pub async fn get_session(
 /// are preserved unchanged — this mirrors Python's restricted PATCH behaviour.
 #[tauri::command]
 pub async fn patch_session(
+    app:        AppHandle,
     project_id: String,
-    patch: Value,
-    state: State<'_, AppState>,
+    patch:      Value,
+    state:      State<'_, AppState>,
 ) -> Result<(), String> {
     let folder = state.output_folder().ok_or("No output folder configured.")?;
 
+    // Note which patchable keys were actually present in the patch — we'll
+    // emit a Tauri event per key after the write so other windows can refresh.
+    let changed_keys: Vec<&'static str> = patch
+        .as_object()
+        .map(|m| PATCHABLE_KEYS.iter().copied().filter(|k| m.contains_key(*k)).collect())
+        .unwrap_or_default();
+
+    let pid_for_emit = project_id.clone();
     tokio::task::spawn_blocking(move || {
         let mut settings = read_settings(&folder);
 
@@ -136,5 +214,15 @@ pub async fn patch_session(
         write_settings(&folder, &settings)
     })
     .await
-    .map_err(|e| format!("internal task error: {e}"))?
+    .map_err(|e| format!("internal task error: {e}"))??;
+
+    // Broadcast per-key events so popped-out windows can refetch only what
+    // they care about.  Emit format: "session:<key>:updated"
+    for key in changed_keys {
+        let _ = app.emit(
+            &format!("session:{key}:updated"),
+            json!({ "projectId": pid_for_emit }),
+        );
+    }
+    Ok(())
 }

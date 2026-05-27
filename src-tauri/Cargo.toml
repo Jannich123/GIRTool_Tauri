@@ -27,8 +27,17 @@ tokio        = { version = "1", features = ["full"] }
 anyhow       = "1"
 thiserror    = "1"
 
-# SQL Server / ODBC
-odbc-api     = { version = "8", features = ["narrow"] }
+# SQL Server / ODBC.
+# NOTE: do NOT enable the `narrow` feature — it switches odbc-api to single-byte
+# ANSI APIs (Windows-1252 on Western European systems) which mangles Danish
+# characters (æ, ø, å).  The default wide build converts UTF-16 → UTF-8.
+odbc-api     = { version = "8" }
+
+# Used by xlsx_fills.rs to read cell BACKGROUND fill colours from xlsx files —
+# calamine returns cell values but doesn't expose cell formatting, so we parse
+# the styles.xml + worksheet XML directly via zip + quick-xml.
+zip          = "0.6"
+quick-xml    = "0.31"
 
 # Excel reading (load existing xlsx)
 calamine     = { version = "0.24", features = ["dates"] }

@@ -1,0 +1,17 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background so white strata blocks are visible as a favicon. -->
+  <rect width="100" height="100" rx="18" fill="#0B213F"/>
+
+  <!-- Soil strata layers (borehole column) -->
+  <rect x="22" y="15" width="14" height="18" rx="2" fill="#FFFFFF" opacity="0.4"/>
+  <rect x="22" y="37" width="14" height="24" rx="2" fill="#FFFFFF" opacity="0.7"/>
+  <rect x="22" y="65" width="14" height="20" rx="2" fill="#FFFFFF"/>
+
+  <!-- CPT continuous curve -->
+  <path d="M 44 20 Q 56 30 48 45 T 78 62 T 55 78 T 78 85"
+        fill="none" stroke="#00D2C4" stroke-width="5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Probe tip indicator -->
+  <circle cx="78" cy="85" r="5.5" fill="#00D2C4" stroke="#0B213F" stroke-width="1.5"/>
+</svg>

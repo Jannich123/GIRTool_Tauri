@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Marker, Popup, LayersControl, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, WMSTileLayer, CircleMarker, Marker, Popup, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import proj4 from 'proj4'
 import { invoke } from '../tauri-api'
@@ -176,6 +176,14 @@ function FitBounds({ points }) {
 }
 
 // ── Session position persistence ──────────────────────────────────────────────
+//
+// Map view (center + zoom) is persisted in two places:
+//   * sessionStorage — for instant restore on the *current* tab/window so the
+//     map doesn't visibly snap to defaults while the async session load runs.
+//   * GIRTool_settings.json (via patch_session) — so the view survives app
+//     restarts and follows the project across windows.
+// SavePosition writes to both on every pan/zoom (the session write is
+// debounced via patch_session's own buffering).
 
 const SS_POS_KEY = 'girtool_map_pos'
 function loadSavedPos() {
@@ -183,13 +191,39 @@ function loadSavedPos() {
   catch { return null }
 }
 
-function SavePosition() {
+function SavePosition({ projectId, mapCfgRef }) {
+  // mapCfgRef holds { crs, wfsUrl, colorMode } so we can write a complete
+  // `map` payload without recreating the SavePosition component on each
+  // settings change (which would unmount/remount the Leaflet event hook).
+  const saveTimer = useRef(null)
+  const lastWrittenRef = useRef('')
+
   useMapEvents({
     moveend(e) {
-      const c = e.target.getCenter()
+      const c    = e.target.getCenter()
+      const zoom = e.target.getZoom()
+
+      // Same-window cache (synchronous, used by loadSavedPos on next mount).
       sessionStorage.setItem(SS_POS_KEY, JSON.stringify({
-        lat: c.lat, lng: c.lng, zoom: e.target.getZoom(),
+        lat: c.lat, lng: c.lng, zoom,
       }))
+
+      if (!projectId) return
+      // Debounced cross-session persistence.
+      const payload = {
+        center:    { lat: c.lat, lng: c.lng },
+        zoom,
+        crs:       mapCfgRef.current?.crs       ?? 'EPSG:25832',
+        wfsUrl:    mapCfgRef.current?.wfsUrl    ?? '',
+        colorMode: mapCfgRef.current?.colorMode ?? 'type',
+      }
+      const str = JSON.stringify(payload)
+      if (str === lastWrittenRef.current) return
+      clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        invoke('patch_session', { projectId, patch: { map: payload } }).catch(() => {})
+        lastWrittenRef.current = str
+      }, 250)
     },
   })
   return null
@@ -286,6 +320,59 @@ export default function MapPage() {
   const [crs,       setCrs]       = useState(saved.crs       || 'EPSG:25832')
   const [wfsUrl,    setWfsUrl]    = useState(saved.wfsUrl    || '')
   const [colorMode, setColorMode] = useState(saved.colorMode || 'type')
+
+  // Active project for session lookups.
+  const projectId = selectedProjects[0]?.ProjectId
+
+  // Keep a ref to the live map config so SavePosition's moveend handler
+  // always reads the latest settings without re-subscribing.
+  const mapCfgRef = useRef({ crs, wfsUrl, colorMode })
+  useEffect(() => {
+    mapCfgRef.current = { crs, wfsUrl, colorMode }
+  }, [crs, wfsUrl, colorMode])
+
+  // ── Hydrate from {output_folder}/GIRTool_settings.json on project change ──
+  // The MapContainer is keyed off projectId below so it remounts with the
+  // freshly-loaded center/zoom — Leaflet does NOT live-react to its
+  // initial-center/zoom props.
+  const [sessionMap, setSessionMap] = useState(null)
+  useEffect(() => {
+    if (!projectId) { setSessionMap(null); return }
+    invoke('get_session', { projectId }).then(r => {
+      const m = r?.map ?? null
+      if (m) {
+        // Also seed sessionStorage so loadSavedPos picks it up on the
+        // first render of the new MapContainer.
+        if (m.center && typeof m.zoom === 'number') {
+          sessionStorage.setItem(SS_POS_KEY, JSON.stringify({
+            lat: m.center.lat, lng: m.center.lng, zoom: m.zoom,
+          }))
+        }
+        if (m.crs       && m.crs       !== crs)       setCrs(m.crs)
+        if (m.wfsUrl    !== undefined && m.wfsUrl    !== wfsUrl)    setWfsUrl(m.wfsUrl)
+        if (m.colorMode && m.colorMode !== colorMode) setColorMode(m.colorMode)
+      }
+      setSessionMap(m)
+    }).catch(() => { setSessionMap(null) })
+  }, [projectId])  // eslint-disable-line
+
+  // ── Persist crs / wfsUrl / colorMode changes to session ───────────────────
+  // (Pan/zoom changes are persisted by SavePosition on each moveend.)
+  const cfgSaveTimer = useRef(null)
+  useEffect(() => {
+    if (!projectId) return
+    // Wait until the initial session load has completed so we don't
+    // immediately overwrite the persisted view with the default state.
+    if (sessionMap === null) return
+    const center = sessionMap?.center ?? { lat: 56, lng: 10 }
+    const zoom   = sessionMap?.zoom   ?? 6
+    const payload = { center, zoom, crs, wfsUrl, colorMode }
+    clearTimeout(cfgSaveTimer.current)
+    cfgSaveTimer.current = setTimeout(() => {
+      invoke('patch_session', { projectId, patch: { map: payload } }).catch(() => {})
+    }, 250)
+    return () => clearTimeout(cfgSaveTimer.current)
+  }, [projectId, crs, wfsUrl, colorMode, sessionMap])
   // colorMode: 'type'  → color by PointType
   //            gs.id   → color by that group system
 
@@ -484,6 +571,10 @@ export default function MapPage() {
       {/* ── Map ── */}
       <div className="map-container">
         <MapContainer
+          // Remount when the project changes so the fresh per-project view
+          // hydrated from GIRTool_settings.json takes effect — Leaflet
+          // doesn't react to changed initial-center / initial-zoom props.
+          key={projectId || 'no-project'}
           center={savedPos ? [savedPos.lat, savedPos.lng] : [56, 10]}
           zoom={savedPos ? savedPos.zoom : 6}
           style={{ width: '100%', height: '100%' }}
@@ -501,6 +592,38 @@ export default function MapPage() {
                 attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 maxZoom={19}
+              />
+            </BaseLayer>
+
+            {/* ─── Dataforsyningen (Danish national geodata) — WMS ─────────
+                We tried WMTS first but Dataforsyningen's WMTS only serves
+                EPSG:25832 (Danish UTM), which doesn't align with Leaflet's
+                Web Mercator (EPSG:3857) base. The WMS endpoints below DO
+                support EPSG:3857 — Leaflet's WMSTileLayer reprojects tile
+                requests on the fly, so they layer correctly over OSM/ESRI.
+                Coverage is Denmark only; tiles outside DK return blank. */}
+            <BaseLayer name="Ortophoto (DK, GeoDanmark)">
+              <WMSTileLayer
+                url="https://api.dataforsyningen.dk/orto_foraar_DAF"
+                layers="orto_foraar"
+                format="image/jpeg"
+                transparent={false}
+                version="1.3.0"
+                attribution='&copy; <a href="https://dataforsyningen.dk">Dataforsyningen</a> / SDFE'
+                token="3fb3906a5fd463fa23e041854d827723"
+                maxZoom={21}
+              />
+            </BaseLayer>
+            <BaseLayer name="Screen map (DK)">
+              <WMSTileLayer
+                url="https://api.dataforsyningen.dk/topo_skaermkort_DAF"
+                layers="topo_skaermkort"
+                format="image/png"
+                transparent={false}
+                version="1.3.0"
+                attribution='&copy; <a href="https://dataforsyningen.dk">Dataforsyningen</a> / SDFE'
+                token="ff95a717c7d986d1bcf2f4187753a8ab"
+                maxZoom={21}
               />
             </BaseLayer>
           </LayersControl>
@@ -525,7 +648,7 @@ export default function MapPage() {
           })}
 
           {basePoints.length > 0 && <FitBounds points={basePoints} />}
-          <SavePosition />
+          <SavePosition projectId={projectId} mapCfgRef={mapCfgRef} />
         </MapContainer>
 
         {/* Status / hint overlays */}

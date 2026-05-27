@@ -109,6 +109,9 @@ export default function DataPage() {
 
   function buildPayload(queryNames) {
     return {
+      // Primary project — used by the backend for strata lookup.
+      // (The full project_ids list is used for the SQL IN clause.)
+      project_id:    selectedProjects[0]?.ProjectId ?? '',
       project_ids:   selectedProjects.map(p => p.ProjectId),
       point_ids:     selectedPoints.map(p => p.PointId),
       query_names:   queryNames,

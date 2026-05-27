@@ -42,6 +42,9 @@ pub fn run() {
             commands::database::browse_folder,
             commands::database::test_folder,
             commands::database::refresh_project,
+            commands::database::list_recent_folders,
+            commands::database::forget_recent_folder,
+            commands::database::load_folder_db_config,
             // projects
             commands::projects::list_projects,
             // points
@@ -103,6 +106,10 @@ pub fn run() {
             // session
             commands::session::get_session,
             commands::session::patch_session,
+            commands::session::save_selection,
+            commands::session::load_selection,
+            // windows (multi-window pop-out)
+            commands::windows::open_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GIRTool");

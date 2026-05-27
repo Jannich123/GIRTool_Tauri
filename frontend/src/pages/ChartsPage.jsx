@@ -92,7 +92,7 @@ function newChart(overrides = {}) {
     markerSize: 5,
     lineWidth:  1.5,
     refLines:    [],  // array of reference line objects
-    statsAxis:   'y', // persisted axis preference for the statistics table
+    statsAxis:   'x', // persisted axis preference for the statistics table (defaults to X)
     boundaryIds: [],  // array of boundary IDs to overlay on the chart
     hoverCols:   [],  // extra columns to show in hover tooltip (2D only)
     // runtime only (not persisted)
@@ -1353,7 +1353,7 @@ export default function ChartsPage() {
       xMin, xMax, yMin, yMax,
       groupCol, lineBy, sortBy, showStats, markerSize, lineWidth,
       refLines:    refLines    ?? [],
-      statsAxis:   statsAxis   ?? 'y',
+      statsAxis:   statsAxis   ?? 'x',
       boundaryIds: boundaryIds ?? [],
       hoverCols:   hoverCols   ?? [],
     }))

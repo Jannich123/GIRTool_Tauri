@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { invoke } from '../tauri-api'
+import { invoke, listen } from '../tauri-api'
 
 const AppContext = createContext(null)
 
@@ -65,7 +65,6 @@ export function AppProvider({ children }) {
   const [refreshKey, setRefreshKey]             = useState(0)   // increment to force re-fetch
   const [typeStyles, setTypeStyles]             = useState(loadTypeStyles)
   const [strataLayerColors, setStrataLayerColors] = useState(loadStrataLayerColors)
-  const [spConnected, setSpConnected]           = useState(false)
   const [xlsxSaveStatus, setXlsxSaveStatus]     = useState('idle')   // idle|saving|saved|error
   const [boundaries,    setBoundaries]           = useState([])       // project-level boundary definitions
   const [colDict,       setColDict]              = useState({})       // column abbreviation → {fullName, description, unit, datasheets}
@@ -107,6 +106,28 @@ export function AppProvider({ children }) {
       .catch(() => setBoundaries([]))
   }, [selectedProjects])  // eslint-disable-line
 
+  // Live cross-window sync: when ANY window writes boundaries via
+  // patch_session, the Rust backend emits `session:boundaries:updated`.  We
+  // listen for it and re-fetch — so a popped-out Boundaries window editing
+  // shapes is reflected in the main window's charts immediately.
+  useEffect(() => {
+    let unlisten = null
+    const subscribe = async () => {
+      try {
+        unlisten = await listen('session:boundaries:updated', (event) => {
+          const evPid    = event?.payload?.projectId
+          const localPid = selectedProjectsRef.current[0]?.ProjectId
+          if (!localPid || (evPid && evPid !== localPid)) return
+          invoke('get_session', { projectId: localPid })
+            .then(r => setBoundaries(Array.isArray(r?.boundaries) ? r.boundaries : []))
+            .catch(() => {})
+        })
+      } catch { /* event API unavailable — ignore */ }
+    }
+    subscribe()
+    return () => { if (typeof unlisten === 'function') unlisten() }
+  }, [])
+
   // Debounced boundaries save to GIRTool_settings.json.
   const boundariesTimerRef = useRef(null)
   useEffect(() => () => { clearTimeout(boundariesTimerRef.current) }, [])
@@ -117,9 +138,11 @@ export function AppProvider({ children }) {
     if (!pid) return
     boundariesRef.current = list   // keep ref in sync before the timer fires
     clearTimeout(boundariesTimerRef.current)
+    // Short debounce so cross-window chart overlays update almost immediately
+    // after each edit, while still coalescing rapid drag-style updates.
     boundariesTimerRef.current = setTimeout(() => {
       invoke('patch_session', { projectId: pid, patch: { boundaries: boundariesRef.current } }).catch(() => {})
-    }, 500)
+    }, 150)
   }, [])
 
   // Debounced Colors_&_Symbols.xlsx save — shared across Colors & Grouping pages.
@@ -197,15 +220,6 @@ export function AppProvider({ children }) {
     }, 1000)
   }, [])
 
-  // Poll SharePoint status once on mount so every page knows the connection state
-  const refreshSpStatus = useCallback(() => {
-    invoke('sp_status')
-      .then(r => setSpConnected(!!r.authenticated))
-      .catch(() => setSpConnected(false))
-  }, [])
-
-  useEffect(() => { refreshSpStatus() }, [refreshSpStatus])
-
   function saveConnection(settings) {
     setConnection(settings)
     localStorage.setItem('db_settings', JSON.stringify(settings))
@@ -243,7 +257,6 @@ export function AppProvider({ children }) {
       typeStyles,      updateTypeStyle,
       strataLayerColors, updateStrataLayerStyle,
       scheduleColorsXlsxSave, xlsxSaveStatus, setStrataLayersList,
-      spConnected, refreshSpStatus,
       boundaries, saveBoundaries,
       colDict,
     }}>

@@ -35,11 +35,17 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
 }
 
 .sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
   font-size: 1.4rem;
   font-weight: 700;
   letter-spacing: .08em;
   padding: 0 1.25rem 1rem;
   border-bottom: 1px solid rgba(255,255,255,.15);
+}
+.sidebar-logo svg {
+  flex-shrink: 0;
 }
 
 .sidebar-status {
@@ -106,6 +112,29 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
 .nav-item:hover  { background: rgba(255,255,255,.1); color: #fff; }
 .nav-item.active { background: rgba(255,255,255,.18); color: #fff; font-weight: 600; }
 
+/* Each nav row is the page button + a tiny "pop out into new window" button */
+.nav-row {
+  display: flex;
+  align-items: stretch;
+}
+.nav-row .nav-item {
+  flex: 1;
+  min-width: 0;
+}
+.nav-popout {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,.45);
+  font-size: .85rem;
+  padding: 0 .65rem;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.nav-popout:hover {
+  background: rgba(255,255,255,.12);
+  color: #fff;
+}
+
 /* ── Page ────────────────────────────────────── */
 .page { max-width: 1200px; }
 
@@ -129,6 +158,94 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
   align-items: center;
   gap: .5rem;
   flex-wrap: wrap;
+}
+
+/* ── Settings subtabs ───────────────────────── */
+.settings-tabs {
+  display: flex;
+  gap: .25rem;
+  border-bottom: 2px solid #e2e8f0;
+  margin-bottom: 1rem;
+}
+.settings-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;     /* overlap the parent border so active tab joins it */
+  padding: .55rem 1rem;
+  font-size: .92rem;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.settings-tab:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+.settings-tab.active {
+  color: #0f172a;
+  border-bottom-color: #2563eb;
+  background: transparent;
+}
+
+/* ── Recent folders (Settings page) ─────────────── */
+.recent-folders {
+  margin-top: .75rem;
+}
+.recent-folders-label {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted, #64748b);
+  margin-bottom: .35rem;
+}
+.recent-folders-list {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.recent-folder-chip {
+  display: flex;
+  align-items: stretch;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.recent-folder-chip:hover {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+.recent-folder-path {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: .35rem .6rem;
+  font-size: .82rem;
+  font-family: 'Consolas', 'Courier New', monospace;
+  color: #1e293b;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-folder-path:hover {
+  background: transparent;
+  color: #0f172a;
+}
+.recent-folder-remove {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  padding: 0 .55rem;
+  cursor: pointer;
+  font-size: .85rem;
+}
+.recent-folder-remove:hover {
+  background: transparent;
+  color: #ef4444;
 }
 
 /* ── Buttons ─────────────────────────────────── */
@@ -240,8 +357,9 @@ label.drag-pending { background: #dbeafe !important; }
 
 /* ── Misc ────────────────────────────────────── */
 .msg { padding: .5rem .75rem; border-radius: 6px; font-size: .875rem; margin-top: .5rem; }
-.msg.ok  { background: #dcfce7; color: #166534; }
-.msg.err { background: #fee2e2; color: #991b1b; }
+.msg.ok   { background: #dcfce7; color: #166534; }
+.msg.warn { background: #fef3c7; color: #92400e; }
+.msg.err  { background: #fee2e2; color: #991b1b; }
 
 .hint { color: var(--muted); font-size: .9rem; margin-top: .5rem; }
 .section-title { font-size: 1rem; font-weight: 700; color: var(--navy); margin-bottom: .75rem; }
@@ -1404,6 +1522,20 @@ textarea:focus { border-color: var(--navy); }
 }
 .fp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fp-empty { color: var(--muted); font-size: .78rem; text-align: center; padding: 1rem 0; }
+
+/* Master "select / deselect all" row — sits between the search bar and the
+   filterable list.  Visually distinct so users see it as a control, not an item. */
+.fp-master-row {
+  margin: .1rem .4rem .25rem;
+  padding: .3rem .35rem;
+  background: #eef3f8;
+  border-radius: 3px;
+  border: 1px solid #d8e2ec;
+  font-weight: 600;
+  font-size: .78rem;
+}
+.fp-master-row:hover { background: #e3ecf3; }
+.fp-master-label { color: #234; }
 
 /* ── Boundaries page ──────────────────────────────────────────────────────── */
 .bnd-page { max-width: 100%; }

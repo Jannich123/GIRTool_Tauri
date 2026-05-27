@@ -70,7 +70,12 @@ export default function PointsPage({ setPage }) {
   function confirm() {
     const selected = points.filter(p => checked[p.PointId])
     setSelectedPoints(selected)
-    setPage('data')
+    // Persist point selection to GIRTool_settings.json (fire-and-forget).
+    invoke('save_selection', { selectedPoints: selected })
+      .catch(err => console.warn('save_selection failed:', err))
+    // Strata tab is the natural next step — user picks interpretation/series
+    // before downloading. Data tab is reachable from the sidebar afterwards.
+    setPage('strata')
   }
 
   function handleSort(col) {

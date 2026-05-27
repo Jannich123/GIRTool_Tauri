@@ -1,6 +1,38 @@
-import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react'
-import { invoke } from '../tauri-api'
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { invoke, listen } from '../tauri-api'
 import { useApp } from './AppContext'
+
+// ── Serialisation helpers ─────────────────────────────────────────────────────
+//
+// Filter state uses native Sets (and `null` to mean "all pass").  Sets can't
+// be JSON-serialised, so persistence + cross-window events shuttle plain
+// arrays through GIRTool_settings.json under the `filters` key.
+
+const setToArr = (s) => (s === null || s === undefined ? null : [...s])
+const arrToSet = (a) => (a === null || a === undefined ? null : new Set(a))
+
+function serializeFilters({ checkedPtIds, checkedGroups, checkedStrataPrimary, checkedStrataSecondary }) {
+  return {
+    points: setToArr(checkedPtIds),
+    groups: Object.fromEntries(
+      Object.entries(checkedGroups || {}).map(([k, v]) => [k, setToArr(v)])
+    ),
+    strataPrimary:   setToArr(checkedStrataPrimary),
+    strataSecondary: setToArr(checkedStrataSecondary),
+  }
+}
+
+function deserializeFilters(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  return {
+    checkedPtIds:             arrToSet(payload.points ?? null),
+    checkedGroups:            Object.fromEntries(
+      Object.entries(payload.groups || {}).map(([k, v]) => [k, arrToSet(v)])
+    ),
+    checkedStrataPrimary:     arrToSet(payload.strataPrimary ?? null),
+    checkedStrataSecondary:   arrToSet(payload.strataSecondary ?? null),
+  }
+}
 
 const FilterContext = createContext(null)
 
@@ -49,6 +81,21 @@ export function FilterProvider({ children }) {
       .catch(() => {})
   }, [projectId, setStrataLayersList])
 
+  // ── Cross-window sync bookkeeping ─────────────────────────────────────────
+  // lastSavedFiltersRef stores the JSON form of the filters we last either
+  // wrote OR loaded from disk.  The save effect compares against this to
+  // avoid scheduling a write when the change came from a remote update, and
+  // the listener uses it to skip applying state we already have.
+  const lastSavedFiltersRef = useRef(null)
+
+  // Apply a deserialised filter snapshot to local state.
+  const applyFilterSnapshot = useCallback((f) => {
+    setCheckedPtIds(f.checkedPtIds)
+    setCheckedGroups(f.checkedGroups || {})
+    setCheckedStrataPrimary(f.checkedStrataPrimary)
+    setCheckedStrataSecondary(f.checkedStrataSecondary)
+  }, [])
+
   useEffect(() => {
     if (!selectedProjects.length) {
       setAllPoints([]); setGroupSystems([]); setGroupAssignments({})
@@ -56,16 +103,75 @@ export function FilterProvider({ children }) {
       setStrataLayers({ primary: [], secondary: [] }); setPointStrataLayers({})
       setStrataLayersList({ primary: [], secondary: [] })
       setCheckedStrataPrimary(null); setCheckedStrataSecondary(null)
+      lastSavedFiltersRef.current = null
       return
     }
     const ids = selectedProjects.map(p => p.ProjectId)
     invoke('get_points', { projectIds: ids }).then(r => setAllPoints(r)).catch(() => {})
     fetchGroupData()
     fetchStrataLayers()
-    setCheckedPtIds(null)
-    setCheckedGroups({})
-    setCheckedStrataPrimary(null); setCheckedStrataSecondary(null)
+
+    // Restore persisted filter state from GIRTool_settings.json.
+    // If none saved, fall back to "no filter" (null / {}).
+    invoke('get_session', { projectId }).then(r => {
+      const filters = deserializeFilters(r?.filters)
+      if (filters) {
+        lastSavedFiltersRef.current = JSON.stringify(serializeFilters(filters))
+        applyFilterSnapshot(filters)
+      } else {
+        lastSavedFiltersRef.current = null
+        setCheckedPtIds(null); setCheckedGroups({})
+        setCheckedStrataPrimary(null); setCheckedStrataSecondary(null)
+      }
+    }).catch(() => {
+      lastSavedFiltersRef.current = null
+      setCheckedPtIds(null); setCheckedGroups({})
+      setCheckedStrataPrimary(null); setCheckedStrataSecondary(null)
+    })
   }, [projectId])   // eslint-disable-line
+
+  // ── Debounced save: any filter change persists to GIRTool_settings.json ────
+  // The lastSavedFiltersRef check prevents a save loop when the change came
+  // from a remote window via the `session:filters:updated` event handler.
+  const filterSaveTimerRef = useRef(null)
+  useEffect(() => {
+    if (!projectId) return
+    const payload = serializeFilters({
+      checkedPtIds, checkedGroups, checkedStrataPrimary, checkedStrataSecondary,
+    })
+    const payloadStr = JSON.stringify(payload)
+    if (payloadStr === lastSavedFiltersRef.current) return
+
+    clearTimeout(filterSaveTimerRef.current)
+    filterSaveTimerRef.current = setTimeout(() => {
+      invoke('patch_session', { projectId, patch: { filters: payload } }).catch(() => {})
+      lastSavedFiltersRef.current = payloadStr
+    }, 150)
+    return () => clearTimeout(filterSaveTimerRef.current)
+  }, [projectId, checkedPtIds, checkedGroups, checkedStrataPrimary, checkedStrataSecondary])
+
+  // ── Live cross-window sync: refresh local state when another window saves ──
+  useEffect(() => {
+    if (!projectId) return
+    let unlisten = null
+    ;(async () => {
+      try {
+        unlisten = await listen('session:filters:updated', (event) => {
+          const evPid = event?.payload?.projectId
+          if (evPid && evPid !== projectId) return
+          invoke('get_session', { projectId }).then(r => {
+            const filters = deserializeFilters(r?.filters)
+            if (!filters) return
+            const payloadStr = JSON.stringify(serializeFilters(filters))
+            if (payloadStr === lastSavedFiltersRef.current) return
+            lastSavedFiltersRef.current = payloadStr
+            applyFilterSnapshot(filters)
+          }).catch(() => {})
+        })
+      } catch { /* event API unavailable — ignore */ }
+    })()
+    return () => { if (typeof unlisten === 'function') unlisten() }
+  }, [projectId, applyFilterSnapshot])
 
   // ── Derived: which pointIds pass all active filters ───────────────────────
 

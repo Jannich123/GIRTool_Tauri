@@ -29,7 +29,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::commands::download::{
-    apply_group_columns, apply_strata_columns, columnar_to_objects, load_strata_lookup,
+    apply_group_columns, apply_strata_columns, load_strata_lookup,
     merge_formula_columns, objects_to_columnar,
 };
 use crate::state::AppState;
@@ -225,12 +225,13 @@ pub async fn run_chart_query(
         rows = rows_out;
     }
 
-    // Convert back to row-objects for the frontend.
-    let rows_obj = columnar_to_objects(&columns, rows);
-
+    // Return rows as positional arrays (matching the Python /charts response
+    // shape).  The frontend indexes via row[xIdx], row[yIdx], row[sortIdx] etc.
+    // — converting to objects here would break that indexing and silently
+    // drop every data point.
     Ok(json!({
         "columns":   columns,
-        "rows":      rows_obj,
+        "rows":      rows,
         "truncated": truncated,
     }))
 }

@@ -67,6 +67,13 @@ export default function ProjectsPage({ setPage }) {
     const selected = projects.filter(p => checked[p.ProjectId])
     setSelectedProjects(selected)
     setSelectedPoints([])
+    // Persist top-level selection state to GIRTool_settings.json so the
+    // tool restores it on the next launch.  Fire-and-forget — we don't
+    // want to block navigation on disk I/O.
+    invoke('save_selection', {
+      selectedProjects: selected,
+      selectedPoints:   [],
+    }).catch(err => console.warn('save_selection failed:', err))
     setPage('points')
   }
 

@@ -27,14 +27,34 @@ function Placeholder({ title }) {
 }
 
 function Shell() {
-  const [page, setPage] = useState('settings')
-  const { setConnected } = useApp()
+  // Pop-out windows are opened with /?page=<key> so each one lands on its
+  // page directly.  The main window has no query string and defaults to:
+  //   * 'projects'  — if we already have saved DB credentials (skip Settings
+  //                    flash; the useEffect below refines to strata/points
+  //                    once the saved selection is restored).
+  //   * 'settings'  — first-time launch with no saved config.
+  // We track `isMainWindow` separately so the auto-navigate logic only fires
+  // in the main window (pop-outs must stay on their assigned page).
+  const isMainWindow = (() => {
+    try { return !new URLSearchParams(window.location.search).get('page') }
+    catch { return true }
+  })()
+  const initialPage = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('page')
+      if (p && p.length > 0) return p
+      return localStorage.getItem('db_settings') ? 'projects' : 'settings'
+    } catch { return 'settings' }
+  })()
+  const [page, setPage] = useState(initialPage)
+  const { setConnected, setSelectedProjects, setSelectedPoints } = useApp()
 
-  // On load, probe the backend and restore connection state
+  // On load, probe the backend and restore connection state.  After the DB
+  // is back online, also restore the project / point selection saved in
+  // GIRTool_settings.json so the user lands on their previous workspace.
   useEffect(() => {
     invoke('db_status').then(r => {
       if (r.configured) {
-        // Try to reconnect using saved settings
         const saved = localStorage.getItem('db_settings')
         if (saved) {
           const s = JSON.parse(saved)
@@ -46,8 +66,25 @@ function Shell() {
             password:     s.password,
             outputFolder: s.output_folder,
           })
-            .then(() => { setConnected(true); setPage('projects') })
-            .catch(() => setPage('settings'))
+            .then(() => {
+              setConnected(true)
+              // Restore selection from GIRTool_settings.json (if any).
+              // For pop-out windows, DO NOT auto-navigate — they were
+              // opened on a specific page and should stay there.
+              invoke('load_selection').then(sel => {
+                const projs = Array.isArray(sel?.selectedProjects) ? sel.selectedProjects : []
+                const pts   = Array.isArray(sel?.selectedPoints)   ? sel.selectedPoints   : []
+                if (projs.length) setSelectedProjects(projs)
+                if (pts.length)   setSelectedPoints(pts)
+                if (isMainWindow) {
+                  // Main window — land on the most-specific tab we have state for.
+                  if (pts.length)        setPage('strata')
+                  else if (projs.length) setPage('points')
+                  else                   setPage('projects')
+                }
+              }).catch(() => { if (isMainWindow) setPage('projects') })
+            })
+            .catch(() => { if (isMainWindow) setPage('settings') })
         }
       }
     }).catch(() => {})

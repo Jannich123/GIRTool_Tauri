@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import Logo from './Logo'
 
 const NAV_MAIN = [
   { key: 'projects',  label: '📁 Projects'         },
@@ -17,7 +18,7 @@ const NAV_MAIN = [
 const DATA_PAGES = new Set(['strata', 'data', 'grouping', 'colors', 'charts', 'map', 'boundaries'])
 
 export default function Sidebar({ page, setPage }) {
-  const { connected, selectedProjects, bumpRefresh, spConnected } = useApp()
+  const { connected, selectedProjects, bumpRefresh } = useApp()
   const [refreshing, setRefreshing] = useState(false)
 
   async function handleRefresh() {
@@ -33,19 +34,15 @@ export default function Sidebar({ page, setPage }) {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">GIRTool</div>
+      <div className="sidebar-logo">
+        <Logo size={32} />
+        <span>GIRTool</span>
+      </div>
 
       <div className="sidebar-status">
         <span className={`dot ${connected ? 'green' : 'red'}`} />
         {connected ? 'Connected' : 'Not connected'}
       </div>
-
-      {spConnected && (
-        <div className="sidebar-status" style={{ fontSize: '.72rem', color: '#0369a1', marginTop: 2 }}
-          title="SharePoint sync is active — files upload automatically after each download">
-          ☁ SharePoint active
-        </div>
-      )}
 
       {selectedProjects.length > 0 && (
         <div className="sidebar-projects">
@@ -60,13 +57,23 @@ export default function Sidebar({ page, setPage }) {
 
       <nav className="sidebar-nav">
         {NAV_MAIN.map(({ key, label }) => (
-          <button
-            key={key}
-            className={`nav-item ${page === key ? 'active' : ''}`}
-            onClick={() => setPage(key)}
-          >
-            {label}
-          </button>
+          <div key={key} className="nav-row">
+            <button
+              className={`nav-item ${page === key ? 'active' : ''}`}
+              onClick={() => setPage(key)}
+            >
+              {label}
+            </button>
+            <button
+              className="nav-popout"
+              title={`Open ${label.replace(/^\S+\s/, '')} in a new window`}
+              onClick={(e) => {
+                e.stopPropagation()
+                invoke('open_window', { page: key, title: `GIRTool — ${label.replace(/^\S+\s/, '')}` })
+                  .catch(err => console.warn('open_window failed:', err))
+              }}
+            >↗</button>
+          </div>
         ))}
 
         {/* Spacer pushes Settings to the bottom */}

@@ -101,11 +101,18 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   const projectIds  = selectedProjects.map(p => p.ProjectId)
   const pointIds    = selectedPoints.map(p => String(p.PointId))
 
-  // Load available types on project/point change
+  // Load available types on project/point change.
+  // Backend accepts a body with project_ids and (optional) point_ids so the
+  // returned list narrows when the user has filtered points.
   useEffect(() => {
     if (!projectIds.length) { setTypes([]); setChecked({}); setPreview({}); onDataLoaded({}); return }
     setLoadingTypes(true); setTypeErr('')
-    invoke('get_strata_types')
+    invoke('get_strata_types', {
+      body: {
+        project_ids: projectIds,
+        point_ids:   pointIds,
+      },
+    })
       .then(r => setTypes(r))
       .catch(e => setTypeErr(e || 'Failed to load strata types'))
       .finally(() => setLoadingTypes(false))

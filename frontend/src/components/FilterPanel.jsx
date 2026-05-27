@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useFilter } from '../context/FilterContext'
 import { useDragSelect } from '../hooks/useDragSelect'
 
@@ -29,6 +29,62 @@ function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onTog
     onToggle,
   })
 
+  // ── Master checkbox state ────────────────────────────────────────────────
+  // State is computed from the *currently visible* (post-search) items so the
+  // master row mirrors what the user actually sees.  The action below operates
+  // on the same `visible` set, so a search + master click selects/deselects
+  // only the matching rows — items hidden by the search are left untouched.
+  const { checkedCount, totalCount } = useMemo(() => {
+    let c = 0
+    for (const item of visible) if (isChecked(getKey(item))) c++
+    return { checkedCount: c, totalCount: visible.length }
+  }, [visible, isChecked, getKey])
+
+  const allChecked  = totalCount > 0 && checkedCount === totalCount
+  const noneChecked = checkedCount === 0
+  const indeterminate = !allChecked && !noneChecked
+
+  // Native HTML doesn't expose `indeterminate` as a React prop — set via ref.
+  const masterRef = useRef(null)
+  useEffect(() => {
+    if (masterRef.current) masterRef.current.indeterminate = indeterminate
+  }, [indeterminate])
+
+  const handleMasterClick = useCallback(() => {
+    // Search-aware tri-state toggle.
+    //
+    // - No search active (visible === all items):
+    //     * allChecked → deselect everything (use onDeselectAll for one render)
+    //     * otherwise  → select everything   (use onSelectAll for one render)
+    //
+    // - Search active (visible is a subset):
+    //     * iterate the visible subset, toggling each row so only those are
+    //       flipped — items outside the search keep their current state.
+    //
+    // Using `onToggle` once per row (instead of also calling onAdd) avoids
+    // the previous double-fire bug where each item ended up toggled twice
+    // and the net result was no change.
+    const isSearching = visible.length !== items.length
+    if (!isSearching) {
+      if (allChecked) onDeselectAll()
+      else            onSelectAll()
+      return
+    }
+    if (allChecked) {
+      // Deselect every visible row that is currently checked.
+      for (const item of visible) {
+        const key = getKey(item)
+        if (isChecked(key)) onToggle(key)
+      }
+    } else {
+      // Select every visible row that is currently unchecked.
+      for (const item of visible) {
+        const key = getKey(item)
+        if (!isChecked(key)) onToggle(key)
+      }
+    }
+  }, [allChecked, visible, items, isChecked, getKey, onToggle, onSelectAll, onDeselectAll])
+
   return (
     <div className="fp-tab-body">
       <div className="fp-toolbar">
@@ -42,9 +98,30 @@ function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onTog
           title="Toggle sort">
           {sortDir === 'asc' ? '↑' : '↓'}
         </button>
-        <button className="fp-icon-btn" onClick={onSelectAll}   title="Select all">✓</button>
-        <button className="fp-icon-btn" onClick={onDeselectAll} title="Deselect all">✕</button>
       </div>
+
+      {/* Master "select / deselect all" checkbox row — sticky at the top of
+          the list.  Shows tri-state (checked / unchecked / indeterminate)
+          and toggles all rows currently visible (respects active search). */}
+      <label className="fp-item fp-master-row" onClick={(e) => {
+        // Prevent the row's drag-select handlers from firing here.
+        e.stopPropagation()
+      }}>
+        <input
+          ref={masterRef}
+          type="checkbox"
+          checked={allChecked}
+          onChange={handleMasterClick}
+        />
+        <span className="fp-label fp-master-label">
+          {(() => {
+            const matchSuffix = search.trim() ? ` matching` : ''
+            if (allChecked)  return `Deselect all ${totalCount}${matchSuffix}`
+            if (noneChecked) return `Select all ${totalCount}${matchSuffix}`
+            return `Select all ${totalCount}${matchSuffix} (${checkedCount} now)`
+          })()}
+        </span>
+      </label>
 
       <div className="fp-list" style={tbodyStyle}>
         {visible.map((item, idx) => {

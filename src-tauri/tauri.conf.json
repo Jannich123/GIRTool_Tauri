@@ -6,10 +6,11 @@
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "cd frontend && npm run dev",
-    "beforeBuildCommand": "cd frontend && npm run build"
+    "beforeDevCommand": "cd ../frontend && npm run dev",
+    "beforeBuildCommand": "cd ../frontend && npm run build"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "GIRTool",
@@ -53,16 +54,6 @@
     }
   },
   "plugins": {
-    "shell": { "open": true },
-    "dialog": {},
-    "fs": {
-      "scope": [
-        "$APPDATA/**",
-        "$DOCUMENT/**",
-        "$DESKTOP/**",
-        "$DOWNLOAD/**"
-      ]
-    },
-    "opener": {}
+    "shell": { "open": true }
   }
 }

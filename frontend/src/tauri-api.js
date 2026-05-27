@@ -24,3 +24,22 @@ export async function invoke(command, args = {}) {
   }
   return _invoke(command, args);
 }
+
+/**
+ * Subscribe to a Tauri event emitted from the Rust backend (e.g.
+ * `boundaries:updated`).  Returns an async unlisten function — call it from
+ * the cleanup of a useEffect to stop receiving events.
+ *
+ *   useEffect(() => {
+ *     const off = listen('boundaries:updated', e => refetch())
+ *     return () => { off.then(fn => fn()) }
+ *   }, [])
+ */
+export function listen(eventName, handler) {
+  const ev = window.__TAURI__?.event ?? window.__TAURI_INTERNALS__?.event;
+  if (!ev || typeof ev.listen !== 'function') {
+    // Plain browser dev — no-op unlisten.
+    return Promise.resolve(() => {});
+  }
+  return ev.listen(eventName, handler);
+}

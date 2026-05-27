@@ -177,7 +177,7 @@ fn validate_style(entry: &StyleEntry) -> Result<(), String> {
 
 /// Parse `#RRGGBB` (or `RRGGBB`) into an integer suitable for `Color::RGB`.
 /// Returns `0xCCCCCC` on any parse failure.
-fn parse_hex(s: &str) -> u32 {
+pub(crate) fn parse_hex(s: &str) -> u32 {
     let trimmed = s.trim_start_matches('#');
     if trimmed.len() == 6 {
         u32::from_str_radix(trimmed, 16).unwrap_or(0xCCCCCC)
@@ -546,46 +546,66 @@ fn coerce_line(s: Option<String>) -> String {
 /// Extract a color string from a row's `Color` cell.
 ///
 /// **Limitation**: `calamine` does not expose cell background fill colours, so
-/// the cell **text value** is the only source of truth on read.  Files written
-/// by this module store the hex in the cell text (in addition to the fill); a
-/// legacy Python file with fill-only colour will lose its colour data on
-/// round-trip — re-save it in the Tauri app, or re-enter the hex in column B.
-/// This is a documented calamine limitation, not a bug here.
-fn resolve_color(cell: Option<&Data>, default: &str) -> String {
-    cell.and_then(|c| match c {
-        Data::String(s) if !s.is_empty() => {
+/// Resolve a cell's intended colour by checking, in order:
+///   1. The cell **text** — a hex code (`#aabbcc`, `aabbcc`, `#abc`)
+///   2. The cell **background fill** — what the user painted via Excel's
+///      fill-colour tool, even if they didn't type the hex code into the cell
+///   3. The supplied `default` colour
+///
+/// This matches the user-requested behaviour: type a code OR paint the cell —
+/// either way the tool picks up the colour.
+fn resolve_color(cell: Option<&Data>, fill: Option<&str>, default: &str) -> String {
+    // 1. Text — hex code in the cell value
+    if let Some(c) = cell {
+        if let Data::String(s) = c {
             let trimmed = s.trim();
-            if trimmed.starts_with('#') && (trimmed.len() == 4 || trimmed.len() == 7) {
-                Some(trimmed.to_string())
-            } else if trimmed.len() == 6
-                && trimmed.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                Some(format!("#{trimmed}"))
-            } else {
-                None
+            if !trimmed.is_empty() {
+                if (trimmed.starts_with('#'))
+                    && (trimmed.len() == 4 || trimmed.len() == 7)
+                {
+                    return trimmed.to_string();
+                }
+                if trimmed.len() == 6
+                    && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    return format!("#{trimmed}");
+                }
+                // Non-empty but not a hex code — fall through to fill / default.
             }
         }
-        _ => None,
-    })
-    .unwrap_or_else(|| default.to_string())
+    }
+    // 2. Cell background fill (painted in Excel without typing the hex)
+    if let Some(f) = fill {
+        if !f.is_empty() {
+            return f.to_string();
+        }
+    }
+    // 3. Default
+    default.to_string()
 }
 
 /// Read a "Name | Color | Symbol | Marker Size | Line Type | Thickness" sheet.
+/// `fills` is a `(row, col) → "#rrggbb"` map of cell background colours so
+/// `resolve_color` can fall back to the cell fill when the cell text is blank.
 fn read_style_sheet(
     wb: &mut calamine::Sheets<std::io::BufReader<std::fs::File>>,
     sheet_name: &str,
+    fills: &std::collections::HashMap<(u32, u32), String>,
 ) -> Vec<StyleEntry> {
     let range = match wb.worksheet_range(sheet_name) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
-    for row in range.rows().skip(1) {
+    // Row indices in calamine are 0-based from the top of the sheet (header
+    // is row 0); xlsx_fills uses the same 0-based convention so they line up.
+    for (row_idx, row) in range.rows().enumerate().skip(1) {
         let name = match cell_to_string(row.first()) {
             Some(n) => n,
             None    => continue,
         };
-        let color  = resolve_color(row.get(1), DEFAULT_COLOR);
+        let color_fill = fills.get(&(row_idx as u32, 1)).map(|s| s.as_str());
+        let color  = resolve_color(row.get(1), color_fill, DEFAULT_COLOR);
         let symbol = coerce_symbol(cell_to_string(row.get(2)));
         let size   = cell_to_f64(row.get(3), DEFAULT_SIZE).clamp(1.0, 30.0);
         let line   = coerce_line(cell_to_string(row.get(4)));
@@ -605,18 +625,20 @@ fn read_style_sheet(
 fn read_point_types(
     wb: &mut calamine::Sheets<std::io::BufReader<std::fs::File>>,
     sheet_name: &str,
+    fills: &std::collections::HashMap<(u32, u32), String>,
 ) -> Map<String, Value> {
     let range = match wb.worksheet_range(sheet_name) {
         Ok(r) => r,
         Err(_) => return Map::new(),
     };
     let mut out = Map::new();
-    for row in range.rows().skip(1) {
+    for (row_idx, row) in range.rows().enumerate().skip(1) {
         let name = match cell_to_string(row.first()) {
             Some(n) => n,
             None    => continue,
         };
-        let color = resolve_color(row.get(1), "#7f8c8d");
+        let color_fill = fills.get(&(row_idx as u32, 1)).map(|s| s.as_str());
+        let color = resolve_color(row.get(1), color_fill, "#7f8c8d");
         let symbol = coerce_symbol(cell_to_string(row.get(2)));
         out.insert(name, json!({ "color": color, "symbol": symbol }));
     }
@@ -678,24 +700,27 @@ pub async fn load_colors(state: State<'_, AppState>) -> Result<Value, String> {
         let mut strata_secondary = Map::new();
 
         for sheet in sheet_names {
+            // Read the cell background fills for THIS sheet so resolve_color
+            // can fall back to the painted colour if the cell text is empty.
+            let fills = crate::commands::xlsx_fills::extract_cell_fills(&path, &sheet);
             match sheet.as_str() {
                 "Point Types" => {
-                    type_styles = read_point_types(&mut wb, &sheet);
+                    type_styles = read_point_types(&mut wb, &sheet, &fills);
                 }
                 "Primary Layer" => {
-                    for s in read_style_sheet(&mut wb, &sheet) {
+                    for s in read_style_sheet(&mut wb, &sheet, &fills) {
                         strata_primary
                             .insert(s.name.clone(), style_entry_to_value(&s));
                     }
                 }
                 "Secondary Layer" => {
-                    for s in read_style_sheet(&mut wb, &sheet) {
+                    for s in read_style_sheet(&mut wb, &sheet, &fills) {
                         strata_secondary
                             .insert(s.name.clone(), style_entry_to_value(&s));
                     }
                 }
                 _ => {
-                    let entries = read_style_sheet(&mut wb, &sheet);
+                    let entries = read_style_sheet(&mut wb, &sheet, &fills);
                     if !entries.is_empty() {
                         let groups: Vec<Value> = entries
                             .iter()

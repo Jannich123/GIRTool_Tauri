@@ -12,3 +12,5 @@ pub mod charts;
 pub mod map;
 pub mod boundaries;
 pub mod session;
+pub mod windows;
+pub mod xlsx_fills;

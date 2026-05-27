@@ -16,11 +16,12 @@
 use std::path::{Path, PathBuf};
 
 use calamine::{open_workbook_auto, DataType, Reader};
-use rust_xlsxwriter::{Format, Workbook};
+use rust_xlsxwriter::{Color, Format, Workbook};
 use serde_json::{json, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::commands::colors::parse_hex;
 use crate::state::AppState;
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -65,7 +66,14 @@ fn write_boundaries_xlsx(path: &Path, boundaries: &[Value]) -> Result<(), String
             let visible = boundary.get("visible").and_then(|v| v.as_bool()).unwrap_or(true);
 
             settings.write_string(row, 0, name).ok();
-            settings.write_string(row, 1, color).ok();
+            // Colour column: write the hex value AS cell text AND apply a
+            // matching background fill.  On read we prefer the text value
+            // (lossless), but fall back to the fill when the cell is blank —
+            // so a user who just paints the cell yellow in Excel still gets
+            // their colour picked up.
+            let color_fmt = Format::new()
+                .set_background_color(Color::RGB(parse_hex(color)));
+            settings.write_string_with_format(row, 1, color, &color_fmt).ok();
             settings.write_number(row, 2, line_width).ok();
             settings.write_number(row, 3, fill_opacity).ok();
             settings.write_boolean(row, 4, visible).ok();
@@ -139,6 +147,11 @@ fn read_boundaries_xlsx(path: &Path) -> Result<Vec<Value>, String> {
 
     let sheet_names: Vec<String> = wb.sheet_names().to_vec();
 
+    // Pull cell-background fills for the _Settings sheet so we can fall
+    // back to them when the colour-column text is blank (lets users paint
+    // a cell yellow in Excel without typing the hex code).
+    let fills = crate::commands::xlsx_fills::extract_cell_fills(path, "_Settings");
+
     let mut boundaries: Vec<Value> = Vec::new();
 
     // Row 0 is headers; rows 1+ are boundary metadata.
@@ -160,7 +173,21 @@ fn read_boundaries_xlsx(path: &Path) -> Result<Vec<Value>, String> {
         };
 
         let name = get_str(0);
-        let color = get_str(1);
+        // Colour resolution: prefer the cell TEXT (hex / RGB code), fall
+        // back to the cell BACKGROUND fill if text is blank, then to the
+        // boundary-default colour.
+        let color_text = get_str(1);
+        let color = if !color_text.trim().is_empty() {
+            color_text
+        } else {
+            // _Settings is the FIRST sheet, header is row 0, this data row is
+            // calamine row (i+1).  fills map uses 0-based (row, col) too.
+            let fill_row_idx = (i + 1) as u32;
+            fills
+                .get(&(fill_row_idx, 1))
+                .cloned()
+                .unwrap_or_else(|| "#3388ff".to_string())
+        };
         let line_width = get_f64(2);
         let fill_opacity = get_f64(3);
         let visible = get_bool(4);
@@ -218,11 +245,16 @@ pub async fn get_boundaries(
 }
 
 /// Persist boundaries to JSON and xlsx.
+///
+/// Emits a `boundaries:updated` Tauri event after a successful save so other
+/// windows (e.g. a popped-out Charts window) can refresh their boundary
+/// overlays live without the user having to navigate away and back.
 #[tauri::command]
 pub async fn save_boundaries(
+    app:        AppHandle,
     project_id: String,
     boundaries: Value,
-    state: State<'_, AppState>,
+    state:      State<'_, AppState>,
 ) -> Result<(), String> {
     let folder = state.output_folder().ok_or("No output folder configured.")?;
 
@@ -243,6 +275,9 @@ pub async fn save_boundaries(
     tokio::task::spawn_blocking(move || write_boundaries_xlsx(&xlsx_path, &list_clone))
         .await
         .map_err(|e| format!("internal task error: {e}"))??;
+
+    // Broadcast to all open windows so live-listening pages can refresh.
+    let _ = app.emit("boundaries:updated", json!({ "projectId": project_id }));
 
     Ok(())
 }
