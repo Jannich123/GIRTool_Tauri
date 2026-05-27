@@ -45,6 +45,12 @@ pub fn run() {
             commands::database::list_recent_folders,
             commands::database::forget_recent_folder,
             commands::database::load_folder_db_config,
+            // database — multi-DB (issue #46)
+            commands::database::list_databases,
+            commands::database::save_databases,
+            commands::database::test_database,
+            commands::database::connect_all_databases,
+            commands::database::pick_access_file,
             // projects
             commands::projects::list_projects,
             // points

@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -256,11 +256,15 @@ pub async fn connect(
     state:         State<'_, AppState>,
 ) -> Result<ConnectResult, String> {
     let cfg = DbConfig {
+        id:            "primary".to_string(),
+        db_type:       "mssql".to_string(),
         server,
         database,
         auth_method,
         username:      username.unwrap_or_default(),
         password:      password.unwrap_or_default(),
+        file_path:     String::new(),
+        query_type:    "default".to_string(),
         output_folder: output_folder.unwrap_or_default(),
     };
 
@@ -288,6 +292,21 @@ pub async fn connect(
     }
 
     let message = format!("Connected to {} on {}", cfg.database, cfg.server);
+
+    // Update both the legacy primary slot and the new databases list so code
+    // paths in either era keep working until all callers migrate.
+    if !cfg.output_folder.is_empty() {
+        *state.output_folder.lock().unwrap() = cfg.output_folder.clone();
+    }
+    {
+        let mut list = state.databases.lock().unwrap();
+        // Replace any existing primary entry, else push a new one.
+        if let Some(existing) = list.iter_mut().find(|d| d.id == cfg.id) {
+            *existing = cfg.clone();
+        } else if list.is_empty() {
+            list.push(cfg.clone());
+        }
+    }
     *state.db.lock().unwrap()        = Some(cfg);
     *state.connected.lock().unwrap() = true;
 
@@ -380,4 +399,351 @@ pub async fn refresh_project(
     // Currently a no-op — the frontend re-fetches data on its own after
     // receiving Ok. Future: invalidate any server-side caches here.
     Ok(())
+}
+
+// ── Multi-database commands (issue #46) ───────────────────────────────────────
+//
+// Storage: `{output_folder}/GIRTool_settings.json` under the `databases` key.
+// The legacy single `db` key is migrated to a single-entry `databases` array
+// on first read (see `load_databases_from_settings`).
+//
+// AppState mirroring:
+//   * AppState::databases  — the full list (in order)
+//   * AppState::db         — first MSSQL entry (the "primary" connection
+//                            used by all the existing SQL command helpers
+//                            which still assume a single DbConfig)
+
+/// One-row connection-test result returned by `connect_all_databases`.
+#[derive(Debug, Serialize)]
+pub struct TestResult {
+    pub id:      String,
+    pub ok:      bool,
+    pub message: String,
+}
+
+/// Body for `save_databases`.
+#[derive(Debug, Deserialize)]
+pub struct SaveDatabasesBody {
+    pub databases: Vec<DbConfig>,
+}
+
+/// Friendly-error wrapper around `crate::db::test_connection`.
+///
+/// Recognises the common "driver not installed" ODBC pattern (state `IM002`)
+/// for Access and emits a hint pointing at the Microsoft Access Database
+/// Engine 2016 Redistributable download page.
+fn test_with_hints(cfg: &DbConfig) -> Result<String, String> {
+    match crate::db::test_connection(cfg) {
+        Ok(()) => {
+            let label = match cfg.db_type.as_str() {
+                "access" => cfg.file_path.clone(),
+                _        => format!("{} on {}", cfg.database, cfg.server),
+            };
+            Ok(format!("Connected to {label}"))
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            // IM002 = "Data source name not found and no default driver specified"
+            // (i.e. the ODBC driver name in the connection string is unknown).
+            if cfg.db_type.eq_ignore_ascii_case("access")
+                && (msg.contains("IM002") || msg.to_lowercase().contains("no default driver"))
+            {
+                Err(format!(
+                    "{msg}\n\nThe Microsoft Access ODBC driver is not installed. \
+                     Install the Microsoft Access Database Engine 2016 Redistributable: \
+                     https://www.microsoft.com/en-us/download/details.aspx?id=54920"
+                ))
+            } else {
+                Err(msg)
+            }
+        }
+    }
+}
+
+/// Migrate a `GIRTool_settings.json` JSON value:
+/// if the file has a legacy `db` block but no `databases` array, produce a
+/// single-entry `databases` array from it.  Modifies `settings` in-place and
+/// returns whether a migration was performed.
+fn migrate_legacy_db_block(settings: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    if settings.contains_key("databases") {
+        return false;
+    }
+    let Some(db) = settings.get("db").and_then(|v| v.as_object()).cloned() else {
+        return false;
+    };
+    let mut entry = serde_json::Map::new();
+    entry.insert("id".to_string(),         serde_json::json!("primary"));
+    entry.insert("type".to_string(),       serde_json::json!("mssql"));
+    entry.insert("query_type".to_string(), serde_json::json!("default"));
+    for k in ["server", "database", "auth_method", "username", "password", "output_folder"] {
+        if let Some(v) = db.get(k) {
+            entry.insert(k.to_string(), v.clone());
+        }
+    }
+    settings.insert(
+        "databases".to_string(),
+        serde_json::Value::Array(vec![serde_json::Value::Object(entry)]),
+    );
+    true
+}
+
+/// Read the `databases` array from the active output folder's
+/// `GIRTool_settings.json`, migrating from the legacy `db` block if needed.
+fn load_databases_from_settings(folder: &str) -> Vec<DbConfig> {
+    if folder.is_empty() {
+        return Vec::new();
+    }
+    let path = std::path::Path::new(folder).join("GIRTool_settings.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    let mut settings: serde_json::Map<String, serde_json::Value> =
+        match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(serde_json::Value::Object(m)) => m,
+            _                                => return Vec::new(),
+        };
+    let _migrated = migrate_legacy_db_block(&mut settings);
+    settings
+        .get("databases")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value::<DbConfig>(v.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persist the `databases` array into the output folder's
+/// `GIRTool_settings.json`, preserving all other top-level keys.
+fn save_databases_to_settings(folder: &str, databases: &[DbConfig]) -> Result<(), String> {
+    let path = std::path::Path::new(folder).join("GIRTool_settings.json");
+    let mut settings: serde_json::Map<String, serde_json::Value> = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default(),
+        Err(_) => serde_json::Map::new(),
+    };
+
+    let arr: Vec<serde_json::Value> = databases
+        .iter()
+        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::json!({})))
+        .collect();
+    settings.insert("databases".to_string(), serde_json::Value::Array(arr));
+
+    // Maintain the legacy `db` block (first MSSQL entry) so older code paths
+    // continue to load when the file is opened by a previous build.
+    if let Some(primary) = databases.iter().find(|d| d.is_mssql()) {
+        let mut db_obj = serde_json::Map::new();
+        db_obj.insert("server".into(),        serde_json::json!(primary.server));
+        db_obj.insert("database".into(),      serde_json::json!(primary.database));
+        db_obj.insert("auth_method".into(),   serde_json::json!(primary.auth_method));
+        db_obj.insert("username".into(),      serde_json::json!(primary.username));
+        db_obj.insert("password".into(),      serde_json::json!(primary.password));
+        db_obj.insert("output_folder".into(), serde_json::json!(primary.output_folder));
+        settings.insert("db".into(), serde_json::Value::Object(db_obj));
+    }
+
+    settings.insert(
+        "saved_at".into(),
+        serde_json::json!(chrono::Utc::now().to_rfc3339()),
+    );
+
+    let json = serde_json::to_string_pretty(&serde_json::Value::Object(settings))
+        .map_err(|e| format!("Failed to serialise settings: {e}"))?;
+    std::fs::write(&path, json)
+        .map_err(|e| format!("Failed to write {}: {e}", path.display()))
+}
+
+/// Return the configured databases for the current output folder.
+///
+/// Loads from `{folder}/GIRTool_settings.json`, migrating any legacy `db`
+/// block to a single-entry `databases` array.  Updates `AppState::databases`
+/// in-process so subsequent in-memory reads are consistent.
+///
+/// Returns an empty array when no output folder is configured.
+#[tauri::command]
+pub async fn list_databases(state: State<'_, AppState>) -> Result<Vec<DbConfig>, String> {
+    let folder = state.output_folder().unwrap_or_default();
+    if folder.is_empty() {
+        return Ok(state.databases.lock().unwrap().clone());
+    }
+    let list = tokio::task::spawn_blocking(move || load_databases_from_settings(&folder))
+        .await
+        .map_err(|e| format!("internal task error: {e}"))?;
+    *state.databases.lock().unwrap() = list.clone();
+    Ok(list)
+}
+
+/// Persist the supplied database list to `{folder}/GIRTool_settings.json` and
+/// update `AppState`.  The first MSSQL entry becomes the "primary" connection
+/// used by every legacy code path that reads `state.db`.
+///
+/// Validation:
+///   * at least one database is required (the empty list is rejected)
+///   * `id` must match `[A-Za-z0-9_-]+` and be unique within the list
+///   * MSSQL entries need `server` and `database`
+///   * Access entries need `file_path`
+#[tauri::command]
+pub async fn save_databases(
+    body: SaveDatabasesBody,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let databases = body.databases;
+    if databases.is_empty() {
+        return Err("At least one database is required.".into());
+    }
+
+    // Validate ids + per-type required fields.
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (i, d) in databases.iter().enumerate() {
+        if d.id.is_empty() {
+            return Err(format!("Database #{} is missing an ID.", i + 1));
+        }
+        if !d.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            return Err(format!(
+                "Invalid ID {:?}: only letters, digits, '_' and '-' are allowed.",
+                d.id
+            ));
+        }
+        if !seen_ids.insert(d.id.clone()) {
+            return Err(format!("Duplicate database ID: {:?}.", d.id));
+        }
+        match d.db_type.as_str() {
+            "access" => {
+                if d.file_path.trim().is_empty() {
+                    return Err(format!("Access entry {:?} needs a file path.", d.id));
+                }
+            }
+            _ => {
+                if d.server.trim().is_empty() || d.database.trim().is_empty() {
+                    return Err(format!(
+                        "MSSQL entry {:?} needs both server and database.",
+                        d.id
+                    ));
+                }
+            }
+        }
+    }
+
+    let folder = state
+        .output_folder()
+        .ok_or("No output folder configured. Pick one in Settings → Project folder first.")?;
+
+    let databases_for_save = databases.clone();
+    let folder_for_save = folder.clone();
+    tokio::task::spawn_blocking(move || {
+        save_databases_to_settings(&folder_for_save, &databases_for_save)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))??;
+
+    // Mirror into AppState.
+    *state.databases.lock().unwrap() = databases.clone();
+    // First MSSQL entry becomes the primary; legacy code reads from state.db.
+    if let Some(primary) = databases.iter().find(|d| d.is_mssql()).cloned() {
+        let mut primary = primary;
+        // Carry the output folder across so the primary slot still answers
+        // `state.output_folder()` correctly.
+        if primary.output_folder.is_empty() {
+            primary.output_folder = folder.clone();
+        }
+        *state.db.lock().unwrap() = Some(primary);
+    } else {
+        // No MSSQL entries: clear the primary slot but keep the databases list
+        // (e.g. an Access-only project).
+        *state.db.lock().unwrap() = None;
+    }
+
+    Ok(())
+}
+
+/// Probe one database connection and return `{ ok, message }`.
+/// Friendly-error wraps Access-driver-missing as a Result::Ok with `ok=false`
+/// + hint so the UI can render the hint inline without try/catch.
+#[tauri::command]
+pub async fn test_database(cfg: DbConfig) -> Result<TestResult, String> {
+    let id = cfg.id.clone();
+    let probe = cfg.clone();
+    let res = tokio::task::spawn_blocking(move || test_with_hints(&probe))
+        .await
+        .map_err(|e| format!("internal task error: {e}"))?;
+
+    match res {
+        Ok(message) => Ok(TestResult { id, ok: true,  message }),
+        Err(message) => Ok(TestResult { id, ok: false, message }),
+    }
+}
+
+/// Test every saved database in parallel and return one row per database.
+///
+/// Reads from `AppState::databases` (which is populated by `save_databases`
+/// or by `list_databases`).  When the in-memory list is empty, falls back
+/// to loading from `{folder}/GIRTool_settings.json`.
+#[tauri::command]
+pub async fn connect_all_databases(
+    state: State<'_, AppState>,
+) -> Result<Vec<TestResult>, String> {
+    let mut databases: Vec<DbConfig> = state.databases.lock().unwrap().clone();
+    if databases.is_empty() {
+        let folder = state.output_folder().unwrap_or_default();
+        if !folder.is_empty() {
+            databases = tokio::task::spawn_blocking(move || load_databases_from_settings(&folder))
+                .await
+                .map_err(|e| format!("internal task error: {e}"))?;
+            *state.databases.lock().unwrap() = databases.clone();
+        }
+    }
+    if databases.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Fan out one blocking task per database.  odbc-api connections can take a
+    // few seconds each, so parallelism is a real win.
+    let handles: Vec<_> = databases
+        .into_iter()
+        .map(|cfg| {
+            let id = cfg.id.clone();
+            tokio::task::spawn_blocking(move || (id, test_with_hints(&cfg)))
+        })
+        .collect();
+
+    let mut out: Vec<TestResult> = Vec::with_capacity(handles.len());
+    for h in handles {
+        let (id, res) = h.await.map_err(|e| format!("internal task error: {e}"))?;
+        match res {
+            Ok(message)  => out.push(TestResult { id, ok: true,  message }),
+            Err(message) => out.push(TestResult { id, ok: false, message }),
+        }
+    }
+    Ok(out)
+}
+
+/// Open a native file picker for Access `.accdb` / `.mdb` files.
+/// Returns the chosen path, or `None` when the user cancelled.
+#[tauri::command]
+pub async fn pick_access_file(
+    app:     AppHandle,
+    initial: Option<String>,
+) -> Result<BrowseResult, String> {
+    let picked = tokio::task::spawn_blocking(move || {
+        let mut builder = app
+            .dialog()
+            .file()
+            .set_title("Select Access database file")
+            .add_filter("Access database", &["accdb", "mdb"]);
+        if let Some(init) = initial.filter(|s| !s.is_empty()) {
+            builder = builder.set_directory(init);
+        }
+        builder.blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
+
+    let path = picked.and_then(|fp| {
+        fp.into_path().ok().map(|p| p.to_string_lossy().into_owned())
+    });
+    Ok(BrowseResult { path })
 }

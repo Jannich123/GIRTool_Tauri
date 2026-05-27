@@ -4,14 +4,66 @@
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
+/// One configured database connection.
+///
+/// Backwards-compatible with the legacy single-DB schema:
+///   * `db_type` defaults to `"mssql"` (matches the legacy behaviour where every
+///     entry was a SQL Server connection).
+///   * `id` / `file_path` / `query_type` default to empty strings.
+///   * `output_folder` stays on the struct so existing callers that read it
+///     from the "primary" DbConfig continue to work; new code reads the
+///     dedicated `AppState::output_folder` field instead.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct DbConfig {
+    // ── Identity ──────────────────────────────────────────────────────────────
+    /// User-editable short identifier (must match `[a-z0-9_-]`).
+    /// Empty on the legacy primary DB; populated for issue #46 multi-DB lists.
+    #[serde(default)]
+    pub id: String,
+
+    /// Connector type: `"mssql"` (SQL Server ODBC) or `"access"` (Access driver).
+    /// Defaults to `"mssql"` so a legacy entry with no `type` field still works.
+    #[serde(default = "default_db_type", rename = "type")]
+    pub db_type: String,
+
+    // ── MSSQL fields ──────────────────────────────────────────────────────────
+    #[serde(default)]
     pub server:      String,
+    #[serde(default)]
     pub database:    String,
+    #[serde(default)]
     pub auth_method: String,   // "windows" | "sql"
+    #[serde(default)]
     pub username:    String,
+    #[serde(default)]
     pub password:    String,
+
+    // ── Access fields ─────────────────────────────────────────────────────────
+    /// Absolute path to an `.accdb` / `.mdb` file (only used when `db_type == "access"`).
+    #[serde(default)]
+    pub file_path: String,
+
+    // ── User label ────────────────────────────────────────────────────────────
+    /// User-configurable label surfaced in the Query Config tab.
+    #[serde(default = "default_query_type")]
+    pub query_type: String,
+
+    // ── Workspace path (legacy; primary DB only) ──────────────────────────────
+    /// Output folder kept on `DbConfig` for backwards compatibility with code
+    /// that reads `state.output_folder()` via the primary `db` field.
+    /// New code should set `AppState::output_folder` directly.
+    #[serde(default)]
     pub output_folder: String,
+}
+
+fn default_db_type()    -> String { "mssql".to_string() }
+fn default_query_type() -> String { "default".to_string() }
+
+impl DbConfig {
+    /// True if this entry connects to SQL Server.
+    pub fn is_mssql(&self) -> bool {
+        self.db_type.is_empty() || self.db_type.eq_ignore_ascii_case("mssql")
+    }
 }
 
 // ── SharePoint state ──────────────────────────────────────────────────────────
@@ -53,28 +105,55 @@ pub struct SpState {
 
 #[derive(Debug, Default)]
 pub struct AppState {
+    /// The "primary" / active SQL Server connection.
+    /// Set by `connect` (legacy) and by `save_databases` (first MSSQL entry).
+    /// Existing callers that run SQL continue to read this field.
     pub db:        Mutex<Option<DbConfig>>,
+
+    /// Full list of configured databases (issue #46).
+    /// Populated alongside `db` so list-aware code can iterate every connection.
+    pub databases: Mutex<Vec<DbConfig>>,
+
+    /// Workspace folder.  Independent of any specific DB.
+    /// Falls back to `db.output_folder` for legacy data via `output_folder()`.
+    pub output_folder: Mutex<String>,
+
     /// True once a successful connection has been established
     pub connected: Mutex<bool>,
+
     pub sp:        Mutex<SpState>,
 }
 
 impl AppState {
     pub fn has_output_folder(&self) -> bool {
-        self.db
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|c| !c.output_folder.is_empty())
-            .unwrap_or(false)
+        self.output_folder().is_some()
     }
 
+    /// Return the configured workspace folder.
+    /// Prefers the top-level field; falls back to the primary DB's
+    /// `output_folder` for back-compat with legacy settings.
     pub fn output_folder(&self) -> Option<String> {
+        let top = self.output_folder.lock().unwrap().clone();
+        if !top.is_empty() {
+            return Some(top);
+        }
         self.db
             .lock()
             .unwrap()
             .as_ref()
             .map(|c| c.output_folder.clone())
             .filter(|s| !s.is_empty())
+    }
+
+    /// Find a configured database by id.  Returns the first match or `None`.
+    /// Used by future cross-database query routing (issues #47 / #48).
+    #[allow(dead_code)]
+    pub fn find_database(&self, id: &str) -> Option<DbConfig> {
+        self.databases
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
     }
 }
