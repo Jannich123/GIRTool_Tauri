@@ -58,7 +58,7 @@ fn sanitise_id(raw: &str) -> Result<String, String> {
     }
 }
 
-const POINTS_SQL: &str = r#"
+pub(crate) const POINTS_SQL: &str = r#"
 SELECT
     A.[ProjectId],
     A.[PointId],

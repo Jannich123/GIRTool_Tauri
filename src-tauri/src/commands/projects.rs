@@ -19,7 +19,7 @@ use crate::commands::multi_db::{active_databases, fan_out_query_per_db};
 use crate::commands::query_configs::{lookup_sql, SECTION_PROJECT_LIST};
 use crate::state::AppState;
 
-const PROJECTS_SQL: &str = r#"
+pub(crate) const PROJECTS_SQL: &str = r#"
 SELECT
     A.[ProjectId],
     A.[ProjectNo],

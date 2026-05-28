@@ -126,7 +126,7 @@ pub(crate) fn strata_xlsx_path(output_folder: &str) -> PathBuf {
 
 // ── SQL ───────────────────────────────────────────────────────────────────────
 
-const TYPES_SQL: &str = r#"
+pub(crate) const TYPES_SQL: &str = r#"
 SELECT
     sub.Interpretation,
     sub.series,
@@ -152,7 +152,7 @@ GROUP BY sub.Interpretation, sub.series, sub.Description
 ORDER BY sub.series, sub.Interpretation
 "#;
 
-const DATA_SQL: &str = r#"
+pub(crate) const DATA_SQL: &str = r#"
 SELECT DISTINCT
     CAST(B.[PointNo] AS VARCHAR(MAX)) AS [PointNo],
     B.[PointId],

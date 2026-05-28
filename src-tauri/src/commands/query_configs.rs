@@ -1,4 +1,5 @@
-// User-overridable SQL for every "fetch from database" operation (issue #47).
+// User-overridable SQL for every "fetch from database" operation
+// (issues #47, #52).
 //
 // Storage: `{output_folder}/GIRTool_settings.json` gains a top-level
 // `query_configs` object:
@@ -14,23 +15,34 @@
 //   }
 //
 // `<query_type>` is the label attached to each database in
-// `Settings → Database` (issue #46).  When a command runs against a database
-// whose `query_type` is `"default"`, the backend reads
-// `query_configs.project_list.default` first; if absent, the hardcoded default
-// in the corresponding `commands/*.rs` module is used instead.
+// `Settings → Database` (issue #46).  The default flavour is `"GeoGIS"` —
+// when a command runs against a database whose `query_type` is `"GeoGIS"`,
+// the backend reads `query_configs.project_list.GeoGIS` first; if absent,
+// the hardcoded default in the corresponding `commands/*.rs` module is
+// used instead.  (Pre-#52 the default was called `"default"`; the
+// migration in `load_query_configs_with_migration` silently renames it.)
 //
-// Until #46 lands the active query_type is always `"default"` — the lookup
-// still works, it just doesn't fan out across multiple types.
+// Migration: on the first `get_query_configs` call:
+//   1. The legacy `queries.json` (datasheet query definitions) is folded
+//      into `query_configs.datasheet_queries.GeoGIS` so users don't lose
+//      previous customisation.
+//   2. Any bucket containing an old `"default"` key is renamed to
+//      `"GeoGIS"` (only when no `"GeoGIS"` key already exists — we never
+//      clobber a user's data).
+//   3. Any `databases[*].query_type == "default"` is rewritten to
+//      `"GeoGIS"` so the dropdown shows a single canonical flavour.
 //
-// Migration: on the first `get_query_configs` call the existing
-// `queries.json` (datasheet query definitions) is folded into
-// `query_configs.datasheet_queries.default` so users don't lose previous
-// customisation.
+// New in #52 — `get_builtin_sql_templates`:
+//   Returns the hardcoded SQL constants from `projects.rs`, `points.rs`,
+//   and `strata.rs` as a JSON object keyed by section name.  The frontend
+//   pre-fills the GeoGIS textarea with these so users can see (and tweak)
+//   the SQL the backend would otherwise run silently.
 //
 // Commands:
 //   get_query_configs()                 → Value       full object
 //   save_query_configs(configs)         → ()          replace entire object
 //   reset_query_config(section, qt)     → ()          drop one override
+//   get_builtin_sql_templates()         → Value       4 hardcoded SQL constants
 
 use std::path::PathBuf;
 
@@ -47,7 +59,13 @@ pub const SECTION_STRATA_SERIES:     &str = "strata_series";
 pub const SECTION_STRATA_DOWNLOAD:   &str = "strata_download";
 pub const SECTION_DATASHEET_QUERIES: &str = "datasheet_queries";
 
-pub const DEFAULT_QUERY_TYPE: &str = "default";
+// Issue #52: this used to be `"default"`; the migration in
+// `load_query_configs_with_migration` rewrites old saved values transparently.
+pub const DEFAULT_QUERY_TYPE: &str = "GeoGIS";
+
+/// The pre-#52 query-type label.  Kept around solely so the migration can
+/// detect and rename old saved entries.
+const LEGACY_QUERY_TYPE: &str = "default";
 
 // ── Path helper ───────────────────────────────────────────────────────────────
 
@@ -99,7 +117,9 @@ fn migrate_queries_json(output_folder: &str, configs: &mut Map<String, Value>) -
         return false;
     }
 
-    // Walk down configs.datasheet_queries.default, creating empty maps as needed.
+    // Walk down configs.datasheet_queries.GeoGIS, creating empty maps as needed.
+    // (Pre-#52 this was the `default` bucket; the `migrate_default_to_geogis`
+    // step above renames any legacy bucket before we reach here.)
     let datasheet = configs
         .entry(SECTION_DATASHEET_QUERIES.to_string())
         .or_insert_with(|| json!({}));
@@ -131,9 +151,55 @@ fn migrate_queries_json(output_folder: &str, configs: &mut Map<String, Value>) -
     added
 }
 
+/// Issue #52 migration: walk every `query_configs.<section>` bucket and
+/// rename a `"default"` key to `"GeoGIS"` IF no `"GeoGIS"` key already
+/// exists in that bucket.  Buckets that already have a `"GeoGIS"` entry
+/// are left alone — we never clobber a user's data.  Returns whether
+/// anything was renamed.
+fn migrate_default_to_geogis(configs: &mut Map<String, Value>) -> bool {
+    let mut any = false;
+    for (_section, bucket_val) in configs.iter_mut() {
+        let Some(bucket) = bucket_val.as_object_mut() else { continue };
+        if bucket.contains_key(DEFAULT_QUERY_TYPE) {
+            // GeoGIS already present — leave the legacy `default` key alone
+            // (we deliberately don't merge to avoid surprising the user).
+            continue;
+        }
+        if let Some(old) = bucket.remove(LEGACY_QUERY_TYPE) {
+            bucket.insert(DEFAULT_QUERY_TYPE.to_string(), old);
+            any = true;
+        }
+    }
+    any
+}
+
+/// Issue #52 migration: rewrite every `databases[*].query_type` of
+/// `"default"` to `"GeoGIS"` so the new dropdown shows a single canonical
+/// flavour.  Operates on the top-level settings map.
+fn migrate_databases_query_type(settings: &mut Map<String, Value>) -> bool {
+    let Some(arr) = settings.get_mut("databases").and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+    let mut any = false;
+    for entry in arr.iter_mut() {
+        let Some(obj) = entry.as_object_mut() else { continue };
+        let needs_rewrite = obj
+            .get("query_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s == LEGACY_QUERY_TYPE)
+            .unwrap_or(false);
+        if needs_rewrite {
+            obj.insert("query_type".to_string(), Value::String(DEFAULT_QUERY_TYPE.to_string()));
+            any = true;
+        }
+    }
+    any
+}
+
 /// Build the full `query_configs` value from disk, applying the legacy
-/// `queries.json` migration if appropriate.  Returns `{}` when no settings
-/// file (or no folder) is available.
+/// `queries.json` migration AND the `default → GeoGIS` rename (issue #52)
+/// if appropriate.  Returns `{}` when no settings file (or no folder) is
+/// available.
 fn load_query_configs_with_migration(output_folder: &str) -> Value {
     if output_folder.is_empty() {
         return json!({});
@@ -144,8 +210,11 @@ fn load_query_configs_with_migration(output_folder: &str) -> Value {
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
 
-    let migrated = migrate_queries_json(output_folder, &mut configs);
-    if migrated {
+    let renamed_to_geogis = migrate_default_to_geogis(&mut configs);
+    let migrated_queries  = migrate_queries_json(output_folder, &mut configs);
+    let migrated_dbs      = migrate_databases_query_type(&mut settings);
+
+    if renamed_to_geogis || migrated_queries || migrated_dbs {
         // Persist the migrated configs so subsequent reads see them.
         settings.insert(
             "query_configs".to_string(),
@@ -161,9 +230,10 @@ fn load_query_configs_with_migration(output_folder: &str) -> Value {
 
 /// Return the query_type for the active primary database.
 ///
-/// As of issue #47 every primary DB uses `"default"`.  Issue #46 adds a
-/// per-database `query_type` field that this function will read from once
-/// both PRs have landed.  Until then this just returns `"default"`.
+/// As of issue #47 every primary DB uses `DEFAULT_QUERY_TYPE` ("GeoGIS"
+/// post-#52).  Issue #46 adds a per-database `query_type` field that this
+/// function will read from once both PRs have landed.  Until then this
+/// just returns the constant.
 pub(crate) fn current_query_type(_state: &AppState) -> String {
     // Defensive: when both #46 and #47 are merged the call site will be:
     //   state.db.lock().unwrap().as_ref()
@@ -285,4 +355,32 @@ pub async fn reset_query_config(
     })
     .await
     .map_err(|e| format!("internal task error: {e}"))?
+}
+
+/// Issue #52: expose the four hardcoded SQL constants so the frontend can
+/// pre-populate the GeoGIS textarea with the actual SQL the backend runs
+/// by default.  The values are taken straight from the originating module
+/// (no duplication) so this stays in lock-step with the running code.
+///
+/// Returns:
+/// ```json
+/// {
+///   "project_list":     "<PROJECTS_SQL>",
+///   "points_list":      "<POINTS_SQL>",
+///   "strata_series":    "<TYPES_SQL>",
+///   "strata_download":  "<DATA_SQL>"
+/// }
+/// ```
+///
+/// The `datasheet_queries` section deliberately has no entry here — its
+/// baseline lives in the user's `queries.json` (which the
+/// `migrate_queries_json` step folds into `query_configs.datasheet_queries.GeoGIS`).
+#[tauri::command]
+pub fn get_builtin_sql_templates() -> serde_json::Value {
+    serde_json::json!({
+        "project_list":    crate::commands::projects::PROJECTS_SQL,
+        "points_list":     crate::commands::points::POINTS_SQL,
+        "strata_series":   crate::commands::strata::TYPES_SQL,
+        "strata_download": crate::commands::strata::DATA_SQL,
+    })
 }

@@ -1,12 +1,34 @@
-// Query Config tab — issue #47
+// Query Config tab — issues #47 + #52
 //
-// Lets the user override the SQL used by every "fetch from database" command
-// in the app.  Overrides are stored in `{output_folder}/GIRTool_settings.json`
-// under the top-level `query_configs` key (one bucket per section, keyed by
-// query_type).  When no override exists for a (section, query_type) pair,
-// the backend falls back to the hardcoded default in `commands/*.rs`.
+// Model (issue #52):
+//   ONE top-level dropdown selects the active query type for ALL five
+//   sections simultaneously (replacing the per-section dropdowns from
+//   #47).  The first option is the built-in `"GeoGIS"` flavour, which is
+//   pre-populated with the hardcoded SQL constants the Rust backend
+//   actually runs by default.  Users may add additional flavours
+//   (e.g. `"fieldlab"`) via "+ Add new…".
+//
+// Storage layout (unchanged from #47):
+//   `{output_folder}/GIRTool_settings.json` has a top-level `query_configs`
+//   object — one bucket per section, keyed by query_type.  When no
+//   override exists for a (section, query_type) pair, the backend falls
+//   back to the hardcoded default in `commands/*.rs`.
+//
+// What the textarea shows for each section / query type:
+//   1. Draft (in-progress edit), else
+//   2. `configs[section][activeQt]` (user override), else
+//   3. If `activeQt === "GeoGIS"`: the corresponding builtin SQL template
+//      fetched from `get_builtin_sql_templates`, else
+//   4. Empty (with a placeholder hint).
+//
+// Save semantics (#52):
+//   For GeoGIS, only persist textareas whose value DIFFERS from the
+//   builtin — so editing the SQL away from the hardcoded default writes
+//   an override, but leaving it identical does NOT bloat the settings
+//   file with a duplicate.  For other query types, any non-empty value
+//   is saved.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '../tauri-api'
 
 // Section metadata — keep names in sync with the backend constants.
@@ -48,45 +70,55 @@ const SECTIONS = [
   },
 ]
 
-// Always available; user-defined query types from configured databases get
-// appended once #46 is merged (UI lets them type a custom one for now).
-const BUILTIN_QUERY_TYPES = ['default']
+// The built-in query type.  Always present, always first, never deletable.
+const GEOGIS = 'GeoGIS'
+
+// Frontend regex for validating user-added query-type names.
+const QT_NAME_RE = /^[A-Za-z0-9_-]+$/
 
 export default function QueryConfigTab() {
-  const [configs,  setConfigs]  = useState(null)   // server-truth (Object)
-  const [drafts,   setDrafts]   = useState({})     // { sectionKey: { qt: text } } or { sectionKey: { qt: { qname: text } } }
-  const [dirty,    setDirty]    = useState({})     // { "<section>/<qt>" or "<section>/<qt>/<qname>": true }
-  const [busy,     setBusy]     = useState(false)
-  const [msg,      setMsg]      = useState(null)   // { ok, text }
-  const [openSec,  setOpenSec]  = useState(() => new Set(['project_list']))
-  // Per-section state: which query type is currently being edited.
-  const [activeQt, setActiveQt] = useState(() =>
-    Object.fromEntries(SECTIONS.map(s => [s.key, 'default'])),
-  )
+  const [configs,    setConfigs]    = useState(null)   // server-truth (Object)
+  const [builtins,   setBuiltins]   = useState(null)   // { section: sql } from get_builtin_sql_templates
+  const [drafts,     setDrafts]     = useState({})     // { sectionKey: { qt: text } } or { sectionKey: { qt: { qname: text } } }
+  const [dirty,      setDirty]      = useState({})     // { "<section>/<qt>" or "<section>/<qt>/<qname>": true }
+  const [busy,       setBusy]       = useState(false)
+  const [msg,        setMsg]        = useState(null)   // { ok, text }
+  const [openSec,    setOpenSec]    = useState(() => new Set(['project_list']))
+  // ONE active query type for the whole tab (replaces the old per-section state).
+  const [activeQt,   setActiveQt]   = useState(GEOGIS)
+  // "+ Add new…" inline input visible flag.
+  const [addingNew,  setAddingNew]  = useState(false)
   // For the Datasheet queries section: which query name (CPTData, …) is active.
   const [activeQname, setActiveQname] = useState({})
 
-  // Load from backend once on mount (and on any output-folder change).
+  // Load configs + builtin templates in parallel on mount.
   const reload = useCallback(async () => {
     try {
-      const r = await invoke('get_query_configs')
-      setConfigs(r || {})
+      const [cfgs, bts] = await Promise.all([
+        invoke('get_query_configs'),
+        invoke('get_builtin_sql_templates'),
+      ])
+      setConfigs(cfgs || {})
+      setBuiltins(bts || {})
       setDrafts({})
       setDirty({})
       setMsg(null)
     } catch (err) {
-      console.error('get_query_configs failed:', err)
+      console.error('Query Config load failed:', err)
       setConfigs({})
+      setBuiltins({})
       setMsg({ ok: false, text: String(err || 'Failed to load') })
     }
   }, [])
   useEffect(() => { reload() }, [reload])
 
   // ── Helpers ────────────────────────────────────────────────────────────
-  // Gather the union of query_type keys that exist in the loaded configs so
-  // the dropdown picks them up automatically.  Always include 'default'.
-  const knownQueryTypes = (() => {
-    const set = new Set(BUILTIN_QUERY_TYPES)
+
+  // Union of query_type keys across every saved bucket AND the currently
+  // active type (which may have just been added via "+ Add new…" but has
+  // no overrides saved yet).  GeoGIS is always present.
+  const knownQueryTypes = useMemo(() => {
+    const set = new Set([GEOGIS])
     if (configs && typeof configs === 'object') {
       for (const sec of Object.values(configs)) {
         if (sec && typeof sec === 'object') {
@@ -94,16 +126,31 @@ export default function QueryConfigTab() {
         }
       }
     }
-    return [...set]
-  })()
+    if (activeQt) set.add(activeQt)
+    // Also pick up any in-flight drafts for unsaved query types.
+    for (const perQt of Object.values(drafts)) {
+      if (perQt && typeof perQt === 'object') {
+        for (const k of Object.keys(perQt)) set.add(k)
+      }
+    }
+    // GeoGIS first, then alphabetical for the rest.
+    const rest = [...set].filter(t => t !== GEOGIS).sort((a, b) => a.localeCompare(b))
+    return [GEOGIS, ...rest]
+  }, [configs, drafts, activeQt])
 
-  // Get the value (override or empty string) for a (section, qt) — or
-  // (section, qt, qname) for datasheet_queries.
+  // Get the textarea value for a (section, qt) — or (section, qt, qname) for datasheet_queries.
+  // Falls through: draft → user override → GeoGIS builtin (only for GeoGIS) → ''.
   const getValue = (section, qt, qname = null) => {
-    // Draft wins (in-progress edit).
     if (qname == null) {
-      if (drafts[section]?.[qt] != null) return drafts[section][qt]
-      return configs?.[section]?.[qt] ?? ''
+      // Draft wins (in-progress edit).
+      const draft = drafts[section]?.[qt]
+      if (draft != null) return draft
+      const saved = configs?.[section]?.[qt]
+      if (saved != null) return saved
+      if (qt === GEOGIS && builtins && typeof builtins[section] === 'string') {
+        return builtins[section]
+      }
+      return ''
     } else {
       const draftMap = drafts[section]?.[qt]
       if (draftMap && draftMap[qname] != null) return draftMap[qname]
@@ -128,12 +175,18 @@ export default function QueryConfigTab() {
   }
 
   // Merge drafts into a full configs object ready to send to save_query_configs.
+  //
+  // For GeoGIS specifically, a textarea whose value equals the builtin SQL is
+  // a "no-override" — we deliberately do NOT persist it (prevents writing
+  // redundant entries that exactly match the hardcoded default).  For other
+  // query types, any non-empty value is saved.
   const mergedForSave = () => {
     const out = JSON.parse(JSON.stringify(configs || {}))
     for (const [section, perQt] of Object.entries(drafts)) {
       if (!out[section] || typeof out[section] !== 'object') out[section] = {}
       for (const [qt, value] of Object.entries(perQt)) {
         if (section === 'datasheet_queries' && typeof value === 'object') {
+          // Per-query-name map.
           if (!out[section][qt] || typeof out[section][qt] !== 'object') out[section][qt] = {}
           for (const [qname, sql] of Object.entries(value)) {
             if (sql === '' || sql == null) {
@@ -146,12 +199,20 @@ export default function QueryConfigTab() {
             delete out[section][qt]
           }
         } else {
-          if (value === '' || value == null) {
+          // Scalar SQL string (one of the 4 non-map sections).
+          const builtin = qt === GEOGIS ? builtins?.[section] : null
+          const isRedundantBuiltin =
+            qt === GEOGIS && typeof builtin === 'string' && value === builtin
+          if (value === '' || value == null || isRedundantBuiltin) {
             delete out[section][qt]
           } else {
             out[section][qt] = value
           }
         }
+      }
+      // Don't leave an empty bucket behind.
+      if (out[section] && Object.keys(out[section]).length === 0) {
+        delete out[section]
       }
     }
     return out
@@ -176,11 +237,32 @@ export default function QueryConfigTab() {
     }
   }
 
-  // Reset one override so the backend falls back to its hardcoded default.
+  // Reset one override → backend hardcoded default.  For GeoGIS the textarea
+  // will then re-render showing the builtin SQL; for other types it goes blank.
   const resetOverride = async (section, qt) => {
     setBusy(true); setMsg(null)
     try {
       await invoke('reset_query_config', { section, queryType: qt })
+      // Drop any draft for this (section, qt) so getValue falls back cleanly.
+      setDrafts(prev => {
+        const next = { ...prev }
+        if (next[section]) {
+          const inner = { ...next[section] }
+          delete inner[qt]
+          if (Object.keys(inner).length === 0) delete next[section]
+          else next[section] = inner
+        }
+        return next
+      })
+      setDirty(prev => {
+        const next = { ...prev }
+        for (const k of Object.keys(next)) {
+          if (k === `${section}/${qt}` || k.startsWith(`${section}/${qt}/`)) {
+            delete next[k]
+          }
+        }
+        return next
+      })
       await reload()
       setMsg({ ok: true, text: `Reset ${section} / ${qt} → backend default.` })
       setTimeout(() => setMsg(m => m?.ok ? null : m), 2500)
@@ -191,40 +273,194 @@ export default function QueryConfigTab() {
     }
   }
 
-  const toggleOpen = (key) => {
-    setOpenSec(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key); else next.add(key)
-      return next
-    })
+  // Delete a custom query type — wipes every `<section>.<qt>` entry then
+  // switches the active type back to GeoGIS.  Refuses to touch GeoGIS itself.
+  const deleteQueryType = async (qt) => {
+    if (qt === GEOGIS) return
+    if (!window.confirm(
+      `Delete query type "${qt}"?\n\n` +
+      `This removes every SQL override saved under this type (across all sections).  ` +
+      `GeoGIS and other query types are unaffected.`
+    )) return
+
+    setBusy(true); setMsg(null)
+    try {
+      // For each section, drop the qt bucket via reset_query_config.
+      for (const sec of SECTIONS) {
+        try {
+          await invoke('reset_query_config', { section: sec.key, queryType: qt })
+        } catch (e) {
+          console.warn(`reset_query_config failed for ${sec.key}/${qt}:`, e)
+        }
+      }
+      // Drop drafts/dirty for this qt across every section.
+      setDrafts(prev => {
+        const next = {}
+        for (const [section, perQt] of Object.entries(prev)) {
+          const cleaned = { ...perQt }
+          delete cleaned[qt]
+          if (Object.keys(cleaned).length > 0) next[section] = cleaned
+        }
+        return next
+      })
+      setDirty(prev => {
+        // dirty keys are of the form "<section>/<qt>" or "<section>/<qt>/<qname>" —
+        // drop any whose second slash-separated component matches the deleted qt.
+        const next = {}
+        for (const [k, v] of Object.entries(prev)) {
+          const parts = k.split('/')
+          if (parts[1] !== qt) next[k] = v
+        }
+        return next
+      })
+      setActiveQt(GEOGIS)
+      await reload()
+      setMsg({ ok: true, text: `Deleted query type "${qt}".` })
+      setTimeout(() => setMsg(m => m?.ok ? null : m), 2500)
+    } catch (err) {
+      setMsg({ ok: false, text: String(err || 'Delete failed') })
+    } finally {
+      setBusy(false)
+    }
   }
 
-  // Datasheet-queries: list of known query names (union of backend + draft).
+  // Commit a "+ Add new…" entry.  Validates against QT_NAME_RE.
+  const commitNewType = (raw) => {
+    const v = (raw || '').trim()
+    setAddingNew(false)
+    if (!v) return
+    if (!QT_NAME_RE.test(v)) {
+      setMsg({ ok: false, text: `Invalid query-type name: "${v}".  Use letters, digits, _, - only.` })
+      return
+    }
+    if (v === GEOGIS) {
+      setActiveQt(GEOGIS)
+      return
+    }
+    // The type only "exists" once it has at least one override saved.  Selecting
+    // it now lets the user type in textareas; saving creates the bucket.
+    setActiveQt(v)
+  }
+
+  // Datasheet-queries: list of known query names for the active qt.
   const datasheetQueryNames = (() => {
-    const bucket = configs?.datasheet_queries?.[activeQt.datasheet_queries] || {}
-    const draftBucket = drafts.datasheet_queries?.[activeQt.datasheet_queries] || {}
+    const bucket = configs?.datasheet_queries?.[activeQt] || {}
+    const draftBucket = drafts.datasheet_queries?.[activeQt] || {}
     return [...new Set([...Object.keys(bucket), ...Object.keys(draftBucket)])].sort()
   })()
 
   const anyDirty = Object.keys(dirty).length > 0
 
+  // Does the current (section, activeQt) actually have a saved override?
+  // Used for the "● override" badge.
+  const hasOverride = (sec) => {
+    if (sec.isMap) {
+      return Object.keys(configs?.[sec.key]?.[activeQt] || {}).length > 0
+    }
+    return !!(configs?.[sec.key]?.[activeQt])
+  }
+
+  // Used to decide whether the per-section "Reset" button should appear.
+  const canReset = (sec) => hasOverride(sec)
+
   return (
     <div className="card" style={{ maxWidth: 920 }}>
       <h3 className="section-title">Query configuration</h3>
       <p className="hint" style={{ marginBottom: '0.75rem' }}>
-        Override the SQL used by every "fetch from database" command in the app.
-        Settings are saved per <strong>query type</strong> (the label you give a
-        database on the Database tab) — when no override exists, the backend
-        falls back to its built-in default.
+        Override the SQL used by every "fetch from database" command in the
+        app.  Pick a <strong>query type</strong> at the top — every section
+        below shows the SQL associated with that type.  The built-in{' '}
+        <strong>GeoGIS</strong> flavour comes pre-filled with the hardcoded
+        backend defaults; edit any textarea + Save to override.  Use{' '}
+        <em>+ Add new…</em> to create a separate flavour for a different
+        database schema (e.g. <code>fieldlab</code>).
       </p>
+
+      {/* ── Top-level query-type selector (issue #52) ─────────────────────── */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          marginBottom: '1rem', padding: '0.6rem 0.8rem',
+          background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 6,
+        }}
+      >
+        <label style={{ marginBottom: 0, fontWeight: 600 }}>Query type:</label>
+        {!addingNew ? (
+          <select
+            value={activeQt}
+            onChange={e => {
+              const v = e.target.value
+              if (v === '__new__') {
+                setAddingNew(true)
+              } else {
+                setActiveQt(v)
+              }
+            }}
+            style={{ marginBottom: 0, width: 200 }}
+          >
+            {knownQueryTypes.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+            <option value="__new__">+ Add new…</option>
+          </select>
+        ) : (
+          <input
+            autoFocus
+            placeholder="e.g. fieldlab"
+            onBlur={e => commitNewType(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter')  { commitNewType(e.currentTarget.value); e.preventDefault() }
+              if (e.key === 'Escape') { setAddingNew(false) }
+            }}
+            style={{ marginBottom: 0, width: 200 }}
+          />
+        )}
+
+        {activeQt === GEOGIS && (
+          <span
+            title="GeoGIS is the built-in flavour, pre-populated with the SQL the backend runs by default.  Always present; not deletable."
+            style={{
+              display: 'inline-block',
+              padding: '0.12rem 0.5rem',
+              background: '#e0e7ff',
+              color: '#3730a3',
+              border: '1px solid #c7d2fe',
+              borderRadius: 999,
+              fontSize: '.7rem',
+              fontWeight: 600,
+              letterSpacing: '.02em',
+            }}
+          >
+            built-in
+          </span>
+        )}
+
+        {activeQt !== GEOGIS && !addingNew && (
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => deleteQueryType(activeQt)}
+            disabled={busy}
+            title={`Delete query type "${activeQt}" and clear all its overrides`}
+            style={{ padding: '0.2rem 0.5rem', lineHeight: 1 }}
+          >
+            ✕
+          </button>
+        )}
+
+        <span style={{ flex: 1 }} />
+        <span style={{ color: '#6b7280', fontSize: '.78rem' }}>
+          {activeQt === GEOGIS
+            ? 'Built-in defaults shown below; edit to override.'
+            : `Custom flavour — leave a section blank to fall back to the backend's hardcoded default.`}
+        </span>
+      </div>
 
       {SECTIONS.map(sec => {
         const isOpen = openSec.has(sec.key)
-        const qt     = activeQt[sec.key]
-        const hasOverride = sec.isMap
-          ? Object.keys(configs?.[sec.key]?.[qt] || {}).length > 0
-          : !!(configs?.[sec.key]?.[qt])
-        const isDirtySection = Object.keys(dirty).some(k => k.startsWith(`${sec.key}/`))
+        const qt = activeQt
+        const overridden  = hasOverride(sec)
+        const isDirtySection = Object.keys(dirty).some(k => k.startsWith(`${sec.key}/${qt}`) || (sec.isMap && k.startsWith(`${sec.key}/${qt}/`)))
 
         return (
         <details
@@ -246,7 +482,7 @@ export default function QueryConfigTab() {
             display: 'flex', alignItems: 'center', gap: '0.5rem',
           }}>
             <span>{sec.title}</span>
-            {hasOverride && (
+            {overridden && (
               <span title="Override active for current query type"
                 style={{ color: '#16a34a', fontSize: '.8rem' }}>● override</span>
             )}
@@ -265,48 +501,22 @@ export default function QueryConfigTab() {
               {sec.hint}
             </p>
 
-            {/* Query type selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-              <label style={{ marginBottom: 0, fontSize: '.82rem' }}>Query type:</label>
-              <select
-                value={qt}
-                onChange={e => setActiveQt(prev => ({ ...prev, [sec.key]: e.target.value }))}
-                style={{ marginBottom: 0, width: 180 }}
-              >
-                {knownQueryTypes.map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-                <option value="__new__">+ New type…</option>
-              </select>
-              {qt === '__new__' && (
-                <input
-                  autoFocus
-                  placeholder="e.g. fieldlab"
-                  onBlur={e => {
-                    const v = e.target.value.trim()
-                    if (v && /^[A-Za-z0-9_-]+$/.test(v)) {
-                      setActiveQt(prev => ({ ...prev, [sec.key]: v }))
-                    } else {
-                      setActiveQt(prev => ({ ...prev, [sec.key]: 'default' }))
-                    }
-                  }}
-                  style={{ marginBottom: 0, width: 180 }}
-                />
-              )}
-              {hasOverride && qt !== '__new__' && (
+            {/* Per-section Reset button (only when an override is actually saved). */}
+            {canReset(sec) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                 <button
                   type="button"
                   className="btn-secondary btn-sm"
                   onClick={() => resetOverride(sec.key, qt)}
                   disabled={busy}
-                  title="Delete this override → use the hardcoded default"
+                  title="Delete this override — for GeoGIS the textarea will re-show the hardcoded default; for other types it goes blank."
                 >
-                  Reset
+                  Reset {sec.key} for {qt}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
 
-            {/* SQL editor (textarea — codemirror-style line numbers via CSS counter) */}
+            {/* SQL editor */}
             {sec.isMap ? (
               <>
                 {/* Datasheet queries: extra picker for query name */}
@@ -358,7 +568,11 @@ export default function QueryConfigTab() {
                 style={sqlTextareaStyle}
                 value={getValue(sec.key, qt)}
                 onChange={e => setValue(sec.key, qt, e.target.value)}
-                placeholder="-- leave blank to use the hardcoded backend default"
+                placeholder={
+                  qt === GEOGIS
+                    ? '-- (GeoGIS built-in SQL not loaded — see console)'
+                    : '-- leave blank to use the hardcoded backend default'
+                }
               />
             )}
           </div>

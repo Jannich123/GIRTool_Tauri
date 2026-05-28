@@ -57,7 +57,10 @@ pub struct DbConfig {
 }
 
 fn default_db_type()    -> String { "mssql".to_string() }
-fn default_query_type() -> String { "default".to_string() }
+// Issue #52: rename "default" → "GeoGIS" to match the new combined
+// query-type dropdown in Settings → Query Config.  Existing settings are
+// silently upgraded by the migration in `query_configs::get_query_configs`.
+fn default_query_type() -> String { "GeoGIS".to_string() }
 
 impl DbConfig {
     /// True if this entry connects to SQL Server.
