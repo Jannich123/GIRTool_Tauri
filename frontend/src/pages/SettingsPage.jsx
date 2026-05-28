@@ -23,6 +23,19 @@ const DEFAULT_DB_ROW = () => ({
 // `[A-Za-z0-9_-]+` — same validation the backend enforces.
 const ID_RE = /^[A-Za-z0-9_-]+$/
 
+// Issue #73: per-row IDs are auto-generated and read-only.  Numbers start at
+// `DB1` and grow as the user adds rows.  `nextDbId` returns the lowest unused
+// `DB<N>` so deleting a middle row and re-adding fills the gap rather than
+// always climbing.  Rows that were saved before this change keep whatever id
+// they have (e.g. `primary`) — only NEW rows pick up the DB<N> format so
+// external references like an existing `projects.xlsx` continue to work.
+function nextDbId(rows) {
+  const used = new Set((rows || []).map(r => r.id))
+  let n = 1
+  while (used.has(`DB${n}`)) n += 1
+  return `DB${n}`
+}
+
 export default function SettingsPage({ setPage }) {
   const { connection, saveConnection, setConnected, setSelectedProjects, setSelectedPoints } = useApp()
   const [form, setForm]                 = useState(connection)
@@ -67,9 +80,10 @@ export default function SettingsPage({ setPage }) {
         // If the user has nothing saved yet, seed a single empty row from
         // the legacy `connection` form so they aren't staring at a blank table.
         if (arr.length === 0) {
+          // Fresh install — seed with a single auto-numbered row (#73).
           setDbRows([{
             ...DEFAULT_DB_ROW(),
-            id:          'primary',
+            id:          'DB1',
             server:      form.server      || '',
             database:    form.database    || '',
             auth_method: form.auth_method || 'windows',
@@ -77,6 +91,8 @@ export default function SettingsPage({ setPage }) {
             password:    form.password    || '',
           }])
         } else {
+          // Existing saved data — keep whatever ids it has (legacy `primary`
+          // etc.) so external `projects.xlsx` references stay valid.
           setDbRows(arr.map(d => ({ ...DEFAULT_DB_ROW(), ...d })))
         }
         setDbStatus({})
@@ -84,7 +100,8 @@ export default function SettingsPage({ setPage }) {
         setDbLoaded(true)
       })
       .catch(() => {
-        setDbRows([{ ...DEFAULT_DB_ROW(), id: 'primary' }])
+        // No saved settings + list_databases failed — start with one fresh row.
+        setDbRows([{ ...DEFAULT_DB_ROW(), id: 'DB1' }])
         setDbLoaded(true)
       })
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -126,12 +143,10 @@ export default function SettingsPage({ setPage }) {
     dbRows.filter(r => r.id && !ID_RE.test(r.id)).map(r => r.id),
   )
 
+  // Auto-generate the next available DB<N> id — gap-filling so deleting a
+  // middle row and re-adding picks the freed number up again (issue #73).
   const addDbRow = () => {
-    let n = dbRows.length + 1
-    let id = `db_${n}`
-    const taken = new Set(dbRows.map(r => r.id))
-    while (taken.has(id)) { n += 1; id = `db_${n}` }
-    setDbRows(prev => [...prev, { ...DEFAULT_DB_ROW(), id }])
+    setDbRows(prev => [...prev, { ...DEFAULT_DB_ROW(), id: nextDbId(prev) }])
   }
 
   const removeDbRow = (idx) => {
@@ -439,15 +454,22 @@ export default function SettingsPage({ setPage }) {
             borderBottom: '1px solid #f1f5f9',
             fontSize: '.82rem',
           }}>
+            {/* Auto-generated read-only ID (issue #73) — DB1, DB2, …  Old
+                rows saved with custom ids (e.g. "primary") still display
+                their original value to preserve external references. */}
             <input
               value={row.id}
-              onChange={e => updateRow(idx, { id: e.target.value.trim() })}
-              placeholder="site_main"
+              readOnly
               style={{
                 marginBottom: 0,
+                background: '#f3f4f6',
+                color: '#374151',
+                cursor: 'default',
                 borderColor: isDup || isBad ? '#ef4444' : undefined,
               }}
-              title={isDup ? 'Duplicate ID' : isBad ? 'Allowed: a-z 0-9 _ -' : 'Unique short identifier'}
+              title={isDup ? 'Duplicate ID — should not happen with auto-numbering'
+                   : isBad ? 'Legacy ID outside the DB<N> format — kept for backwards compatibility'
+                   : 'Auto-generated identifier (read-only)'}
             />
             <select
               value={row.type}
