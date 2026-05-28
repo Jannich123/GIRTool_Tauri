@@ -79,6 +79,7 @@ const QT_NAME_RE = /^[A-Za-z0-9_-]+$/
 export default function QueryConfigTab() {
   const [configs,    setConfigs]    = useState(null)   // server-truth (Object)
   const [builtins,   setBuiltins]   = useState(null)   // { section: sql } from get_builtin_sql_templates
+  const [builtinDs,  setBuiltinDs]  = useState(null)   // { fname: sql } from get_builtin_datasheet_queries (issue #60)
   const [drafts,     setDrafts]     = useState({})     // { sectionKey: { qt: text } } or { sectionKey: { qt: { qname: text } } }
   const [dirty,      setDirty]      = useState({})     // { "<section>/<qt>" or "<section>/<qt>/<qname>": true }
   const [busy,       setBusy]       = useState(false)
@@ -91,15 +92,17 @@ export default function QueryConfigTab() {
   // For the Datasheet queries section: which query name (CPTData, …) is active.
   const [activeQname, setActiveQname] = useState({})
 
-  // Load configs + builtin templates in parallel on mount.
+  // Load configs + builtin templates + builtin datasheet queries in parallel on mount.
   const reload = useCallback(async () => {
     try {
-      const [cfgs, bts] = await Promise.all([
+      const [cfgs, bts, bds] = await Promise.all([
         invoke('get_query_configs'),
         invoke('get_builtin_sql_templates'),
+        invoke('get_builtin_datasheet_queries'),
       ])
       setConfigs(cfgs || {})
       setBuiltins(bts || {})
+      setBuiltinDs(bds || {})
       setDrafts({})
       setDirty({})
       setMsg(null)
@@ -107,6 +110,7 @@ export default function QueryConfigTab() {
       console.error('Query Config load failed:', err)
       setConfigs({})
       setBuiltins({})
+      setBuiltinDs({})
       setMsg({ ok: false, text: String(err || 'Failed to load') })
     }
   }, [])
@@ -154,7 +158,14 @@ export default function QueryConfigTab() {
     } else {
       const draftMap = drafts[section]?.[qt]
       if (draftMap && draftMap[qname] != null) return draftMap[qname]
-      return configs?.[section]?.[qt]?.[qname] ?? ''
+      const saved = configs?.[section]?.[qt]?.[qname]
+      if (saved != null) return saved
+      // Builtin datasheet queries are GeoGIS-only (issue #60).
+      if (section === 'datasheet_queries' && qt === GEOGIS
+          && builtinDs && typeof builtinDs[qname] === 'string') {
+        return builtinDs[qname]
+      }
+      return ''
     }
   }
 
@@ -189,7 +200,13 @@ export default function QueryConfigTab() {
           // Per-query-name map.
           if (!out[section][qt] || typeof out[section][qt] !== 'object') out[section][qt] = {}
           for (const [qname, sql] of Object.entries(value)) {
-            if (sql === '' || sql == null) {
+            // Issue #60: for GeoGIS, don't persist entries that exactly equal
+            // the hardcoded builtin SQL — same redundancy heuristic the other
+            // 4 sections use, just keyed by qname.
+            const builtinSql = qt === GEOGIS ? builtinDs?.[qname] : null
+            const isRedundantBuiltin =
+              qt === GEOGIS && typeof builtinSql === 'string' && sql === builtinSql
+            if (sql === '' || sql == null || isRedundantBuiltin) {
               delete out[section][qt][qname]
             } else {
               out[section][qt][qname] = sql
@@ -343,10 +360,19 @@ export default function QueryConfigTab() {
   }
 
   // Datasheet-queries: list of known query names for the active qt.
+  //
+  // For GeoGIS we also include the 12 hardcoded builtin query names from
+  // `get_builtin_datasheet_queries` (issue #60) so the dropdown is pre-filled
+  // even when the user has no `queries.json` saved yet.
   const datasheetQueryNames = (() => {
     const bucket = configs?.datasheet_queries?.[activeQt] || {}
     const draftBucket = drafts.datasheet_queries?.[activeQt] || {}
-    return [...new Set([...Object.keys(bucket), ...Object.keys(draftBucket)])].sort()
+    const builtinKeys = (activeQt === GEOGIS && builtinDs) ? Object.keys(builtinDs) : []
+    return [...new Set([
+      ...Object.keys(bucket),
+      ...Object.keys(draftBucket),
+      ...builtinKeys,
+    ])].sort()
   })()
 
   const anyDirty = Object.keys(dirty).length > 0
