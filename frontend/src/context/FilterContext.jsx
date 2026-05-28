@@ -106,7 +106,12 @@ export function FilterProvider({ children }) {
       lastSavedFiltersRef.current = null
       return
     }
-    const ids = selectedProjects.map(p => p.ProjectId)
+    // Issue #48: forward db_id when the project list has it, so the backend
+    // routes the query to the correct database.  Legacy projects (no db_id)
+    // use the flat-list form which fans out across every active DB.
+    const ids = selectedProjects.some(p => p?.db_id)
+      ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+      : selectedProjects.map(p => p.ProjectId)
     invoke('get_points', { projectIds: ids }).then(r => setAllPoints(r)).catch(() => {})
     fetchGroupData()
     fetchStrataLayers()

@@ -39,7 +39,13 @@ export default function PointsPage({ setPage }) {
   async function fetchPoints() {
     setLoading(true); setError('')
     try {
-      const ids = selectedProjects.map(p => p.ProjectId)
+      // Multi-DB routing (issue #48): when a project row carries `db_id`
+      // (added by list_projects fan-out), send the per-DB form so the backend
+      // routes the query to the correct database.  Otherwise fall back to the
+      // legacy flat list (which the backend runs against every DB).
+      const ids = selectedProjects.some(p => p?.db_id)
+        ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+        : selectedProjects.map(p => p.ProjectId)
       const res = await invoke('get_points', { projectIds: ids })
       setPoints(res)
     } catch (err) {

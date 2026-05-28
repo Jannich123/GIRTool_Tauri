@@ -24,7 +24,11 @@ import { useFilter } from '../context/FilterContext'
 
 // API returns Interpretation (capital I); selections use interpretation (lowercase).
 // Support both so lookup keys always match the server response.
-const selKey = (s) => `${s.series}||${s.Interpretation ?? s.interpretation}`
+//
+// Issue #48: include `db_id` so the same (series, interpretation) pair from
+// two different databases is treated as two distinct rows in the picker.
+const selKey = (s) =>
+  `${s.db_id ?? '?'}||${s.series}||${s.Interpretation ?? s.interpretation}`
 
 // ── Error detection (matches Excel template column formulas exactly) ──────────
 //
@@ -131,7 +135,13 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
       body: {
         project_ids: projectIds,
         point_ids:   pointIds,
-        selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+        // Forward db_id so the backend (#48) can route each selection to the
+        // database that returned it via get_strata_types.
+        selections:  checkedSelections.map(t => ({
+          interpretation: t.Interpretation,
+          series:         t.series,
+          db_id:          t.db_id,
+        })),
       },
     })
       .then(r => { setPreview(r) })
@@ -152,7 +162,13 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
         body: {
           project_ids: projectIds,
           point_ids:   pointIds,
-          selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+          // Forward db_id so the backend (#48) can route each selection to the
+        // database that returned it via get_strata_types.
+        selections:  checkedSelections.map(t => ({
+          interpretation: t.Interpretation,
+          series:         t.series,
+          db_id:          t.db_id,
+        })),
         },
       })
       setDlMsg({ ok: true, text: `Saved to ${r.path}` })
@@ -174,7 +190,13 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
         body: {
           project_ids: projectIds,
           point_ids:   pointIds,
-          selections:  checkedSelections.map(t => ({ interpretation: t.Interpretation, series: t.series })),
+          // Forward db_id so the backend (#48) can route each selection to the
+        // database that returned it via get_strata_types.
+        selections:  checkedSelections.map(t => ({
+          interpretation: t.Interpretation,
+          series:         t.series,
+          db_id:          t.db_id,
+        })),
         },
       })
       const { transferred, skipped, total } = r
