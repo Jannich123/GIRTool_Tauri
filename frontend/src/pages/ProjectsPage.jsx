@@ -10,6 +10,32 @@ function SortIcon({ col, sortCol, sortDir }) {
   return <span className="sort-icon active">{sortDir === 'asc' ? '↑' : '↓'}</span>
 }
 
+// Composite selection key — same shape used by the strata selKey (issue #66)
+// so a project with the same ProjectId showing up in two databases is
+// treated as two distinct rows.  Falls back to `'?'` for legacy rows that
+// somehow arrive without a `db_id` (shouldn't happen post-#51).
+const projKey = (p) => `${p.db_id ?? '?'}||${p.ProjectId}`
+
+// Small monospace pill renderer for the DB column.
+function DbIdPill({ id }) {
+  return (
+    <code
+      style={{
+        fontSize: '.75rem',
+        padding: '0.08rem 0.5rem',
+        background: '#eef2ff',
+        color: '#3730a3',
+        border: '1px solid #c7d2fe',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+      }}
+      title="Database this project belongs to (configured in Settings → Database)"
+    >
+      {id || '?'}
+    </code>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProjectsPage({ setPage }) {
@@ -26,10 +52,10 @@ export default function ProjectsPage({ setPage }) {
     if (connected) fetchProjects()
   }, [connected])
 
-  // Pre-tick already selected projects
+  // Pre-tick already selected projects (keyed by composite db_id||ProjectId).
   useEffect(() => {
     const init = {}
-    selectedProjects.forEach(p => { init[p.ProjectId] = true })
+    selectedProjects.forEach(p => { init[projKey(p)] = true })
     setChecked(init)
   }, [selectedProjects])
 
@@ -46,7 +72,7 @@ export default function ProjectsPage({ setPage }) {
     }
   }
 
-  function toggle(id) { setChecked(prev => ({ ...prev, [id]: !prev[id] })) }
+  function toggle(key) { setChecked(prev => ({ ...prev, [key]: !prev[key] })) }
 
   const addKeys = useCallback((keys) => {
     setChecked(prev => {
@@ -58,13 +84,13 @@ export default function ProjectsPage({ setPage }) {
 
   function selectAll()  {
     const all = {}
-    filtered.forEach(p => { all[p.ProjectId] = true })
+    filtered.forEach(p => { all[projKey(p)] = true })
     setChecked(prev => ({ ...prev, ...all }))
   }
   function clearAll() { setChecked({}) }
 
   function confirm() {
-    const selected = projects.filter(p => checked[p.ProjectId])
+    const selected = projects.filter(p => checked[projKey(p)])
     setSelectedProjects(selected)
     setSelectedPoints([])
     // Persist top-level selection state to GIRTool_settings.json so the
@@ -86,7 +112,8 @@ export default function ProjectsPage({ setPage }) {
     const q = search.toLowerCase()
     const rows = !q ? projects : projects.filter(p =>
       p.ProjectNo?.toLowerCase().includes(q) ||
-      p.Title?.toLowerCase().includes(q)
+      p.Title?.toLowerCase().includes(q) ||
+      p.db_id?.toLowerCase().includes(q)
     )
     return [...rows].sort((a, b) => {
       const av = a[sortCol] ?? ''
@@ -100,7 +127,7 @@ export default function ProjectsPage({ setPage }) {
 
   const { rowProps: dragRowProps, tbodyStyle } = useDragSelect({
     items:    filtered,
-    getKey:   p => p.ProjectId,
+    getKey:   p => projKey(p),
     onAdd:    addKeys,
     onToggle: toggle,
   })
@@ -127,7 +154,7 @@ export default function ProjectsPage({ setPage }) {
         <div className="page-actions">
           <input
             className="search-input"
-            placeholder="Search by No or Title…"
+            placeholder="Search by No, Title or DB…"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -152,10 +179,13 @@ export default function ProjectsPage({ setPage }) {
                 <th style={{ width: 40 }}>
                   <input
                     type="checkbox"
-                    checked={filtered.length > 0 && filtered.every(p => checked[p.ProjectId])}
+                    checked={filtered.length > 0 && filtered.every(p => checked[projKey(p)])}
                     onChange={e => e.target.checked ? selectAll() : clearAll()}
                     title="Select / deselect all visible"
                   />
+                </th>
+                <th className="sortable" onClick={() => handleSort('db_id')} style={{ width: 110 }}>
+                  DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
                 </th>
                 <th className="sortable" onClick={() => handleSort('ProjectNo')}>
                   Project No <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
@@ -169,27 +199,31 @@ export default function ProjectsPage({ setPage }) {
               </tr>
             </thead>
             <tbody style={tbodyStyle}>
-              {filtered.map((p, idx) => (
-                <tr
-                  key={p.ProjectId}
-                  className={checked[p.ProjectId] ? 'selected' : ''}
-                  {...dragRowProps(p, idx)}
-                >
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={!!checked[p.ProjectId]}
-                      onChange={() => toggle(p.ProjectId)}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  </td>
-                  <td>{p.ProjectNo}</td>
-                  <td>{p.Title}</td>
-                  <td style={{ textAlign: 'right' }}>{p.PointCount}</td>
-                </tr>
-              ))}
+              {filtered.map((p, idx) => {
+                const k = projKey(p)
+                return (
+                  <tr
+                    key={k}
+                    className={checked[k] ? 'selected' : ''}
+                    {...dragRowProps(p, idx)}
+                  >
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={!!checked[k]}
+                        onChange={() => toggle(k)}
+                        onClick={e => e.stopPropagation()}
+                      />
+                    </td>
+                    <td><DbIdPill id={p.db_id} /></td>
+                    <td>{p.ProjectNo}</td>
+                    <td>{p.Title}</td>
+                    <td style={{ textAlign: 'right' }}>{p.PointCount}</td>
+                  </tr>
+                )
+              })}
               {filtered.length === 0 && (
-                <tr><td colSpan={4} className="no-data">No projects found</td></tr>
+                <tr><td colSpan={5} className="no-data">No projects found</td></tr>
               )}
             </tbody>
           </table>
