@@ -14,7 +14,10 @@ const DEFAULT_DB_ROW = () => ({
   username:    '',
   password:    '',
   file_path:   '',
-  query_type:  'default',
+  // Default flavour for a brand-new row (issue #62 dropdown).  The legacy
+  // value `"default"` is auto-migrated to `"GeoGIS"` on the backend so
+  // existing saved rows still render correctly in the dropdown.
+  query_type:  'GeoGIS',
 })
 
 // `[A-Za-z0-9_-]+` — same validation the backend enforces.
@@ -46,6 +49,11 @@ export default function SettingsPage({ setPage }) {
   const [dbBusy,     setDbBusy]     = useState(false)
   const [dbMsg,      setDbMsg]      = useState(null)       // { ok, text }
   const [dbLoaded,   setDbLoaded]   = useState(false)      // first-load guard
+  // Query Type dropdown options (issue #62).  Always includes "GeoGIS" plus
+  // any custom types discovered in `query_configs.<section>` keys.  Re-fetched
+  // on every Database tab activation so a type the user just added in Query
+  // Config shows up here without an app restart.
+  const [availableQueryTypes, setAvailableQueryTypes] = useState(['GeoGIS'])
 
   // Load list the FIRST time the Database tab is opened in this session.
   // After that the in-memory buffer is the source of truth until the user
@@ -81,6 +89,28 @@ export default function SettingsPage({ setPage }) {
       })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, dbLoaded])
+
+  // Refresh the Query Type dropdown options every time the Database tab is
+  // activated (issue #62).  Picks up any query types the user just added
+  // via Settings → Query Config without requiring a restart.  GeoGIS is
+  // always first; user-added types sort alphabetically.
+  useEffect(() => {
+    if (tab !== 'database') return
+    invoke('get_query_configs')
+      .then(cfgs => {
+        const set = new Set(['GeoGIS'])
+        if (cfgs && typeof cfgs === 'object') {
+          for (const sec of Object.values(cfgs)) {
+            if (sec && typeof sec === 'object') {
+              for (const k of Object.keys(sec)) set.add(k)
+            }
+          }
+        }
+        const rest = [...set].filter(t => t !== 'GeoGIS').sort((a, b) => a.localeCompare(b))
+        setAvailableQueryTypes(['GeoGIS', ...rest])
+      })
+      .catch(() => setAvailableQueryTypes(['GeoGIS']))
+  }, [tab])
 
   // Update a single field on one row.
   const updateRow = (idx, patch) =>
@@ -499,12 +529,23 @@ export default function SettingsPage({ setPage }) {
               </div>
             )}
 
-            <input
-              value={row.query_type}
+            {/* Query Type dropdown — options come from get_query_configs
+                (issue #62).  If a row's saved query_type isn't in the list
+                yet (stale entry, mid-migration, etc.), surface it as an
+                extra option so the select stays valid. */}
+            <select
+              value={row.query_type || 'GeoGIS'}
               onChange={e => updateRow(idx, { query_type: e.target.value })}
-              placeholder="default"
               style={{ marginBottom: 0 }}
-            />
+              title="Pick the SQL flavour for this database.  Add new flavours under Settings → Query Config."
+            >
+              {(availableQueryTypes.includes(row.query_type) || !row.query_type
+                ? availableQueryTypes
+                : [...availableQueryTypes, row.query_type]
+              ).map(qt => (
+                <option key={qt} value={qt}>{qt}</option>
+              ))}
+            </select>
 
             <div style={{ fontSize: '1.1rem', textAlign: 'center', lineHeight: '1.6' }}>
               {st === undefined ? '—' :
