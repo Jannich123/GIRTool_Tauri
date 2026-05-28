@@ -2,6 +2,23 @@ import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
+// ── Multi-database tab (issue #46) ───────────────────────────────────────────
+// Defaults for a brand-new row.
+const DEFAULT_DB_ROW = () => ({
+  id:          '',
+  type:        'mssql',
+  server:      '',
+  database:    '',
+  auth_method: 'windows',
+  username:    '',
+  password:    '',
+  file_path:   '',
+  query_type:  'default',
+})
+
+// `[A-Za-z0-9_-]+` — same validation the backend enforces.
+const ID_RE = /^[A-Za-z0-9_-]+$/
+
 export default function SettingsPage({ setPage }) {
   const { connection, saveConnection, setConnected, setSelectedProjects, setSelectedPoints } = useApp()
   const [form, setForm]                 = useState(connection)
@@ -16,6 +33,139 @@ export default function SettingsPage({ setPage }) {
   // Folder is shown first because it now drives everything else (the DB
   // credentials are loaded FROM the folder).
   const [tab, setTab] = useState('folder')
+
+  // ── Multi-DB state (loaded from list_databases on tab open) ────────────
+  const [dbRows,     setDbRows]     = useState([])         // array of DB config rows
+  const [dbStatus,   setDbStatus]   = useState({})         // id → { ok, message }
+  const [dbBusy,     setDbBusy]     = useState(false)
+  const [dbMsg,      setDbMsg]      = useState(null)       // { ok, text }
+
+  // Load list whenever the Database tab is opened (and on first mount if
+  // the database tab is the active one).
+  useEffect(() => {
+    if (tab !== 'database') return
+    invoke('list_databases')
+      .then(list => {
+        const arr = Array.isArray(list) ? list : []
+        // If the user has nothing saved yet, seed a single empty row from
+        // the legacy `connection` form so they aren't staring at a blank table.
+        if (arr.length === 0) {
+          setDbRows([{
+            ...DEFAULT_DB_ROW(),
+            id:          'primary',
+            server:      form.server      || '',
+            database:    form.database    || '',
+            auth_method: form.auth_method || 'windows',
+            username:    form.username    || '',
+            password:    form.password    || '',
+          }])
+        } else {
+          setDbRows(arr.map(d => ({ ...DEFAULT_DB_ROW(), ...d })))
+        }
+        setDbStatus({})
+        setDbMsg(null)
+      })
+      .catch(() => setDbRows([{ ...DEFAULT_DB_ROW(), id: 'primary' }]))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
+
+  // Update a single field on one row.
+  const updateRow = (idx, patch) =>
+    setDbRows(prev => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+
+  // Validate IDs uniquely within the list.
+  const duplicateIds = (() => {
+    const counts = {}
+    dbRows.forEach(r => { counts[r.id] = (counts[r.id] || 0) + 1 })
+    return new Set(Object.keys(counts).filter(k => k && counts[k] > 1))
+  })()
+  const invalidIds = new Set(
+    dbRows.filter(r => r.id && !ID_RE.test(r.id)).map(r => r.id),
+  )
+
+  const addDbRow = () => {
+    let n = dbRows.length + 1
+    let id = `db_${n}`
+    const taken = new Set(dbRows.map(r => r.id))
+    while (taken.has(id)) { n += 1; id = `db_${n}` }
+    setDbRows(prev => [...prev, { ...DEFAULT_DB_ROW(), id }])
+  }
+
+  const removeDbRow = (idx) => {
+    setDbRows(prev => prev.filter((_, i) => i !== idx))
+    setDbStatus(prev => {
+      const row = dbRows[idx]
+      if (!row) return prev
+      const next = { ...prev }
+      delete next[row.id]
+      return next
+    })
+  }
+
+  const pickAccessPath = async (idx) => {
+    try {
+      const r = await invoke('pick_access_file', { initial: dbRows[idx]?.file_path || '' })
+      if (r?.path) updateRow(idx, { file_path: r.path })
+    } catch (err) {
+      console.error('pick_access_file failed:', err)
+    }
+  }
+
+  const testRow = async (idx) => {
+    const row = dbRows[idx]
+    if (!row) return
+    setDbStatus(prev => ({ ...prev, [row.id]: { ok: null, message: 'Testing…' } }))
+    try {
+      const r = await invoke('test_database', { cfg: row })
+      setDbStatus(prev => ({ ...prev, [row.id]: { ok: !!r.ok, message: r.message || '' } }))
+    } catch (err) {
+      setDbStatus(prev => ({ ...prev, [row.id]: { ok: false, message: String(err) } }))
+    }
+  }
+
+  const saveAndConnectAll = async () => {
+    setDbMsg(null)
+    if (dbRows.length === 0) {
+      setDbMsg({ ok: false, text: 'At least one database is required.' })
+      return
+    }
+    if (duplicateIds.size > 0) {
+      setDbMsg({ ok: false, text: `Duplicate ID(s): ${[...duplicateIds].join(', ')}` })
+      return
+    }
+    if (invalidIds.size > 0) {
+      setDbMsg({ ok: false, text: `Invalid ID(s) (use a-z 0-9 _ - only): ${[...invalidIds].join(', ')}` })
+      return
+    }
+    setDbBusy(true)
+    try {
+      await invoke('save_databases', { body: { databases: dbRows } })
+      const results = await invoke('connect_all_databases')
+      const next = {}
+      ;(results || []).forEach(r => { next[r.id] = { ok: !!r.ok, message: r.message || '' } })
+      setDbStatus(next)
+      const failed = (results || []).filter(r => !r.ok)
+      if (failed.length === 0) {
+        setDbMsg({ ok: true, text: `Saved & connected to ${results.length} database${results.length === 1 ? '' : 's'}.` })
+        setConnected(true)
+      } else {
+        setDbMsg({
+          ok: false,
+          text: `Saved, but ${failed.length} of ${results.length} failed to connect — see per-row status below.`,
+        })
+        // The connected flag is true if at least the primary MSSQL succeeded.
+        const firstMssql = results.find(r => {
+          const row = dbRows.find(rr => rr.id === r.id)
+          return row?.type === 'mssql'
+        })
+        setConnected(!!firstMssql?.ok)
+      }
+    } catch (err) {
+      setDbMsg({ ok: false, text: String(err) })
+    } finally {
+      setDbBusy(false)
+    }
+  }
 
   // Load recent folders on mount + after every successful save.
   useEffect(() => {
@@ -189,51 +339,224 @@ export default function SettingsPage({ setPage }) {
         </button>
       </div>
 
-      {/* ── Database subtab ── */}
+      {/* ── Database subtab — multi-DB connector (issue #46) ── */}
       {tab === 'database' && (
-      <div className="card" style={{ maxWidth: 520, marginBottom: '1.5rem' }}>
-        <h3 className="section-title">Database Connection</h3>
+      <div className="card" style={{ maxWidth: 920, marginBottom: '1.5rem' }}>
+        <h3 className="section-title">Database connections</h3>
         <p className="hint" style={{ marginBottom: '0.75rem' }}>
-          Credentials are saved inside the project folder
-          (<code>GIRTool_settings.json</code>). Opening the folder later
-          auto-connects with these settings — no need to re-enter them.
+          Configure one or more databases for this project — typically several
+          MSSQL/GeoGIS servers and/or Access files.  Settings are saved inside
+          the project folder (<code>GIRTool_settings.json</code>) so opening
+          the folder later restores everything.
         </p>
-
-        <label>Server</label>
-        <input name="server" value={form.server} onChange={handle}
-               placeholder="e.g. DKLYDB08" />
-
-        <label>Database</label>
-        <input name="database" value={form.database} onChange={handle}
-               placeholder="e.g. GeoGIS2020" />
-
-        <label>Authentication</label>
-        <select name="auth_method" value={form.auth_method} onChange={handle}>
-          <option value="windows">Windows Authentication</option>
-          <option value="sql">SQL Server Authentication</option>
-        </select>
-
-        {form.auth_method === 'sql' && (
-          <>
-            <label>Username</label>
-            <input name="username" value={form.username} onChange={handle} />
-            <label>Password</label>
-            <input name="password" type="password" value={form.password} onChange={handle} />
-          </>
-        )}
-
-        <button onClick={connect} disabled={status === 'testing' || !form.output_folder} style={{ marginTop: '1rem' }}>
-          {status === 'testing' ? 'Connecting…' : 'Connect & Save'}
-        </button>
         {!form.output_folder && (
-          <p className="hint" style={{ marginTop: '0.5rem' }}>
-            Pick a project folder first (on the <strong>Project folder</strong> tab) — credentials are stored there.
+          <p className="hint" style={{ color: '#b45309', marginBottom: '0.75rem' }}>
+            ⚠ Pick a project folder first on the <strong>Project folder</strong> tab —
+            credentials are stored there, not in the registry.
           </p>
         )}
 
-        {message && (
-          <p className={`msg ${status === 'ok' ? 'ok' : 'err'}`}>{message}</p>
+        {/* Header row */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '110px 90px 1fr 130px 110px 100px 90px 32px',
+          gap: '0.4rem', alignItems: 'center',
+          padding: '0.25rem 0.5rem', fontWeight: 600, fontSize: '.78rem',
+          color: '#374151', borderBottom: '1px solid #e5e7eb',
+        }}>
+          <div>ID</div>
+          <div>Type</div>
+          <div>Connection</div>
+          <div>Auth / user</div>
+          <div>Query type</div>
+          <div>Status</div>
+          <div>Test</div>
+          <div></div>
+        </div>
+
+        {dbRows.map((row, idx) => {
+          const isDup = duplicateIds.has(row.id)
+          const isBad = !!row.id && !ID_RE.test(row.id)
+          const st    = dbStatus[row.id]
+          return (
+          <div key={idx} style={{
+            display: 'grid',
+            gridTemplateColumns: '110px 90px 1fr 130px 110px 100px 90px 32px',
+            gap: '0.4rem', alignItems: 'start',
+            padding: '0.4rem 0.5rem',
+            borderBottom: '1px solid #f1f5f9',
+            fontSize: '.82rem',
+          }}>
+            <input
+              value={row.id}
+              onChange={e => updateRow(idx, { id: e.target.value.trim() })}
+              placeholder="site_main"
+              style={{
+                marginBottom: 0,
+                borderColor: isDup || isBad ? '#ef4444' : undefined,
+              }}
+              title={isDup ? 'Duplicate ID' : isBad ? 'Allowed: a-z 0-9 _ -' : 'Unique short identifier'}
+            />
+            <select
+              value={row.type}
+              onChange={e => updateRow(idx, { type: e.target.value })}
+              style={{ marginBottom: 0 }}
+            >
+              <option value="mssql">MSSQL</option>
+              <option value="access">Access</option>
+            </select>
+
+            {/* Connection — different fields per type */}
+            {row.type === 'access' ? (
+              <div style={{ display: 'flex', gap: '0.25rem' }}>
+                <input
+                  value={row.file_path}
+                  onChange={e => updateRow(idx, { file_path: e.target.value })}
+                  placeholder="C:\Projects\fieldlab\local.accdb"
+                  style={{ flex: 1, marginBottom: 0 }}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => pickAccessPath(idx)}
+                  title="Browse for .accdb / .mdb"
+                  style={{ flexShrink: 0 }}
+                >
+                  📁
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.25rem' }}>
+                <input
+                  value={row.server}
+                  onChange={e => updateRow(idx, { server: e.target.value })}
+                  placeholder="server"
+                  style={{ marginBottom: 0 }}
+                />
+                <input
+                  value={row.database}
+                  onChange={e => updateRow(idx, { database: e.target.value })}
+                  placeholder="database"
+                  style={{ marginBottom: 0 }}
+                />
+              </div>
+            )}
+
+            {/* Auth / user (MSSQL only) */}
+            {row.type === 'access' ? (
+              <div style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '.78rem' }}>
+                — file path —
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <select
+                  value={row.auth_method}
+                  onChange={e => updateRow(idx, { auth_method: e.target.value })}
+                  style={{ marginBottom: 0 }}
+                >
+                  <option value="windows">Windows</option>
+                  <option value="sql">SQL Server</option>
+                </select>
+                {row.auth_method === 'sql' && (
+                  <>
+                    <input
+                      value={row.username}
+                      onChange={e => updateRow(idx, { username: e.target.value })}
+                      placeholder="username"
+                      style={{ marginBottom: 0 }}
+                    />
+                    <input
+                      type="password"
+                      value={row.password}
+                      onChange={e => updateRow(idx, { password: e.target.value })}
+                      placeholder="password"
+                      style={{ marginBottom: 0 }}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+
+            <input
+              value={row.query_type}
+              onChange={e => updateRow(idx, { query_type: e.target.value })}
+              placeholder="default"
+              style={{ marginBottom: 0 }}
+            />
+
+            <div style={{ fontSize: '1.1rem', textAlign: 'center', lineHeight: '1.6' }}>
+              {st === undefined ? '—' :
+               st.ok === null    ? '…' :
+               st.ok             ? <span title={st.message} style={{ color: '#16a34a' }}>✅</span>
+                                 : <span title={st.message} style={{ color: '#dc2626' }}>⚠️</span>}
+            </div>
+
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => testRow(idx)}
+              style={{ padding: '0.25rem 0.5rem', fontSize: '.78rem' }}
+              title="Test this connection"
+            >
+              Test
+            </button>
+
+            <button
+              type="button"
+              onClick={() => removeDbRow(idx)}
+              title="Remove this database"
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: '#dc2626', fontSize: '1rem', padding: 0,
+              }}
+            >
+              ×
+            </button>
+          </div>
+          )
+        })}
+
+        {dbRows.length === 0 && (
+          <p className="hint" style={{ padding: '1rem 0' }}>
+            No databases configured yet — click <strong>+ Add database</strong>.
+          </p>
         )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={addDbRow}
+          >
+            + Add database
+          </button>
+          <button
+            type="button"
+            onClick={saveAndConnectAll}
+            disabled={dbBusy || !form.output_folder}
+            title={!form.output_folder ? 'Pick a project folder first' : 'Save list & test all connections'}
+          >
+            {dbBusy ? 'Saving…' : 'Save & Connect all'}
+          </button>
+        </div>
+
+        {dbMsg && (
+          <p className={`msg ${dbMsg.ok ? 'ok' : 'err'}`}>{dbMsg.text}</p>
+        )}
+
+        {/* Legacy single-DB compat hint */}
+        <details style={{ marginTop: '1rem' }}>
+          <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: '.78rem' }}>
+            Older settings files (single <code>db</code> block)
+          </summary>
+          <p className="hint" style={{ marginTop: '0.5rem', fontSize: '.78rem' }}>
+            Settings files written by previous versions of GIRTool stored a single
+            <code> db </code> block.  When you open such a folder, that block is
+            automatically migrated to a one-row <code>databases</code> list — you'll
+            see it appear here as <code>primary</code>.  Save once to commit the
+            migration.
+          </p>
+        </details>
       </div>
       )}
 

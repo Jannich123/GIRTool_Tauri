@@ -9,7 +9,20 @@ use odbc_api::{ConnectionOptions, Cursor, DataType, Environment, ResultSetMetada
 use serde_json::{Map, Value};
 
 /// Build an ODBC connection string from the stored config.
+///
+/// Switches on `cfg.db_type`:
+///   * `"mssql"` (default / legacy) → SQL Server ODBC Driver 17
+///   * `"access"`                   → Microsoft Access Driver (*.mdb, *.accdb)
 pub fn connection_string(cfg: &DbConfig) -> String {
+    if cfg.db_type.eq_ignore_ascii_case("access") {
+        // Access uses a file path (DBQ) instead of server/database.
+        return format!(
+            "Driver={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={};",
+            cfg.file_path
+        );
+    }
+
+    // MSSQL (default).
     let auth = if cfg.auth_method == "windows" {
         "Trusted_Connection=yes;".to_string()
     } else {
@@ -22,6 +35,12 @@ pub fn connection_string(cfg: &DbConfig) -> String {
 }
 
 /// Open a one-shot ODBC connection and verify it works.
+///
+/// For Access, when the driver is not installed the underlying ODBC error
+/// surfaces as "IM002 Data source name not found and no default driver
+/// specified" — the caller (e.g. `test_database`) is responsible for adding
+/// a friendly hint that points the user at the Microsoft Access Database
+/// Engine 2016 Redistributable when it sees that pattern.
 pub fn test_connection(cfg: &DbConfig) -> Result<()> {
     let env = Environment::new().context("ODBC Environment init failed")?;
     let conn_str = connection_string(cfg);
