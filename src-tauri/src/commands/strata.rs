@@ -49,7 +49,7 @@ use rust_xlsxwriter::{
 };
 
 use crate::commands::query_configs::{
-    current_query_type, lookup_sql, SECTION_STRATA_DOWNLOAD, SECTION_STRATA_SERIES,
+    lookup_sql, SECTION_STRATA_DOWNLOAD, SECTION_STRATA_SERIES,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -220,10 +220,15 @@ fn safe_str(v: &str) -> String {
 
 // ── Pydantic-equivalent payload types ─────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct StrataSelection {
     pub interpretation: String,
     pub series: String,
+    /// Multi-DB routing (issue #48).  When set, the query for this selection
+    /// only runs against the database with the matching id; when missing it
+    /// falls back to running against every active database in parallel.
+    #[serde(default)]
+    pub db_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -755,36 +760,55 @@ pub async fn get_strata_types(
         return Ok(Vec::new());
     }
 
-    let cfg = state
-        .db
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "No database connection configured.".to_string())?;
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
+    }
 
     let project_ids_sql = ids_clause(&req.project_ids)?;
-    let point_filter = point_filter_clause(&req.point_ids)?;
+    let point_filter    = point_filter_clause(&req.point_ids)?;
 
-    // SQL override lookup (Settings → Query Config, issue #47); falls back to
-    // the hardcoded `TYPES_SQL` template above.
-    let qt     = current_query_type(&state);
+    // Build per-DB (cfg, sql) pairs — each DB resolves its own SQL template via
+    // its `query_type` (Settings → Query Config, issue #47), falling back to
+    // the hardcoded `TYPES_SQL` above.  Then we inject the project_ids /
+    // point_filter clauses.
     let folder = state.output_folder().unwrap_or_default();
-    let template = lookup_sql(&folder, SECTION_STRATA_SERIES, &qt)
-        .unwrap_or_else(|| TYPES_SQL.to_string());
-    let sql = template
-        .replace("{project_ids}", &project_ids_sql)
-        .replace("{point_filter}", &point_filter);
+    let pairs: Vec<(crate::state::DbConfig, String)> = databases
+        .into_iter()
+        .map(|d| {
+            let template = lookup_sql(&folder, SECTION_STRATA_SERIES, &d.query_type)
+                .unwrap_or_else(|| TYPES_SQL.to_string());
+            let sql = template
+                .replace("{project_ids}", &project_ids_sql)
+                .replace("{point_filter}", &point_filter);
+            (d, sql)
+        })
+        .collect();
 
-    let rows = tokio::task::spawn_blocking(move || crate::db::query_rows(&cfg, &sql))
-        .await
-        .map_err(|e| format!("internal task error: {e}"))?
-        .map_err(|e| format!("{e:#}"))?;
+    // Fan out across all DBs in parallel; each row comes back with a `db_id`
+    // prefix so the UI knows which DB the series came from (issue #48).
+    let mut errors = Vec::new();
+    let rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
 
+    if rows.is_empty() && !errors.is_empty() {
+        let first = errors.first()
+            .and_then(|e| e.get("error"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "All databases failed.".into());
+        return Err(first);
+    }
     Ok(rows)
 }
 
 /// Fetch layer rows for the selected strata types.
 /// Result shape: `{ "<series>||<interpretation>": [rows...], ... }`
+///
+/// As of issue #48 each selection carries an optional `db_id` produced by
+/// `get_strata_types` — the query for that selection only runs against the
+/// matching DB.  Selections without a `db_id` fall back to fanning out across
+/// every active database in parallel.  Rows are prepended with `db_id` so the
+/// frontend / Strata page can tell them apart.
 #[tauri::command]
 pub async fn get_strata_data(
     body: StrataRequest,
@@ -793,49 +817,69 @@ pub async fn get_strata_data(
     if body.selections.is_empty() {
         return Err("No strata types selected.".into());
     }
-
-    let cfg = state
-        .db
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "No database connection configured.".to_string())?;
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
+    }
 
     let project_ids_sql = ids_clause(&body.project_ids)?;
-    let point_filter = point_filter_clause(&body.point_ids)?;
+    let point_filter    = point_filter_clause(&body.point_ids)?;
+    let folder          = state.output_folder().unwrap_or_default();
 
-    // SQL override lookup (issue #47) — pre-resolve once so each spawn_blocking
-    // task uses the same template.
-    let qt     = current_query_type(&state);
-    let folder = state.output_folder().unwrap_or_default();
-    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &qt)
-        .unwrap_or_else(|| DATA_SQL.to_string());
-
-    let cfg_clone = cfg.clone();
     let selections = body.selections;
-    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Map<String, Value>, String> {
-        let mut out = serde_json::Map::new();
-        for sel in &selections {
-            let sql = template
-                .replace("{project_ids}", &project_ids_sql)
-                .replace("{point_filter}", &point_filter)
-                .replace("{series}", &safe_str(&sel.series))
-                .replace("{interpretation}", &safe_str(&sel.interpretation));
-            let rows =
-                crate::db::query_rows(&cfg_clone, &sql).map_err(|e| format!("{e:#}"))?;
-            let key = format!("{}||{}", sel.series, sel.interpretation);
-            out.insert(key, Value::Array(rows));
-        }
-        Ok(out)
-    })
-    .await
-    .map_err(|e| format!("internal task error: {e}"))??;
+    let mut out = serde_json::Map::new();
 
-    Ok(Value::Object(result))
+    for sel in selections {
+        // Route by db_id when present; else fan out across every DB.
+        let targets: Vec<crate::state::DbConfig> = match &sel.db_id {
+            Some(id) => match crate::commands::multi_db::find_database_by_id(&state, id) {
+                Some(db) => vec![db],
+                None     => Vec::new(),
+            },
+            None => databases.clone(),
+        };
+
+        // Each target DB resolves its own SQL template via `query_type` (#47),
+        // then we inject the per-selection clauses.  Falls back to `DATA_SQL`.
+        let pairs: Vec<(crate::state::DbConfig, String)> = targets
+            .into_iter()
+            .map(|d| {
+                let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &d.query_type)
+                    .unwrap_or_else(|| DATA_SQL.to_string());
+                let sql = template
+                    .replace("{project_ids}", &project_ids_sql)
+                    .replace("{point_filter}", &point_filter)
+                    .replace("{series}", &safe_str(&sel.series))
+                    .replace("{interpretation}", &safe_str(&sel.interpretation));
+                (d, sql)
+            })
+            .collect();
+
+        let mut errors = Vec::new();
+        let rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
+
+        let key = format!("{}||{}", sel.series, sel.interpretation);
+        out.insert(key, Value::Array(rows));
+    }
+
+    Ok(Value::Object(out))
 }
 
 /// Add strata data sheets to the existing strata.xlsx.
 /// Returns 409-equivalent error if any target sheet name already exists.
+///
+/// As of issue #48, when a selection carries a `db_id` only that database is
+/// queried for it; otherwise the query fans out across every active DB and
+/// the rows are concatenated.  Each selection still maps to a single sheet
+/// in strata.xlsx named `{interpretation}_{series}`.
+///
+/// NOTE: the on-disk strata.xlsx is still 11 columns (no `db_id` column) —
+/// the schema bump to 12 columns is tracked as a follow-up.  In the
+/// meantime, multi-DB downloads that hit the same `(interpretation, series)`
+/// pair on different DBs will concatenate rows into one sheet without a way
+/// to tell them apart visually.  The READ side already keys by
+/// `(db_id, point_id)` via `load_strata_lookup` to avoid collisions in
+/// downstream code.
 #[tauri::command]
 pub async fn download_strata(
     body: StrataRequest,
@@ -844,12 +888,10 @@ pub async fn download_strata(
     if body.selections.is_empty() {
         return Err("No strata types selected.".into());
     }
-    let cfg = state
-        .db
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "No database connection configured.".to_string())?;
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
+    }
     let folder = state.output_folder().ok_or("No output folder configured.")?;
     let path = strata_xlsx_path(&folder);
 
@@ -883,38 +925,54 @@ pub async fn download_strata(
 
     // Build SQL clauses on the main thread (cheap, validating).
     let project_ids_sql = ids_clause(&body.project_ids)?;
-    let point_filter = point_filter_clause(&body.point_ids)?;
+    let point_filter    = point_filter_clause(&body.point_ids)?;
 
-    // SQL override lookup (issue #47).
-    let qt = current_query_type(&state);
-    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &qt)
-        .unwrap_or_else(|| DATA_SQL.to_string());
+    // For each selection, gather the rows from the routed DB(s) and stash
+    // them under the target sheet name.  Routing rules:
+    //   * selection has `db_id` → only that DB is queried
+    //   * selection has no `db_id` → fan out across every active DB
+    //   * SQL template per DB comes from `lookup_sql(SECTION_STRATA_DOWNLOAD,
+    //     db.query_type)` (issue #47), falling back to the hardcoded `DATA_SQL`.
+    let mut new_sheets: Vec<(String, Vec<StrataRow>)> = Vec::with_capacity(body.selections.len());
+    for (i, sel) in body.selections.iter().enumerate() {
+        let targets: Vec<crate::state::DbConfig> = match &sel.db_id {
+            Some(id) => match crate::commands::multi_db::find_database_by_id(&state, id) {
+                Some(db) => vec![db],
+                None     => Vec::new(),
+            },
+            None => databases.clone(),
+        };
 
-    // Fetch rows per selection, then add sheets.
+        let pairs: Vec<(crate::state::DbConfig, String)> = targets
+            .into_iter()
+            .map(|d| {
+                let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &d.query_type)
+                    .unwrap_or_else(|| DATA_SQL.to_string());
+                let sql = template
+                    .replace("{project_ids}", &project_ids_sql)
+                    .replace("{point_filter}", &point_filter)
+                    .replace("{series}", &safe_str(&sel.series))
+                    .replace("{interpretation}", &safe_str(&sel.interpretation));
+                (d, sql)
+            })
+            .collect();
+
+        let mut errors = Vec::new();
+        let rows_json = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
+
+        let rows: Vec<StrataRow> = rows_json
+            .into_iter()
+            .filter_map(|v| serde_json::from_value::<StrataRow>(v).ok())
+            .collect();
+        new_sheets.push((desired_names[i].clone(), rows));
+    }
+
+    // Write the sheets to strata.xlsx (still 11 columns — db_id column on
+    // the WRITE side is a follow-up).
     let path_clone = path.clone();
-    let names_clone = desired_names.clone();
-    let cfg_clone = cfg.clone();
-    let selections = body.selections;
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut new_sheets: Vec<(String, Vec<StrataRow>)> = Vec::with_capacity(selections.len());
-        for (i, sel) in selections.iter().enumerate() {
-            let sql = template
-                .replace("{project_ids}", &project_ids_sql)
-                .replace("{point_filter}", &point_filter)
-                .replace("{series}", &safe_str(&sel.series))
-                .replace("{interpretation}", &safe_str(&sel.interpretation));
-            let rows_json =
-                crate::db::query_rows(&cfg_clone, &sql).map_err(|e| format!("{e:#}"))?;
-            let rows: Vec<StrataRow> = rows_json
-                .into_iter()
-                .filter_map(|v| serde_json::from_value::<StrataRow>(v).ok())
-                .collect();
-            new_sheets.push((names_clone[i].clone(), rows));
-        }
-        add_data_sheets(&path_clone, &new_sheets)
-    })
-    .await
-    .map_err(|e| format!("internal task error: {e}"))??;
+    tokio::task::spawn_blocking(move || add_data_sheets(&path_clone, &new_sheets))
+        .await
+        .map_err(|e| format!("internal task error: {e}"))??;
 
     Ok(json!({ "path": path.display().to_string(), "sheets": desired_names }))
 }

@@ -165,7 +165,12 @@ export default function GroupingPage() {
   useEffect(() => {
     if (!selectedProjects.length) { setPoints([]); return }
     setPointsLoading(true)
-    invoke('get_points', { projectIds: selectedProjects.map(p => p.ProjectId) })
+    // Issue #48: forward db_id when present so the backend routes per-DB.
+    invoke('get_points', {
+      projectIds: selectedProjects.some(p => p?.db_id)
+        ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+        : selectedProjects.map(p => p.ProjectId),
+    })
       .then(r => setPoints(r || []))
       .catch(() => setPoints([]))
       .finally(() => setPointsLoading(false))

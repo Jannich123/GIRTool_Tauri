@@ -64,6 +64,13 @@ impl DbConfig {
     pub fn is_mssql(&self) -> bool {
         self.db_type.is_empty() || self.db_type.eq_ignore_ascii_case("mssql")
     }
+
+    /// Return the effective `id` for this DB, falling back to `"primary"` on
+    /// the legacy single-DB entry that has no explicit id.  Used as the
+    /// `db_id` column prefix by the multi-DB fan-out (issue #48).
+    pub fn effective_id(&self) -> String {
+        if self.id.is_empty() { "primary".to_string() } else { self.id.clone() }
+    }
 }
 
 // ── SharePoint state ──────────────────────────────────────────────────────────

@@ -130,13 +130,25 @@ fn build_sql(
 /// per-project JSON store but is ignored — strata.xlsx is shared across
 /// projects, matching the Python build.
 ///
-/// Returns a map of pointId → sorted Vec<(from, to, primary, secondary)>.
+/// Returns a map of `(db_id, point_id)` → sorted `Vec<(from, to, primary, secondary)>`.
+///
+/// As of issue #48 the lookup key is a compound `(db_id, point_id)` pair so
+/// that two GUIDs from different databases never collide.  The function
+/// accepts BOTH on-disk schemas:
+///   * Legacy 11-column: `ProjectId | PointId | PointNo | From | To | Primary | Secondary | ...`
+///     — every row is keyed as `(LEGACY_DB_ID, point_id)` so existing files
+///     keep working.
+///   * New 12-column: `db_id | ProjectId | PointId | PointNo | From | To | Primary | Secondary | ...`
+///     — each row is keyed as `(<db_id>, point_id)`.
+/// Detection is done by reading the header row of the "Strata" sheet.
+///
 /// Returns an empty map when the file is absent or has no usable rows.
 pub(crate) fn load_strata_lookup(
     output_folder: &str,
     _project_id: &str,
-) -> HashMap<String, Vec<(f64, f64, String, String)>> {
+) -> HashMap<(String, String), Vec<(f64, f64, String, String)>> {
     use calamine::open_workbook_auto;
+    use crate::commands::multi_db::LEGACY_DB_ID;
 
     let path = PathBuf::from(output_folder).join("strata.xlsx");
     if !path.exists() {
@@ -152,47 +164,75 @@ pub(crate) fn load_strata_lookup(
         Err(_) => return HashMap::new(),
     };
 
-    let mut lookup: HashMap<String, Vec<(f64, f64, String, String)>> = HashMap::new();
+    // Detect schema by looking at the first header.  When it equals "db_id"
+    // (case-insensitive) the file uses the new 12-column layout, so all
+    // downstream column indices shift right by one.
+    let mut rows_iter = range.rows();
+    let has_db_id_col = rows_iter
+        .next()
+        .and_then(|hdr| hdr.first())
+        .map(|cell| match cell {
+            Data::String(s) => s.eq_ignore_ascii_case("db_id"),
+            _ => false,
+        })
+        .unwrap_or(false);
+    let off: usize = if has_db_id_col { 1 } else { 0 };
 
-    // Columns: A=ProjectId B=PointId C=PointNo D=From E=To F=Primary G=Secondary
-    for row in range.rows().skip(1) {
-        let pid = match row.get(1) {
-            Some(Data::String(s)) if !s.is_empty() => s.clone(),
-            Some(Data::Int(i))                     => i.to_string(),
-            Some(Data::Float(f))                   => {
-                if f.fract() == 0.0 { format!("{}", *f as i64) } else { f.to_string() }
-            }
-            _ => continue,
+    let mut lookup: HashMap<(String, String), Vec<(f64, f64, String, String)>> = HashMap::new();
+
+    fn cell_to_string(cell: Option<&Data>) -> Option<String> {
+        cell.and_then(|c| match c {
+            Data::String(s) if !s.is_empty() => Some(s.clone()),
+            Data::Int(i)                     => Some(i.to_string()),
+            Data::Float(f)                   => Some(
+                if f.fract() == 0.0 { format!("{}", *f as i64) } else { f.to_string() },
+            ),
+            _ => None,
+        })
+    }
+
+    for row in rows_iter {
+        let db_id = if has_db_id_col {
+            cell_to_string(row.first()).unwrap_or_else(|| LEGACY_DB_ID.to_string())
+        } else {
+            LEGACY_DB_ID.to_string()
         };
-        let from = match row.get(3) {
+        let pid = match cell_to_string(row.get(1 + off)) {
+            Some(s) => s,
+            None    => continue,
+        };
+        let from = match row.get(3 + off) {
             Some(Data::Float(f)) => *f,
             Some(Data::Int(i))   => *i as f64,
             _ => continue,
         };
-        let to = match row.get(4) {
+        let to = match row.get(4 + off) {
             Some(Data::Float(f)) => *f,
             Some(Data::Int(i))   => *i as f64,
             _ => continue,
         };
         let primary = row
-            .get(5)
+            .get(5 + off)
             .and_then(|c| match c {
                 Data::String(s) if !s.is_empty() => Some(s.clone()),
                 _ => None,
             })
             .unwrap_or_else(|| "Unknown".to_string());
         let secondary = row
-            .get(6)
+            .get(6 + off)
             .and_then(|c| match c {
                 Data::String(s) if !s.is_empty() => Some(s.clone()),
                 _ => None,
             })
             .unwrap_or_else(|| "Unknown".to_string());
 
-        lookup.entry(pid).or_default().push((from, to, primary, secondary));
+        lookup
+            .entry((db_id, pid))
+            .or_default()
+            .push((from, to, primary, secondary));
     }
 
-    // Sort each point's intervals by depth-from.
+    // Sort each (db_id, point_id) bucket by depth-from.
     for intervals in lookup.values_mut() {
         intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     }
@@ -200,13 +240,28 @@ pub(crate) fn load_strata_lookup(
     lookup
 }
 
-/// Return the strata label (primary, secondary) for a given pointId + depth.
+/// Return the strata label `(primary, secondary)` for a given `(db_id, pointId, depth)`.
+///
+/// The lookup falls back to `LEGACY_DB_ID` if the row has no `db_id` value —
+/// matches what `load_strata_lookup` writes for legacy 11-column files.
 fn strata_at(
-    lookup: &HashMap<String, Vec<(f64, f64, String, String)>>,
+    lookup: &HashMap<(String, String), Vec<(f64, f64, String, String)>>,
+    db_id: &str,
     point_id: &str,
     depth: f64,
 ) -> (String, String) {
-    if let Some(intervals) = lookup.get(point_id) {
+    use crate::commands::multi_db::LEGACY_DB_ID;
+    let mut key = (db_id.to_string(), point_id.to_string());
+    let intervals = lookup
+        .get(&key)
+        .or_else(|| {
+            // Fall back to LEGACY_DB_ID when the row's db_id is unknown to the
+            // lookup — gives single-DB callers (no db_id column on rows) the
+            // expected behaviour.
+            key.0 = LEGACY_DB_ID.to_string();
+            lookup.get(&key)
+        });
+    if let Some(intervals) = intervals {
         for (from, to, primary, secondary) in intervals {
             if depth >= *from && depth < *to {
                 return (primary.clone(), secondary.clone());
@@ -217,14 +272,20 @@ fn strata_at(
 }
 
 /// Extract PointId + Depth from a row-object, inject Primary/Secondary Layer columns.
+///
+/// As of issue #48 the strata lookup is keyed by `(db_id, point_id)`.  Each
+/// row's db_id is taken from the optional `db_id` column (case-insensitive
+/// lookup); rows without one fall back to `LEGACY_DB_ID`.
 pub(crate) fn apply_strata_columns(
     columns: &mut Vec<String>,
     rows: &mut Vec<Vec<Value>>,
-    strata_lookup: &HashMap<String, Vec<(f64, f64, String, String)>>,
+    strata_lookup: &HashMap<(String, String), Vec<(f64, f64, String, String)>>,
 ) {
+    use crate::commands::multi_db::LEGACY_DB_ID;
     let col_lower: Vec<String> = columns.iter().map(|c| c.to_lowercase()).collect();
 
-    let pt_idx: Option<usize> = col_lower.iter().position(|c| c == "pointid");
+    let db_idx: Option<usize>    = col_lower.iter().position(|c| c == "db_id");
+    let pt_idx: Option<usize>    = col_lower.iter().position(|c| c == "pointid");
     let depth_idx: Option<usize> = col_lower
         .iter()
         .position(|c| c == "depth")
@@ -240,7 +301,10 @@ pub(crate) fn apply_strata_columns(
                 Value::Number(n) => n.as_f64()?,
                 _ => return None,
             };
-            Some(strata_at(strata_lookup, &pid, depth))
+            let db_id = db_idx
+                .and_then(|i| row.get(i).and_then(|v| v.as_str()).map(str::to_string))
+                .unwrap_or_else(|| LEGACY_DB_ID.to_string());
+            Some(strata_at(strata_lookup, &db_id, &pid, depth))
         })();
         let (primary, secondary) = result.unwrap_or_else(|| ("Unknown".to_string(), "Unknown".to_string()));
         row.push(Value::String(primary));
@@ -1051,6 +1115,8 @@ pub(crate) fn apply_group_columns(
     columns: &mut Vec<String>,
     rows: &mut Vec<Vec<Value>>,
 ) {
+    use crate::commands::multi_db::LEGACY_DB_ID;
+
     let path = PathBuf::from(output_folder).join("Grouping.xlsx");
     if !path.exists() {
         return;
@@ -1076,10 +1142,17 @@ pub(crate) fn apply_group_columns(
         None => return,
     };
 
-    // Columns beyond the fixed 5 are system-name columns.
-    let skip: HashSet<&str> = ["PointId", "PointNo", "ProjectNo", "ProjectName", "PointType"]
-        .into_iter()
-        .collect();
+    // Optional `db_id` column (issue #48).  When present, point assignments
+    // are keyed by `(db_id, point_id)` so the same PointId from different
+    // databases doesn't collide.  Legacy 5-fixed-cols files use LEGACY_DB_ID.
+    let db_idx = headers
+        .iter()
+        .position(|h| h.eq_ignore_ascii_case("db_id"));
+
+    // Columns beyond the fixed five (plus optional db_id) are system-name columns.
+    let mut skip: HashSet<&str> =
+        ["PointId", "PointNo", "ProjectNo", "ProjectName", "PointType"].into_iter().collect();
+    skip.insert("db_id");
     let sys_cols: Vec<(usize, String)> = headers
         .iter()
         .enumerate()
@@ -1091,8 +1164,8 @@ pub(crate) fn apply_group_columns(
         return;
     }
 
-    // Build pointId → { sys_name → value } from the xlsx data rows.
-    let mut assignments: HashMap<String, HashMap<String, String>> = HashMap::new();
+    // Build (db_id, pointId) → { sys_name → value } from the xlsx data rows.
+    let mut assignments: HashMap<(String, String), HashMap<String, String>> = HashMap::new();
     for row in iter {
         let pid = match row.get(pid_idx) {
             Some(c) if !matches!(c, Data::Empty) => data_str(c),
@@ -1101,6 +1174,12 @@ pub(crate) fn apply_group_columns(
         if pid.is_empty() {
             continue;
         }
+        let db_id = db_idx
+            .and_then(|i| row.get(i))
+            .map(data_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| LEGACY_DB_ID.to_string());
+
         let mut entry = HashMap::new();
         for (ci, sys_name) in &sys_cols {
             if let Some(cell) = row.get(*ci) {
@@ -1110,7 +1189,7 @@ pub(crate) fn apply_group_columns(
                 }
             }
         }
-        assignments.insert(pid, entry);
+        assignments.insert((db_id, pid), entry);
     }
 
     // Find PointId in the SQL result (case-insensitive).
@@ -1118,6 +1197,8 @@ pub(crate) fn apply_group_columns(
         Some(i) => i,
         None => return,
     };
+    // Optional db_id column in the SQL result (added by multi_db fan-out).
+    let result_db_idx = columns.iter().position(|c| c.eq_ignore_ascii_case("db_id"));
 
     // Append system columns to the header.
     for (_, sys_name) in &sys_cols {
@@ -1130,10 +1211,20 @@ pub(crate) fn apply_group_columns(
             .get(result_pid_idx)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let db_id = result_db_idx
+            .and_then(|i| row.get(i).and_then(|v| v.as_str()).map(str::to_string))
+            .unwrap_or_else(|| LEGACY_DB_ID.to_string());
+
         for (_, sys_name) in &sys_cols {
+            // Prefer exact (db_id, pid) match; fall back to (LEGACY, pid) so
+            // rows from a single-DB user with no db_id column still resolve.
             let val = pid
                 .as_ref()
-                .and_then(|p| assignments.get(p))
+                .and_then(|p| {
+                    assignments
+                        .get(&(db_id.clone(), p.clone()))
+                        .or_else(|| assignments.get(&(LEGACY_DB_ID.to_string(), p.clone())))
+                })
                 .and_then(|m| m.get(sys_name))
                 .cloned()
                 .unwrap_or_else(|| "Unknown".to_string());
