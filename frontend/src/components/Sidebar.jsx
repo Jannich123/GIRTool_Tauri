@@ -17,9 +17,25 @@ const NAV_MAIN = [
 
 const DATA_PAGES = new Set(['strata', 'data', 'grouping', 'colors', 'charts', 'map', 'boundaries'])
 
+// Extract the folder basename for display in the sidebar — e.g. for
+// `C:\Users\jgry\Projects\MyProject` returns `"MyProject"`.  Handles both
+// `\` and `/` separators and strips any trailing slashes.
+function folderBasename(path) {
+  if (!path) return ''
+  const parts = String(path).split(/[\\/]+/).filter(Boolean)
+  return parts[parts.length - 1] || ''
+}
+
 export default function Sidebar({ page, setPage }) {
-  const { connected, selectedProjects, bumpRefresh } = useApp()
+  const { connection, selectedProjects, bumpRefresh } = useApp()
   const [refreshing, setRefreshing] = useState(false)
+
+  // Issue #68: the sidebar status reflects the active *project folder*, not
+  // the database connection.  The folder is the user's workspace (holds
+  // queries.json, strata.xlsx, settings, exports); the DB is just a data
+  // source.  Green when `connection.output_folder` is set.
+  const folderName     = folderBasename(connection?.output_folder)
+  const folderActive   = !!folderName
 
   async function handleRefresh() {
     if (!selectedProjects.length) return
@@ -39,21 +55,15 @@ export default function Sidebar({ page, setPage }) {
         <span>GIRTool</span>
       </div>
 
-      <div className="sidebar-status">
-        <span className={`dot ${connected ? 'green' : 'red'}`} />
-        {connected ? 'Connected' : 'Not connected'}
+      <div
+        className="sidebar-status"
+        title={folderActive
+          ? `Project folder: ${connection.output_folder}`
+          : 'Pick a project folder in Settings → Project folder'}
+      >
+        <span className={`dot ${folderActive ? 'green' : 'red'}`} />
+        {folderActive ? folderName : 'No project folder'}
       </div>
-
-      {selectedProjects.length > 0 && (
-        <div className="sidebar-projects">
-          <div className="sidebar-section-label">Active projects</div>
-          {selectedProjects.map(p => (
-            <div key={p.ProjectId} className="sidebar-project-item">
-              {p.ProjectNo} – {p.Title}
-            </div>
-          ))}
-        </div>
-      )}
 
       <nav className="sidebar-nav">
         {NAV_MAIN.map(({ key, label }) => (
