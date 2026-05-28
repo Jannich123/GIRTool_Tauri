@@ -35,16 +35,24 @@ export default function SettingsPage({ setPage }) {
   // it drives everything else (DB credentials are loaded FROM the folder).
   const [tab, setTab] = useState('folder')
 
-  // ── Multi-DB state (loaded from list_databases on tab open) ────────────
+  // ── Multi-DB state (loaded from list_databases on first tab open) ──────
+  // `dbRows` is the in-memory edit buffer.  We load it from disk ONCE per
+  // app session — subsequent tab switches reuse the buffer so unsaved row
+  // additions / typed-in fields aren't blown away when the user pops over
+  // to Project folder or Query Config and back.  Persistence to disk only
+  // happens when the user clicks "Save & connect all" (issue #57).
   const [dbRows,     setDbRows]     = useState([])         // array of DB config rows
   const [dbStatus,   setDbStatus]   = useState({})         // id → { ok, message }
   const [dbBusy,     setDbBusy]     = useState(false)
   const [dbMsg,      setDbMsg]      = useState(null)       // { ok, text }
+  const [dbLoaded,   setDbLoaded]   = useState(false)      // first-load guard
 
-  // Load list whenever the Database tab is opened (and on first mount if
-  // the database tab is the active one).
+  // Load list the FIRST time the Database tab is opened in this session.
+  // After that the in-memory buffer is the source of truth until the user
+  // explicitly saves (which makes the buffer the new on-disk truth) or the
+  // app restarts.
   useEffect(() => {
-    if (tab !== 'database') return
+    if (tab !== 'database' || dbLoaded) return
     invoke('list_databases')
       .then(list => {
         const arr = Array.isArray(list) ? list : []
@@ -65,10 +73,14 @@ export default function SettingsPage({ setPage }) {
         }
         setDbStatus({})
         setDbMsg(null)
+        setDbLoaded(true)
       })
-      .catch(() => setDbRows([{ ...DEFAULT_DB_ROW(), id: 'primary' }]))
+      .catch(() => {
+        setDbRows([{ ...DEFAULT_DB_ROW(), id: 'primary' }])
+        setDbLoaded(true)
+      })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab])
+  }, [tab, dbLoaded])
 
   // Update a single field on one row.
   const updateRow = (idx, patch) =>
