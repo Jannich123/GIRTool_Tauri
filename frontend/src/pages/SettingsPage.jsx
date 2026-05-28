@@ -332,6 +332,27 @@ export default function SettingsPage({ setPage }) {
         dbErr = String(err || 'unknown error')
       }
 
+      // 3b. Also connect every saved multi-DB entry (issue #75) — the backend
+      //     reads GIRTool_settings.json::databases[] when its in-memory list
+      //     is empty, so the user doesn't have to open the Database tab and
+      //     hit "Save & connect all" to get points/strata flowing.  Silent
+      //     on total failure; partial failure surfaces in the status line.
+      let multiDb = { total: 0, okCount: 0, failCount: 0 }
+      try {
+        const results = await invoke('connect_all_databases')
+        if (Array.isArray(results) && results.length > 0) {
+          multiDb.total     = results.length
+          multiDb.okCount   = results.filter(r => r && r.ok).length
+          multiDb.failCount = multiDb.total - multiDb.okCount
+          // If at least one multi-DB connected, flip the "connected" flag on
+          // so downstream pages (Projects, Points, …) believe the app has a
+          // working data source even if the legacy single-DB connect failed.
+          if (multiDb.okCount > 0) setConnected(true)
+        }
+      } catch (err) {
+        console.warn('connect_all_databases failed; multi-DB not wired up:', err)
+      }
+
       // 4. Ensure strata.xlsx exists in this folder (fire and forget)
       invoke('ensure_strata_file').catch(() => {})
 
@@ -359,14 +380,20 @@ export default function SettingsPage({ setPage }) {
         : merged.server
             ? `DB offline (${dbErr || 'unreachable'}) — xlsx-only mode`
             : 'no DB configured for this folder yet'
+      const multiBit = multiDb.total > 0
+        ? ` · ${multiDb.okCount}/${multiDb.total} multi-DB${multiDb.failCount > 0 ? ` (${multiDb.failCount} failed)` : ''}`
+        : ''
       const sessionBit = (projects.length || points.length)
         ? ` · restored ${projects.length} project${projects.length === 1 ? '' : 's'}${points.length ? ` + ${points.length} point${points.length === 1 ? '' : 's'}` : ''}`
         : ''
-      setFolderStatus(dbOk || !merged.server ? 'ok' : 'warn')
-      setFolderMsg(`${folderRes.message} — ${dbBit}${sessionBit}`)
+      // The whole flow is "OK" if EITHER the legacy connect worked OR at
+      // least one multi-DB connected OR there's no DB configured at all.
+      const anyDbOk = dbOk || multiDb.okCount > 0
+      setFolderStatus(anyDbOk || !merged.server ? 'ok' : 'warn')
+      setFolderMsg(`${folderRes.message} — ${dbBit}${multiBit}${sessionBit}`)
 
-      // 7. Auto-navigate ONLY if DB succeeded and we have a selection.
-      if (dbOk && (projects.length || points.length) && setPage) {
+      // 7. Auto-navigate ONLY if at least one DB is up AND we have a selection.
+      if (anyDbOk && (projects.length || points.length) && setPage) {
         const target = points.length ? 'strata' : 'projects'
         setTimeout(() => setPage(target), 1200)
       }
