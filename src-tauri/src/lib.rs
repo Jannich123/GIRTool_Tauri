@@ -64,6 +64,7 @@ pub fn run() {
             commands::query_configs::save_query_configs,
             commands::query_configs::reset_query_config,
             commands::query_configs::get_builtin_sql_templates,
+            commands::query_configs::get_builtin_datasheet_queries,
             // grouping
             commands::grouping::list_group_systems,
             commands::grouping::save_group_systems,

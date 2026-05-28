@@ -43,7 +43,10 @@ fn default_no() -> String {
 
 // ── Default query set (matches backend/routers/queries.py DEFAULT_QUERIES) ───
 
-fn default_queries() -> Vec<Query> {
+/// Public to `commands/` so `query_configs::get_builtin_datasheet_queries`
+/// can surface the names + SQL to the Query Config UI (issue #60).  Same set
+/// the legacy Python build ships as `DEFAULT_QUERIES`.
+pub(crate) fn default_queries() -> Vec<Query> {
     serde_json::from_str(DEFAULT_QUERIES_JSON).unwrap_or_default()
 }
 

@@ -373,8 +373,8 @@ pub async fn reset_query_config(
 /// ```
 ///
 /// The `datasheet_queries` section deliberately has no entry here — its
-/// baseline lives in the user's `queries.json` (which the
-/// `migrate_queries_json` step folds into `query_configs.datasheet_queries.GeoGIS`).
+/// baseline lives in `commands::queries::default_queries()` and is exposed
+/// separately via `get_builtin_datasheet_queries`.
 #[tauri::command]
 pub fn get_builtin_sql_templates() -> serde_json::Value {
     serde_json::json!({
@@ -383,4 +383,20 @@ pub fn get_builtin_sql_templates() -> serde_json::Value {
         "strata_series":   crate::commands::strata::TYPES_SQL,
         "strata_download": crate::commands::strata::DATA_SQL,
     })
+}
+
+/// Built-in datasheet queries (issue #60).
+///
+/// Returns the 12 named queries hardcoded in
+/// `commands/queries.rs::DEFAULT_QUERIES_JSON` as a single object keyed by
+/// `fname` → `SQLScript`.  The Query Config UI uses this to pre-populate the
+/// `datasheet_queries` per-query-name dropdown under GeoGIS so the user sees
+/// every default name without needing a `queries.json` saved yet.
+#[tauri::command]
+pub fn get_builtin_datasheet_queries() -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for q in crate::commands::queries::default_queries() {
+        out.insert(q.fname, serde_json::Value::String(q.sql_script));
+    }
+    serde_json::Value::Object(out)
 }
