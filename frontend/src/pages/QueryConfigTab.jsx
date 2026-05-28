@@ -73,6 +73,14 @@ const SECTIONS = [
 // The built-in query type.  Always present, always first, never deletable.
 const GEOGIS = 'GeoGIS'
 
+// In-memory cache of which section <details> are currently expanded.  Lives
+// at module scope so it survives QueryConfigTab unmounting (when the user
+// flicks over to another Settings subtab and back) — issue #64.  Cleared
+// only when the WebView reloads (i.e. app restart), since module instances
+// are tied to the JS realm.  Default empty set = every section starts
+// closed on first mount.
+let rememberedOpenSec = new Set()
+
 // Frontend regex for validating user-added query-type names.
 const QT_NAME_RE = /^[A-Za-z0-9_-]+$/
 
@@ -84,7 +92,15 @@ export default function QueryConfigTab() {
   const [dirty,      setDirty]      = useState({})     // { "<section>/<qt>" or "<section>/<qt>/<qname>": true }
   const [busy,       setBusy]       = useState(false)
   const [msg,        setMsg]        = useState(null)   // { ok, text }
-  const [openSec,    setOpenSec]    = useState(() => new Set(['project_list']))
+  // Restore from the module-level cache so previously expanded sections
+  // stay expanded across tab unmounts (issue #64).  Empty on first mount.
+  const [openSec,    setOpenSec]    = useState(() => new Set(rememberedOpenSec))
+
+  // Mirror every change back into the module-level cache so the next mount
+  // (after a Settings sub-tab switch) picks up the user's last layout.
+  useEffect(() => {
+    rememberedOpenSec = new Set(openSec)
+  }, [openSec])
   // ONE active query type for the whole tab (replaces the old per-section state).
   const [activeQt,   setActiveQt]   = useState(GEOGIS)
   // "+ Add new…" inline input visible flag.
