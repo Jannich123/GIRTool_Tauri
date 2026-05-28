@@ -858,7 +858,14 @@ pub async fn get_strata_data(
         let mut errors = Vec::new();
         let rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
 
-        let key = format!("{}||{}", sel.series, sel.interpretation);
+        // Key shape must mirror the frontend's `selKey` in StrataPage.jsx
+        // (issue #66): `${db_id}||${series}||${interpretation}` — the 3-part
+        // form lets the same (series, interpretation) pair from two different
+        // databases appear as two distinct preview rows.  When `db_id` is
+        // absent (legacy / fan-out across all DBs) use the literal "?" so the
+        // key still matches the frontend's `s.db_id ?? '?'` fallback.
+        let db_id = sel.db_id.as_deref().unwrap_or("?");
+        let key = format!("{}||{}||{}", db_id, sel.series, sel.interpretation);
         out.insert(key, Value::Array(rows));
     }
 
