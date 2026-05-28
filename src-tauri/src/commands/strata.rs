@@ -1006,9 +1006,11 @@ pub async fn transfer_strata(
     let project_ids_sql = ids_clause(&body.project_ids)?;
     let point_filter = point_filter_clause(&body.point_ids)?;
 
-    // SQL override lookup (issue #47).
-    let qt = current_query_type(&state);
-    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &qt)
+    // SQL override lookup (issue #47) keyed on this DB's `query_type` (#46).
+    // NOTE: `transfer_strata` is still single-DB — the #48 multi-DB fan-out
+    // hasn't been applied here yet (the master sheet write-path needs a
+    // schema bump for db_id first).  Tracked as a follow-up.
+    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &cfg.query_type)
         .unwrap_or_else(|| DATA_SQL.to_string());
 
     let path_clone = path.clone();
