@@ -1564,6 +1564,10 @@ pub async fn download_data(
     // Load strata lookup once (used for apply_strata="Yes" queries).
     let strata_lookup = load_strata_lookup(&folder, &query.project_id);
 
+    // Resolve the active query_type once (issue #47).  Each query's SQL may
+    // be overridden via Settings → Query Config → Datasheet queries.
+    let qt = crate::commands::query_configs::current_query_type(&state);
+
     // Per-file results, structured to match the frontend's expected shape:
     //   { folder, saved: [{file, rows}], errors: [{file, error}] }
     let mut saved:  Vec<Value> = Vec::new();
@@ -1572,8 +1576,13 @@ pub async fn download_data(
     for q in queries_to_run {
         let xlsx_name = format!("{}.xlsx", q.fname);
 
+        // Override lookup: query_configs.datasheet_queries.<qt>.<fname>
+        // Falls back to the SQL stored in queries.json.
+        let raw_sql = crate::commands::query_configs::lookup_datasheet_sql(&folder, &qt, &q.fname)
+            .unwrap_or_else(|| q.sql_script.clone());
+
         let sql = match build_sql(
-            &q.sql_script,
+            &raw_sql,
             &q.pointfilter,
             &query.project_ids,
             &query.point_ids,

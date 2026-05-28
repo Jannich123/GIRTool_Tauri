@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import QueryConfigTab from './QueryConfigTab'
 
 // ── Multi-database tab (issue #46) ───────────────────────────────────────────
 // Defaults for a brand-new row.
@@ -29,9 +30,9 @@ export default function SettingsPage({ setPage }) {
   const [browsingFolder, setBrowsingFolder] = useState(false)
   const [restoredSession, setRestoredSession] = useState(null)
   const [recentFolders,   setRecentFolders]   = useState([])
-  // Subtab: 'folder' (project folder picker) or 'database' (DB connect).
-  // Folder is shown first because it now drives everything else (the DB
-  // credentials are loaded FROM the folder).
+  // Subtab: 'folder' (project folder picker), 'database' (DB connect), or
+  // 'queryConfig' (SQL overrides — issue #47).  Folder is shown first because
+  // it drives everything else (DB credentials are loaded FROM the folder).
   const [tab, setTab] = useState('folder')
 
   // ── Multi-DB state (loaded from list_databases on tab open) ────────────
@@ -324,7 +325,7 @@ export default function SettingsPage({ setPage }) {
       <h2 className="page-title">Settings</h2>
 
       {/* ── Subtab bar ── */}
-      <div className="settings-tabs" style={{ maxWidth: 520, marginBottom: '1rem' }}>
+      <div className="settings-tabs" style={{ maxWidth: 920, marginBottom: '1rem' }}>
         <button
           className={`settings-tab ${tab === 'folder' ? 'active' : ''}`}
           onClick={() => setTab('folder')}
@@ -337,7 +338,16 @@ export default function SettingsPage({ setPage }) {
         >
           🗄 Database
         </button>
+        <button
+          className={`settings-tab ${tab === 'queryConfig' ? 'active' : ''}`}
+          onClick={() => setTab('queryConfig')}
+        >
+          📝 Query Config
+        </button>
       </div>
+
+      {/* ── Query Config subtab (issue #47) ── */}
+      {tab === 'queryConfig' && <QueryConfigTab />}
 
       {/* ── Database subtab — multi-DB connector (issue #46) ── */}
       {tab === 'database' && (

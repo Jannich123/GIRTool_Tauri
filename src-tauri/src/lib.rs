@@ -59,6 +59,10 @@ pub fn run() {
             commands::queries::list_queries,
             commands::queries::save_query,
             commands::queries::delete_query,
+            // query_configs — overrides for hardcoded SQL (issue #47)
+            commands::query_configs::get_query_configs,
+            commands::query_configs::save_query_configs,
+            commands::query_configs::reset_query_config,
             // grouping
             commands::grouping::list_group_systems,
             commands::grouping::save_group_systems,
