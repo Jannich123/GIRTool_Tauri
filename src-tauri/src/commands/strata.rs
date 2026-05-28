@@ -47,6 +47,10 @@ use rust_xlsxwriter::{
     Color, ConditionalFormatFormula, Format, FormatAlign, Table, TableColumn, TableStyle,
     Workbook, Worksheet,
 };
+
+use crate::commands::query_configs::{
+    current_query_type, lookup_sql, SECTION_STRATA_DOWNLOAD, SECTION_STRATA_SERIES,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -760,7 +764,14 @@ pub async fn get_strata_types(
 
     let project_ids_sql = ids_clause(&req.project_ids)?;
     let point_filter = point_filter_clause(&req.point_ids)?;
-    let sql = TYPES_SQL
+
+    // SQL override lookup (Settings → Query Config, issue #47); falls back to
+    // the hardcoded `TYPES_SQL` template above.
+    let qt     = current_query_type(&state);
+    let folder = state.output_folder().unwrap_or_default();
+    let template = lookup_sql(&folder, SECTION_STRATA_SERIES, &qt)
+        .unwrap_or_else(|| TYPES_SQL.to_string());
+    let sql = template
         .replace("{project_ids}", &project_ids_sql)
         .replace("{point_filter}", &point_filter);
 
@@ -793,12 +804,19 @@ pub async fn get_strata_data(
     let project_ids_sql = ids_clause(&body.project_ids)?;
     let point_filter = point_filter_clause(&body.point_ids)?;
 
+    // SQL override lookup (issue #47) — pre-resolve once so each spawn_blocking
+    // task uses the same template.
+    let qt     = current_query_type(&state);
+    let folder = state.output_folder().unwrap_or_default();
+    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &qt)
+        .unwrap_or_else(|| DATA_SQL.to_string());
+
     let cfg_clone = cfg.clone();
     let selections = body.selections;
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Map<String, Value>, String> {
         let mut out = serde_json::Map::new();
         for sel in &selections {
-            let sql = DATA_SQL
+            let sql = template
                 .replace("{project_ids}", &project_ids_sql)
                 .replace("{point_filter}", &point_filter)
                 .replace("{series}", &safe_str(&sel.series))
@@ -867,6 +885,11 @@ pub async fn download_strata(
     let project_ids_sql = ids_clause(&body.project_ids)?;
     let point_filter = point_filter_clause(&body.point_ids)?;
 
+    // SQL override lookup (issue #47).
+    let qt = current_query_type(&state);
+    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &qt)
+        .unwrap_or_else(|| DATA_SQL.to_string());
+
     // Fetch rows per selection, then add sheets.
     let path_clone = path.clone();
     let names_clone = desired_names.clone();
@@ -875,7 +898,7 @@ pub async fn download_strata(
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut new_sheets: Vec<(String, Vec<StrataRow>)> = Vec::with_capacity(selections.len());
         for (i, sel) in selections.iter().enumerate() {
-            let sql = DATA_SQL
+            let sql = template
                 .replace("{project_ids}", &project_ids_sql)
                 .replace("{point_filter}", &point_filter)
                 .replace("{series}", &safe_str(&sel.series))
@@ -925,6 +948,11 @@ pub async fn transfer_strata(
     let project_ids_sql = ids_clause(&body.project_ids)?;
     let point_filter = point_filter_clause(&body.point_ids)?;
 
+    // SQL override lookup (issue #47).
+    let qt = current_query_type(&state);
+    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &qt)
+        .unwrap_or_else(|| DATA_SQL.to_string());
+
     let path_clone = path.clone();
     let cfg_clone = cfg.clone();
     let selections = body.selections;
@@ -945,7 +973,7 @@ pub async fn transfer_strata(
             // Fetch all new rows.
             let mut new_rows: Vec<StrataRow> = Vec::new();
             for sel in &selections {
-                let sql = DATA_SQL
+                let sql = template
                     .replace("{project_ids}", &project_ids_sql)
                     .replace("{point_filter}", &point_filter)
                     .replace("{series}", &safe_str(&sel.series))

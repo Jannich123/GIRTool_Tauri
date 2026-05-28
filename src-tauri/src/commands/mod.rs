@@ -2,6 +2,7 @@ pub mod database;
 pub mod projects;
 pub mod points;
 pub mod queries;
+pub mod query_configs;
 pub mod grouping;
 pub mod strata;
 pub mod download;

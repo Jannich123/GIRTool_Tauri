@@ -3,10 +3,18 @@
 // get_points fetches all investigation points for one or more project IDs.
 // Project IDs are validated as GUIDs or bare integers before interpolation
 // into the SQL IN clause (same whitelist approach as the Python build).
+//
+// SQL source:
+//   1. `query_configs.points_list.<query_type>` from GIRTool_settings.json
+//      (overridable per database type via Settings → Query Config — issue #47).
+//      The template must contain the literal `{ids}` placeholder which is
+//      replaced with the sanitised project-id list.
+//   2. Falls back to the hardcoded `POINTS_SQL` constant below.
 
 use serde_json::Value;
 use tauri::State;
 
+use crate::commands::query_configs::{current_query_type, lookup_sql, SECTION_POINTS_LIST};
 use crate::state::AppState;
 
 // Regex-free GUID check: 8-4-4-4-12 hex groups separated by '-'.
@@ -86,7 +94,13 @@ pub async fn get_points(
         .collect::<Result<Vec<_>, _>>()?;
 
     let ids_str = safe_ids.join(", ");
-    let sql = POINTS_SQL.replace("{ids}", &ids_str);
+
+    // Look up user override first; fall back to the hardcoded default.
+    let qt     = current_query_type(&state);
+    let folder = state.output_folder().unwrap_or_default();
+    let template = lookup_sql(&folder, SECTION_POINTS_LIST, &qt)
+        .unwrap_or_else(|| POINTS_SQL.to_string());
+    let sql = template.replace("{ids}", &ids_str);
 
     tokio::task::spawn_blocking(move || crate::db::query_rows(&cfg, &sql))
         .await
