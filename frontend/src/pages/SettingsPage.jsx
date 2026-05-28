@@ -577,8 +577,8 @@ export default function SettingsPage({ setPage }) {
         <h3 className="section-title">Project folder</h3>
         <p className="hint" style={{ marginBottom: '0.75rem' }}>
           Downloaded Excel files and session data will be saved here automatically.
-          When you test &amp; save the folder, the app looks for any existing session
-          and restores your project selection automatically.
+          When you connect the project folder, the app looks for any existing
+          session and restores your project selection automatically.
         </p>
 
         <label>Folder path</label>
@@ -599,6 +599,18 @@ export default function SettingsPage({ setPage }) {
             style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
           >
             {browsingFolder ? '…' : '📁 Browse'}
+          </button>
+        </div>
+
+        {/* Primary action — sits right under the folder path so it's the
+            first thing the user sees after typing/browsing. */}
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+          <button
+            onClick={testFolder}
+            disabled={!form.output_folder || folderStatus === 'testing'}
+            className="btn-secondary"
+          >
+            {folderStatus === 'testing' ? 'Connecting…' : 'Connect project folder'}
           </button>
         </div>
 
@@ -632,16 +644,6 @@ export default function SettingsPage({ setPage }) {
             </div>
           </div>
         )}
-
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-          <button
-            onClick={testFolder}
-            disabled={!form.output_folder || folderStatus === 'testing'}
-            className="btn-secondary"
-          >
-            {folderStatus === 'testing' ? 'Checking…' : 'Test & Save folder'}
-          </button>
-        </div>
 
         {folderMsg && (
           <p className={`msg ${
@@ -698,7 +700,7 @@ export default function SettingsPage({ setPage }) {
           </li>
           <li>
             Back in GIRTool, click <strong>📁 Browse</strong> next to the output
-            folder above and pick that local path. Hit <strong>Test &amp; Save folder</strong>.
+            folder above and pick that local path. Hit <strong>Connect project folder</strong>.
           </li>
           <li>
             You're done. Everything GIRTool writes (xlsx files, settings, etc.)
