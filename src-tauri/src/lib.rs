@@ -59,6 +59,10 @@ pub fn run() {
             commands::projects_xlsx::open_projects_xlsx,
             // points
             commands::points::get_points,
+            // points xlsx persistence (issue #77)
+            commands::points_xlsx::save_points_xlsx,
+            commands::points_xlsx::load_points_xlsx,
+            commands::points_xlsx::open_points_xlsx,
             // queries
             commands::queries::list_queries,
             commands::queries::save_query,
