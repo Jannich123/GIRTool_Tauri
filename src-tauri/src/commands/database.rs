@@ -264,7 +264,8 @@ pub async fn connect(
         username:      username.unwrap_or_default(),
         password:      password.unwrap_or_default(),
         file_path:     String::new(),
-        query_type:    "default".to_string(),
+        // Issue #52: default flavour is now "GeoGIS" (was "default").
+        query_type:    crate::commands::query_configs::DEFAULT_QUERY_TYPE.to_string(),
         output_folder: output_folder.unwrap_or_default(),
     };
 
@@ -474,7 +475,11 @@ fn migrate_legacy_db_block(settings: &mut serde_json::Map<String, serde_json::Va
     let mut entry = serde_json::Map::new();
     entry.insert("id".to_string(),         serde_json::json!("primary"));
     entry.insert("type".to_string(),       serde_json::json!("mssql"));
-    entry.insert("query_type".to_string(), serde_json::json!("default"));
+    // Issue #52: default flavour is now "GeoGIS" (was "default").
+    entry.insert(
+        "query_type".to_string(),
+        serde_json::json!(crate::commands::query_configs::DEFAULT_QUERY_TYPE),
+    );
     for k in ["server", "database", "auth_method", "username", "password", "output_folder"] {
         if let Some(v) = db.get(k) {
             entry.insert(k.to_string(), v.clone());

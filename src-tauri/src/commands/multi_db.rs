@@ -50,7 +50,9 @@ pub fn active_databases(state: &AppState) -> Vec<DbConfig> {
             primary.id = "primary".to_string();
         }
         if primary.query_type.is_empty() {
-            primary.query_type = "default".to_string();
+            // Issue #52: default flavour is now "GeoGIS" (was "default").
+            primary.query_type =
+                crate::commands::query_configs::DEFAULT_QUERY_TYPE.to_string();
         }
         return vec![primary];
     }
@@ -86,7 +88,11 @@ pub fn load_databases_from_settings(folder: &str) -> Vec<DbConfig> {
             let mut entry = Map::new();
             entry.insert("id".to_string(),         json!("primary"));
             entry.insert("type".to_string(),       json!("mssql"));
-            entry.insert("query_type".to_string(), json!("default"));
+            // Issue #52: default flavour is now "GeoGIS" (was "default").
+            entry.insert(
+                "query_type".to_string(),
+                json!(crate::commands::query_configs::DEFAULT_QUERY_TYPE),
+            );
             for k in ["server", "database", "auth_method", "username", "password", "output_folder"] {
                 if let Some(v) = db.get(k) {
                     entry.insert(k.to_string(), v.clone());
