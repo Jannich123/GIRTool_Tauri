@@ -1,6 +1,7 @@
 pub mod database;
 pub mod multi_db;
 pub mod projects;
+pub mod projects_xlsx;
 pub mod points;
 pub mod queries;
 pub mod query_configs;

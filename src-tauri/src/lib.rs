@@ -53,6 +53,10 @@ pub fn run() {
             commands::database::pick_access_file,
             // projects
             commands::projects::list_projects,
+            // projects xlsx persistence (issue #70)
+            commands::projects_xlsx::save_projects_xlsx,
+            commands::projects_xlsx::load_projects_xlsx,
+            commands::projects_xlsx::open_projects_xlsx,
             // points
             commands::points::get_points,
             // queries
