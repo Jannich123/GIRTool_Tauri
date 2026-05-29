@@ -223,10 +223,10 @@ export default function PointsPage({ setPage }) {
   async function confirm() {
     const selected = currentSelection()
     setSelectedPoints(selected)
-    // Persist point selection to GIRTool_settings.json (fire-and-forget).
-    invoke('save_selection', { selectedPoints: selected })
-      .catch(err => console.warn('save_selection failed:', err))
-    // Also persist to points.xlsx so the user can edit it / re-import (#77).
+    // Issue #91: points.xlsx is the SOLE persistence path for the point
+    // selection — no longer write to GIRTool_settings.json::selectedPoints.
+    // Cross-restart restoration flows through load_points_xlsx on Points
+    // page mount (#78).
     savePointsXlsx(selected).catch(() => {})
     // Strata tab is the natural next step — user picks interpretation/series
     // before downloading. Data tab is reachable from the sidebar afterwards.
