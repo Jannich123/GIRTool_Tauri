@@ -447,11 +447,19 @@ export default function ProjectsPage({ setPage }) {
       </div>
 
       {error && <p className="msg err">{error}</p>}
-      {xlsxMsg && (
-        <p className={`msg ${xlsxMsg.kind === 'err' ? 'err' : xlsxMsg.kind === 'warn' ? 'warn' : 'ok'}`}>
-          {xlsxMsg.text}
-        </p>
-      )}
+      {/* Issue #87: fixed-height slot so the auto-save banner appearing /
+          disappearing doesn't push the Selected / Available tables up and
+          down by one line every few seconds. */}
+      <div style={{ minHeight: '2.25rem', display: 'flex', alignItems: 'center' }}>
+        {xlsxMsg && (
+          <p
+            className={`msg ${xlsxMsg.kind === 'err' ? 'err' : xlsxMsg.kind === 'warn' ? 'warn' : 'ok'}`}
+            style={{ margin: 0 }}
+          >
+            {xlsxMsg.text}
+          </p>
+        )}
+      </div>
 
       {loading ? (
         <p className="hint">Loading…</p>
