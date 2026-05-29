@@ -18,29 +18,129 @@ function SortIcon({ col, sortCol, sortDir }) {
   return <span className="sort-icon active">{sortDir === 'asc' ? '↑' : '↓'}</span>
 }
 
+// ── DB pill ───────────────────────────────────────────────────────────────────
+
+function DbIdPill({ id }) {
+  return (
+    <code
+      style={{
+        fontSize: '.75rem',
+        padding: '0.08rem 0.5rem',
+        background: '#eef2ff',
+        color: '#3730a3',
+        border: '1px solid #c7d2fe',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+      }}
+      title="Database this project belongs to (configured in Settings → Database)"
+    >
+      {id || '?'}
+    </code>
+  )
+}
+
+// ── Inner table — shared by both Selected and Available (issue #81) ──────────
+//
+// `items`        rows to render in row order
+// `checkedFlag`  fixed visual state of every checkbox (true for the top table,
+//                false for the bottom).  The actual selection state lives in
+//                the parent's `checked` map; clicking a row calls onToggle to
+//                flip it.
+// `onToggle`     `(projKey) => void` — fires from row click or checkbox click
+// `dragRowProps` / `tbodyStyle`  drag-select hookup for the bottom table only
+// `sortCol`/`sortDir`/`onSort`   delegated to the parent so both tables sort
+//                via the same handler
+// `headerExtra`  optional element rendered in the colspan banner above headers
+// `emptyText`    message shown when items is empty (e.g. "No projects selected")
+
+function ProjectsTable({
+  items, checkedFlag, onToggle,
+  dragRowProps, tbodyStyle,
+  sortCol, sortDir, onSort,
+  emptyText,
+}) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th style={{ width: 40 }} />
+            <th className="sortable" onClick={() => onSort('db_id')} style={{ width: 110 }}>
+              DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" onClick={() => onSort('ProjectNo')}>
+              Project No <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" onClick={() => onSort('Title')}>
+              Title <SortIcon col="Title" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('PointCount')}>
+              Points <SortIcon col="PointCount" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+          </tr>
+        </thead>
+        <tbody style={tbodyStyle}>
+          {items.map((p, idx) => {
+            const k = projKey(p)
+            return (
+              <tr
+                key={k}
+                className={checkedFlag ? 'selected' : ''}
+                onClick={() => onToggle(k)}
+                {...(dragRowProps ? dragRowProps(p, idx) : {})}
+                style={{ cursor: 'pointer' }}
+              >
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={checkedFlag}
+                    onChange={() => onToggle(k)}
+                    onClick={e => e.stopPropagation()}
+                  />
+                </td>
+                <td><DbIdPill id={p.db_id} /></td>
+                <td>{p.ProjectNo}</td>
+                <td>{p.Title}</td>
+                <td style={{ textAlign: 'right' }}>{p.PointCount}</td>
+              </tr>
+            )
+          })}
+          {items.length === 0 && (
+            <tr><td colSpan={5} className="no-data">{emptyText}</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProjectsPage({ setPage }) {
   const { connected, connection, selectedProjects, setSelectedProjects, setSelectedPoints } = useApp()
-  const [projects,    setProjects]    = useState([])
-  const [loading,     setLoading]     = useState(false)
-  const [error,       setError]       = useState('')
-  const [search,      setSearch]      = useState('')
-  const [checked,     setChecked]     = useState({})
-  const [sortCol,     setSortCol]     = useState('ProjectNo')
-  const [sortDir,     setSortDir]     = useState('asc')
-  const [xlsxMsg,     setXlsxMsg]     = useState(null)   // { kind: 'ok'|'warn'|'err', text }
+  const [projects, setProjects] = useState([])
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState('')
+  const [search,   setSearch]   = useState('')
+  const [checked,  setChecked]  = useState({})
+  const [sortCol,  setSortCol]  = useState('ProjectNo')
+  const [sortDir,  setSortDir]  = useState('asc')
+  const [xlsxMsg,  setXlsxMsg]  = useState(null)   // { kind: 'ok'|'warn'|'err', text }
 
-  // Tracks whether we've already auto-loaded the persisted selection for the
-  // current `projects` array — avoids re-applying on every render.
-  const autoLoadedFor = useRef(null)
+  // Prevents the auto-save effect from firing during initial load (mount,
+  // session restore, xlsx auto-load).  Flips true on the first real user
+  // interaction (toggle, select-all, clear, reload-from-xlsx).
+  const userInteractedRef = useRef(false)
+  // Tracks whether xlsx auto-load has run for the current projects array.
+  const autoLoadedFor     = useRef(null)
 
   useEffect(() => {
     if (connected) fetchProjects()
   }, [connected])
 
   // Pre-tick already-selected projects whenever the upstream `selectedProjects`
-  // changes (e.g. session restore).
+  // changes (e.g. session restore).  Does NOT mark user interaction so it
+  // won't trigger the auto-save effect.
   useEffect(() => {
     const init = {}
     selectedProjects.forEach(p => { init[projKey(p)] = true })
@@ -62,7 +162,7 @@ export default function ProjectsPage({ setPage }) {
 
   // After the initial `list_projects` resolves, attempt to load
   // `projects.xlsx` once and auto-tick matching rows.  Silent if the file is
-  // missing.  We key on the array identity so a manual refresh re-runs.
+  // missing.  Does NOT mark user interaction.
   useEffect(() => {
     if (!projects.length) return
     if (autoLoadedFor.current === projects) return
@@ -84,10 +184,43 @@ export default function ProjectsPage({ setPage }) {
       .catch(err => console.warn('load_projects_xlsx failed:', err))
   }, [projects])
 
-  // Single-key toggle.  `key` is already the composite `db_id||ProjectId`.
-  function toggle(key) { setChecked(prev => ({ ...prev, [key]: !prev[key] })) }
+  // Auto-save: whenever the in-app selection changes (after a user
+  // interaction), rewrite `projects.xlsx` in the output folder so the file
+  // is always in sync with the top table (#81).  300 ms debounce so a burst
+  // of select-all clicks coalesces into one write.
+  useEffect(() => {
+    if (!userInteractedRef.current) return
+    const t = setTimeout(() => {
+      const rows = projects
+        .filter(p => checked[projKey(p)])
+        .map(p => ({
+          db_id:     p.db_id ?? '',
+          ProjectId: p.ProjectId,
+          ProjectNo: p.ProjectNo ?? '',
+          Title:     p.Title ?? '',
+        }))
+      invoke('save_projects_xlsx', { selected: rows })
+        .then(() => setXlsxMsg({
+          kind: 'ok',
+          text: `Auto-saved ${rows.length} project${rows.length === 1 ? '' : 's'} to projects.xlsx`,
+        }))
+        .catch(err => {
+          console.warn('auto save_projects_xlsx failed:', err)
+          setXlsxMsg({ kind: 'err', text: `Auto-save failed: ${err}` })
+        })
+    }, 300)
+    return () => clearTimeout(t)
+  }, [checked, projects])
+
+  // Toggle a row — the same handler powers both tables.  Marks user
+  // interaction so the auto-save effect picks up the change.
+  function toggle(key) {
+    userInteractedRef.current = true
+    setChecked(prev => ({ ...prev, [key]: !prev[key] }))
+  }
 
   const addKeys = useCallback((keys) => {
+    userInteractedRef.current = true
     setChecked(prev => {
       const next = { ...prev }
       keys.forEach(k => { next[k] = true })
@@ -95,12 +228,16 @@ export default function ProjectsPage({ setPage }) {
     })
   }, [])
 
-  function selectAll()  {
+  function selectAllUnselected() {
+    userInteractedRef.current = true
     const all = {}
-    filtered.forEach(p => { all[projKey(p)] = true })
+    unselectedFiltered.forEach(p => { all[projKey(p)] = true })
     setChecked(prev => ({ ...prev, ...all }))
   }
-  function clearAll() { setChecked({}) }
+  function clearAll() {
+    userInteractedRef.current = true
+    setChecked({})
+  }
 
   function confirm() {
     const selected = projects.filter(p => checked[projKey(p)])
@@ -121,14 +258,11 @@ export default function ProjectsPage({ setPage }) {
     else { setSortCol(col); setSortDir('asc') }
   }
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    const rows = !q ? projects : projects.filter(p =>
-      p.ProjectNo?.toLowerCase().includes(q) ||
-      p.Title?.toLowerCase().includes(q) ||
-      p.db_id?.toLowerCase().includes(q)
-    )
-    return [...rows].sort((a, b) => {
+  // ── Derived: selected vs. unselected, sorted, search applied ──────────────
+
+  // Apply current sort to either array.  Helper used twice.
+  function applySort(arr) {
+    return [...arr].sort((a, b) => {
       const av = a[sortCol] ?? ''
       const bv = b[sortCol] ?? ''
       const cmp = typeof av === 'number'
@@ -136,36 +270,39 @@ export default function ProjectsPage({ setPage }) {
         : String(av).localeCompare(String(bv))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [projects, search, sortCol, sortDir])
+  }
 
+  const selectedSorted = useMemo(() => {
+    return applySort(projects.filter(p => checked[projKey(p)]))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, checked, sortCol, sortDir])
+
+  // Bottom table: only the unselected rows, search-filtered.
+  const unselectedFiltered = useMemo(() => {
+    const q = search.toLowerCase()
+    const unsel = projects.filter(p => !checked[projKey(p)])
+    const filtered = !q ? unsel : unsel.filter(p =>
+      p.ProjectNo?.toLowerCase().includes(q) ||
+      p.Title?.toLowerCase().includes(q) ||
+      p.db_id?.toLowerCase().includes(q)
+    )
+    return applySort(filtered)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, checked, search, sortCol, sortDir])
+
+  // Drag-select is only wired to the bottom (Available) table — the top
+  // table's checkbox always reads `true`, so dragging there would be a
+  // no-op anyway.
   const { rowProps: dragRowProps, tbodyStyle } = useDragSelect({
-    items:    filtered,
+    items:    unselectedFiltered,
     getKey:   projKey,
     onAdd:    addKeys,
     onToggle: toggle,
   })
 
-  const numChecked = Object.values(checked).filter(Boolean).length
+  const numSelected = selectedSorted.length
 
   // ── xlsx action handlers ──────────────────────────────────────────────────
-
-  async function handleSaveXlsx() {
-    setXlsxMsg(null)
-    try {
-      const selected = projects.filter(p => checked[projKey(p)]).map(p => ({
-        db_id:     p.db_id ?? '',
-        ProjectId: p.ProjectId,
-        ProjectNo: p.ProjectNo ?? '',
-        Title:     p.Title ?? '',
-      }))
-      await invoke('save_projects_xlsx', { selected })
-      const n = selected.length
-      setXlsxMsg({ kind: 'ok', text: `Saved ${n} project${n === 1 ? '' : 's'} to projects.xlsx` })
-    } catch (err) {
-      console.error('save_projects_xlsx failed:', err)
-      setXlsxMsg({ kind: 'err', text: `Failed to save: ${err}` })
-    }
-  }
 
   async function handleOpenXlsx() {
     setXlsxMsg(null)
@@ -186,18 +323,23 @@ export default function ProjectsPage({ setPage }) {
         return
       }
       const present = new Set(projects.map(projKey))
-      const additions = {}
-      const orphans  = []
+      const nextChecked = {}
+      const orphans = []
       for (const r of rows) {
         const k = projKey(r)
         if (present.has(k)) {
-          additions[k] = true
+          nextChecked[k] = true
         } else {
           orphans.push(r)
         }
       }
-      setChecked(prev => ({ ...prev, ...additions }))
-      const okCount = Object.keys(additions).length
+      // Mark user interaction so the auto-save effect picks up the new
+      // checked state.  Effectively a round-trip through xlsx → state → xlsx
+      // (idempotent — orphans get dropped on the way back out).
+      userInteractedRef.current = true
+      setChecked(nextChecked)
+
+      const okCount = Object.keys(nextChecked).length
       if (orphans.length > 0) {
         console.warn(
           `${orphans.length} project(s) from projects.xlsx not in current list — ` +
@@ -207,14 +349,14 @@ export default function ProjectsPage({ setPage }) {
         setXlsxMsg({
           kind: 'warn',
           text: `Ticked ${okCount}. ${orphans.length} row${orphans.length === 1 ? '' : 's'} ` +
-                `in projects.xlsx weren't found in any configured database — see console.`,
+                `in xlsx not in current list (see console).`,
         })
       } else {
-        setXlsxMsg({ kind: 'ok', text: `Reloaded ${okCount} project${okCount === 1 ? '' : 's'} from projects.xlsx.` })
+        setXlsxMsg({ kind: 'ok', text: `Ticked ${okCount} project${okCount === 1 ? '' : 's'} from xlsx.` })
       }
     } catch (err) {
       console.error('load_projects_xlsx failed:', err)
-      setXlsxMsg({ kind: 'err', text: `Failed to reload: ${err}` })
+      setXlsxMsg({ kind: 'err', text: `Reload failed: ${err}` })
     }
   }
 
@@ -231,126 +373,106 @@ export default function ProjectsPage({ setPage }) {
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
-  const hasOutputFolder = !!connection?.output_folder
-  const xlsxMsgClass = xlsxMsg?.kind === 'err'  ? 'msg err'
-                    : xlsxMsg?.kind === 'warn' ? 'msg warn'
-                    :                            'msg ok'
-
   return (
     <div className="page">
       <div className="page-header">
         <h2 className="page-title">Projects</h2>
         <div className="page-actions">
-          <input
-            className="search-input"
-            placeholder="Search by No, Title or db_id…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-          <button onClick={selectAll}   className="btn-secondary btn-sm">Select all</button>
-          <button onClick={clearAll}    className="btn-secondary btn-sm">Clear</button>
-          <button
-            onClick={handleSaveXlsx}
-            className="btn-secondary btn-sm"
-            disabled={!hasOutputFolder}
-            title={hasOutputFolder ? 'Save current selection to projects.xlsx' : 'Configure an output folder in Settings first'}
-          >
-            💾 Save selection to Excel
+          <button onClick={fetchProjects} className="btn-secondary btn-sm">↻ Refresh list</button>
+          <button onClick={handleOpenXlsx} disabled={!connection?.output_folder}
+                  className="btn-secondary btn-sm"
+                  title={!connection?.output_folder
+                    ? 'Pick a project folder first'
+                    : 'Open projects.xlsx in your default xlsx handler'}>
+            📂 Open xlsx
           </button>
-          <button
-            onClick={handleOpenXlsx}
-            className="btn-secondary btn-sm"
-            disabled={!hasOutputFolder}
-            title={hasOutputFolder ? 'Open projects.xlsx in Excel' : 'Configure an output folder in Settings first'}
-          >
-            📂 Open projects.xlsx
-          </button>
-          <button
-            onClick={handleReloadXlsx}
-            className="btn-secondary btn-sm"
-            disabled={!hasOutputFolder}
-            title={hasOutputFolder ? 'Re-read projects.xlsx and tick matching rows' : 'Configure an output folder in Settings first'}
-          >
+          <button onClick={handleReloadXlsx} className="btn-secondary btn-sm"
+                  title="Re-read projects.xlsx and rebuild the selection from it">
             ↻ Reload from Excel
           </button>
-          <button onClick={fetchProjects} className="btn-secondary btn-sm">↻ Refresh</button>
-          <button onClick={confirm} disabled={numChecked === 0} className="btn-primary">
-            Load {numChecked > 0 ? `${numChecked} project${numChecked > 1 ? 's' : ''}` : 'projects'} →
+          <button onClick={confirm} disabled={numSelected === 0} className="btn-primary">
+            Load {numSelected > 0 ? `${numSelected} project${numSelected > 1 ? 's' : ''}` : 'projects'} →
           </button>
         </div>
       </div>
 
-      {error   && <p className="msg err">{error}</p>}
-      {xlsxMsg && <p className={xlsxMsgClass}>{xlsxMsg.text}</p>}
+      {error && <p className="msg err">{error}</p>}
+      {xlsxMsg && (
+        <p className={`msg ${xlsxMsg.kind === 'err' ? 'err' : xlsxMsg.kind === 'warn' ? 'warn' : 'ok'}`}>
+          {xlsxMsg.text}
+        </p>
+      )}
 
       {loading ? (
         <p className="hint">Loading…</p>
       ) : (
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th style={{ width: 40 }}>
-                  <input
-                    type="checkbox"
-                    checked={filtered.length > 0 && filtered.every(p => checked[projKey(p)])}
-                    onChange={e => e.target.checked ? selectAll() : clearAll()}
-                    title="Select / deselect all visible"
-                  />
-                </th>
-                <th className="sortable" onClick={() => handleSort('db_id')}>
-                  Database <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" onClick={() => handleSort('ProjectNo')}>
-                  Project No <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" onClick={() => handleSort('Title')}>
-                  Title <SortIcon col="Title" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" style={{ textAlign: 'right' }} onClick={() => handleSort('PointCount')}>
-                  Points <SortIcon col="PointCount" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-              </tr>
-            </thead>
-            <tbody style={tbodyStyle}>
-              {filtered.map((p, idx) => {
-                const k = projKey(p)
-                return (
-                  <tr
-                    key={k}
-                    className={checked[k] ? 'selected' : ''}
-                    {...dragRowProps(p, idx)}
-                  >
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={!!checked[k]}
-                        onChange={() => toggle(k)}
-                        onClick={e => e.stopPropagation()}
-                      />
-                    </td>
-                    <td>
-                      <code style={{
-                        fontSize:     '.78rem',
-                        padding:      '0.1rem 0.4rem',
-                        background:   '#f1f5f9',
-                        borderRadius: 4,
-                      }}>
-                        {p.db_id ?? '?'}
-                      </code>
-                    </td>
-                    <td>{p.ProjectNo}</td>
-                    <td>{p.Title}</td>
-                    <td style={{ textAlign: 'right' }}>{p.PointCount}</td>
-                  </tr>
-                )
-              })}
-              {filtered.length === 0 && (
-                <tr><td colSpan={5} className="no-data">No projects found</td></tr>
+        <>
+          {/* ── Selected (top) ────────────────────────────────────────────── */}
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: '0.75rem',
+              padding: '0.4rem 0', borderBottom: '1px solid #e5e7eb',
+              marginBottom: '0.4rem',
+            }}>
+              <h3 style={{ margin: 0, fontSize: '.95rem', fontWeight: 600 }}>
+                Selected projects
+              </h3>
+              <span className="hint" style={{ fontSize: '.78rem' }}>
+                {numSelected === 0
+                  ? 'Click a row below to add it here'
+                  : `${numSelected} project${numSelected === 1 ? '' : 's'} · auto-saved to projects.xlsx`}
+              </span>
+              <div style={{ flex: 1 }} />
+              {numSelected > 0 && (
+                <button onClick={clearAll} className="btn-secondary btn-sm">Clear all</button>
               )}
-            </tbody>
-          </table>
-        </div>
+            </div>
+            <ProjectsTable
+              items={selectedSorted}
+              checkedFlag={true}
+              onToggle={toggle}
+              sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
+              emptyText="No projects selected — click rows in the table below to add them."
+            />
+          </div>
+
+          {/* ── Available (bottom) ───────────────────────────────────────── */}
+          <div>
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: '0.75rem',
+              padding: '0.4rem 0', borderBottom: '1px solid #e5e7eb',
+              marginBottom: '0.4rem',
+            }}>
+              <h3 style={{ margin: 0, fontSize: '.95rem', fontWeight: 600 }}>
+                Available projects
+              </h3>
+              <span className="hint" style={{ fontSize: '.78rem' }}>
+                {unselectedFiltered.length} row{unselectedFiltered.length === 1 ? '' : 's'}
+              </span>
+              <div style={{ flex: 1 }} />
+              <input
+                className="search-input"
+                placeholder="Search by No, Title or DB…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ maxWidth: 260 }}
+              />
+              <button onClick={selectAllUnselected} className="btn-secondary btn-sm"
+                      disabled={unselectedFiltered.length === 0}>
+                Select all visible
+              </button>
+            </div>
+            <ProjectsTable
+              items={unselectedFiltered}
+              checkedFlag={false}
+              onToggle={toggle}
+              dragRowProps={dragRowProps}
+              tbodyStyle={tbodyStyle}
+              sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
+              emptyText={search ? 'No projects match the search.' : 'No more available projects.'}
+            />
+          </div>
+        </>
       )}
     </div>
   )
