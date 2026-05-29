@@ -224,11 +224,42 @@ fn safe_str(v: &str) -> String {
 pub struct StrataSelection {
     pub interpretation: String,
     pub series: String,
-    /// Multi-DB routing (issue #48).  When set, the query for this selection
-    /// only runs against the database with the matching id; when missing it
-    /// falls back to running against every active database in parallel.
+    /// Legacy single-DB routing (issue #48).  Kept for backward compat with
+    /// sessions saved before #79; new selections use `db_ids` instead.
     #[serde(default)]
     pub db_id: Option<String>,
+    /// Multi-DB routing (issue #79).  When non-empty, the query for this
+    /// selection runs against every listed database in parallel and the
+    /// results are concatenated.  Resolution order:
+    ///   1. `db_ids` (non-empty)            — query each listed DB
+    ///   2. `db_id`                          — single DB (legacy)
+    ///   3. neither                          — fan out to every active DB
+    #[serde(default)]
+    pub db_ids: Option<Vec<String>>,
+}
+
+impl StrataSelection {
+    /// Materialise the list of target `DbConfig`s for this selection given
+    /// the full set of active databases.  Encodes the resolution order
+    /// described on the struct.
+    pub fn target_dbs(
+        &self,
+        state: &AppState,
+        all_active: &[crate::state::DbConfig],
+    ) -> Vec<crate::state::DbConfig> {
+        if let Some(ids) = self.db_ids.as_ref().filter(|v| !v.is_empty()) {
+            return ids.iter()
+                .filter_map(|id| crate::commands::multi_db::find_database_by_id(state, id))
+                .collect();
+        }
+        if let Some(id) = self.db_id.as_ref().filter(|s| !s.is_empty()) {
+            return match crate::commands::multi_db::find_database_by_id(state, id) {
+                Some(db) => vec![db],
+                None     => Vec::new(),
+            };
+        }
+        all_active.to_vec()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -786,7 +817,7 @@ pub async fn get_strata_types(
         .collect();
 
     // Fan out across all DBs in parallel; each row comes back with a `db_id`
-    // prefix so the UI knows which DB the series came from (issue #48).
+    // prefix so we can attribute it to a database below (issue #48).
     let mut errors = Vec::new();
     let rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
 
@@ -798,7 +829,71 @@ pub async fn get_strata_types(
             .unwrap_or_else(|| "All databases failed.".into());
         return Err(first);
     }
-    Ok(rows)
+
+    // Consolidate (issue #79): group rows by (Interpretation, series, Description),
+    // sum Point_Count / Layer_Count, and collect contributing db_ids.  The
+    // frontend gets one row per interpretation instead of one per (db, interp).
+    Ok(consolidate_strata_types(rows))
+}
+
+/// Helper for `get_strata_types`: groups per-DB rows by
+/// (Interpretation, series, Description), sums numeric counts, and
+/// aggregates contributing `db_id`s into a sorted unique Vec.
+fn consolidate_strata_types(rows: Vec<Value>) -> Vec<Value> {
+    use std::collections::BTreeMap;
+
+    // (interpretation, series, description) → (point_count, layer_count, db_ids_set)
+    let mut groups: BTreeMap<(String, String, String), (i64, i64, std::collections::BTreeSet<String>)> =
+        BTreeMap::new();
+
+    fn as_i64(v: Option<&Value>) -> i64 {
+        match v {
+            Some(Value::Number(n)) => n.as_i64().unwrap_or_else(|| n.as_f64().unwrap_or(0.0) as i64),
+            Some(Value::String(s)) => s.parse::<i64>().ok().unwrap_or(0),
+            _                       => 0,
+        }
+    }
+    fn as_string(v: Option<&Value>) -> String {
+        match v {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            Some(other)             => other.to_string(),
+            None                    => String::new(),
+        }
+    }
+
+    for row in rows {
+        let Value::Object(map) = row else { continue };
+        let interp = as_string(map.get("Interpretation"));
+        let series = as_string(map.get("series"));
+        let descr  = as_string(map.get("Description"));
+        let pc     = as_i64(map.get("Point_Count"));
+        let lc     = as_i64(map.get("Layer_Count"));
+        let db_id  = as_string(map.get("db_id"));
+
+        let entry = groups
+            .entry((interp, series, descr))
+            .or_insert_with(|| (0, 0, std::collections::BTreeSet::new()));
+        entry.0 += pc;
+        entry.1 += lc;
+        if !db_id.is_empty() {
+            entry.2.insert(db_id);
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|((interp, series, descr), (pc, lc, dbs))| {
+            json!({
+                "Interpretation": interp,
+                "series":         series,
+                "Description":    descr,
+                "Point_Count":    pc,
+                "Layer_Count":    lc,
+                "db_ids":         dbs.into_iter().collect::<Vec<_>>(),
+            })
+        })
+        .collect()
 }
 
 /// Fetch layer rows for the selected strata types.
@@ -830,14 +925,8 @@ pub async fn get_strata_data(
     let mut out = serde_json::Map::new();
 
     for sel in selections {
-        // Route by db_id when present; else fan out across every DB.
-        let targets: Vec<crate::state::DbConfig> = match &sel.db_id {
-            Some(id) => match crate::commands::multi_db::find_database_by_id(&state, id) {
-                Some(db) => vec![db],
-                None     => Vec::new(),
-            },
-            None => databases.clone(),
-        };
+        // Resolve target DBs (issue #79): db_ids > db_id > fan out to all.
+        let targets = sel.target_dbs(&state, &databases);
 
         // Each target DB resolves its own SQL template via `query_type` (#47),
         // then we inject the per-selection clauses.  Falls back to `DATA_SQL`.
@@ -858,14 +947,10 @@ pub async fn get_strata_data(
         let mut errors = Vec::new();
         let rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
 
-        // Key shape must mirror the frontend's `selKey` in StrataPage.jsx
-        // (issue #66): `${db_id}||${series}||${interpretation}` — the 3-part
-        // form lets the same (series, interpretation) pair from two different
-        // databases appear as two distinct preview rows.  When `db_id` is
-        // absent (legacy / fan-out across all DBs) use the literal "?" so the
-        // key still matches the frontend's `s.db_id ?? '?'` fallback.
-        let db_id = sel.db_id.as_deref().unwrap_or("?");
-        let key = format!("{}||{}||{}", db_id, sel.series, sel.interpretation);
+        // Key shape mirrors the frontend's `selKey` in StrataPage.jsx — issue
+        // #79 dropped the `db_id` prefix because selections are now
+        // consolidated across DBs.  Format: `${series}||${interpretation}`.
+        let key = format!("{}||{}", sel.series, sel.interpretation);
         out.insert(key, Value::Array(rows));
     }
 
@@ -942,13 +1027,11 @@ pub async fn download_strata(
     //     db.query_type)` (issue #47), falling back to the hardcoded `DATA_SQL`.
     let mut new_sheets: Vec<(String, Vec<StrataRow>)> = Vec::with_capacity(body.selections.len());
     for (i, sel) in body.selections.iter().enumerate() {
-        let targets: Vec<crate::state::DbConfig> = match &sel.db_id {
-            Some(id) => match crate::commands::multi_db::find_database_by_id(&state, id) {
-                Some(db) => vec![db],
-                None     => Vec::new(),
-            },
-            None => databases.clone(),
-        };
+        // Issue #79: resolve targets via db_ids > db_id > fan-out (see
+        // StrataSelection::target_dbs).  The download writes one sheet per
+        // (interpretation, series) and concatenates rows from every DB in
+        // the selection's list.
+        let targets = sel.target_dbs(&state, &databases);
 
         let pairs: Vec<(crate::state::DbConfig, String)> = targets
             .into_iter()
