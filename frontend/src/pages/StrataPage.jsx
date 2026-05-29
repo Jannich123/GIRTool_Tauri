@@ -25,10 +25,31 @@ import { useFilter } from '../context/FilterContext'
 // API returns Interpretation (capital I); selections use interpretation (lowercase).
 // Support both so lookup keys always match the server response.
 //
-// Issue #48: include `db_id` so the same (series, interpretation) pair from
-// two different databases is treated as two distinct rows in the picker.
+// Issue #79: get_strata_types now consolidates rows by (Interpretation, series)
+// across every database that holds the combination — selKey drops `db_id` to
+// match.  The list of contributing DBs travels alongside as `db_ids`.
 const selKey = (s) =>
-  `${s.db_id ?? '?'}||${s.series}||${s.Interpretation ?? s.interpretation}`
+  `${s.series}||${s.Interpretation ?? s.interpretation}`
+
+// Small monospace pill renderer for db_id chips inside the DB column.
+function DbIdPill({ id }) {
+  return (
+    <code
+      style={{
+        fontSize: '.72rem',
+        padding: '0.05rem 0.4rem',
+        background: '#eef2ff',
+        color: '#3730a3',
+        border: '1px solid #c7d2fe',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+        marginRight: '0.25rem',
+      }}
+    >
+      {id || '?'}
+    </code>
+  )
+}
 
 // ── Error detection (matches Excel template column formulas exactly) ──────────
 //
@@ -140,7 +161,9 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
         selections:  checkedSelections.map(t => ({
           interpretation: t.Interpretation,
           series:         t.series,
-          db_id:          t.db_id,
+          // Issue #79: forward the consolidated list of contributing DBs so
+          // the backend queries each one and concatenates the results.
+          db_ids:         Array.isArray(t.db_ids) ? t.db_ids : (t.db_id ? [t.db_id] : []),
         })),
       },
     })
@@ -167,7 +190,9 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
         selections:  checkedSelections.map(t => ({
           interpretation: t.Interpretation,
           series:         t.series,
-          db_id:          t.db_id,
+          // Issue #79: forward the consolidated list of contributing DBs so
+          // the backend queries each one and concatenates the results.
+          db_ids:         Array.isArray(t.db_ids) ? t.db_ids : (t.db_id ? [t.db_id] : []),
         })),
         },
       })
@@ -195,7 +220,9 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
         selections:  checkedSelections.map(t => ({
           interpretation: t.Interpretation,
           series:         t.series,
-          db_id:          t.db_id,
+          // Issue #79: forward the consolidated list of contributing DBs so
+          // the backend queries each one and concatenates the results.
+          db_ids:         Array.isArray(t.db_ids) ? t.db_ids : (t.db_id ? [t.db_id] : []),
         })),
         },
       })
@@ -296,16 +323,22 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
                   <th>Interpretation</th>
                   <th>Series</th>
                   <th>Description</th>
+                  <th style={{ width: 140 }}>DB</th>
                   <th style={{ textAlign: 'right' }}>Points</th>
                   <th style={{ textAlign: 'right' }}>Layers</th>
                 </tr>
               </thead>
               <tbody>
                 {types.length === 0 && (
-                  <tr><td colSpan={6} className="no-data">No strata found for this selection</td></tr>
+                  <tr><td colSpan={7} className="no-data">No strata found for this selection</td></tr>
                 )}
                 {types.map(t => {
                   const k = selKey(t)
+                  // Normalise to an array — backend now sends `db_ids`, but a
+                  // legacy session restore could still carry a single `db_id`.
+                  const dbList = Array.isArray(t.db_ids)
+                    ? t.db_ids
+                    : (t.db_id ? [t.db_id] : [])
                   return (
                     <tr
                       key={k}
@@ -323,6 +356,11 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
                       <td>{t.Interpretation}</td>
                       <td>{t.series}</td>
                       <td>{t.Description}</td>
+                      <td>
+                        {dbList.length === 0
+                          ? <span style={{ color: '#9ca3af', fontSize: '.75rem' }}>—</span>
+                          : dbList.map(id => <DbIdPill key={id} id={id} />)}
+                      </td>
                       <td style={{ textAlign: 'right' }}>{t.Point_Count}</td>
                       <td style={{ textAlign: 'right' }}>{t.Layer_Count}</td>
                     </tr>
