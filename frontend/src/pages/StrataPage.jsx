@@ -644,6 +644,7 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
             <thead>
               <tr>
                 <th style={{ width: 100 }}>Issue</th>
+                <th style={{ width: 90 }}>DB</th>
                 <th>PointNo</th>
                 <th style={{ textAlign: 'right' }}>Depth From [m]</th>
                 <th style={{ textAlign: 'right' }}>Depth To [m]</th>
@@ -673,6 +674,7 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
                         </div>
                       ))}
                     </td>
+                    <td><DbIdPill id={row.db_id} /></td>
                     <td>{row.PointNo}</td>
                     <td style={{ textAlign: 'right' }}>
                       <input
