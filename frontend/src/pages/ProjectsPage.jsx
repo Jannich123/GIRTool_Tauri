@@ -58,11 +58,17 @@ function ProjectsTable({
   dragRowProps, tbodyStyle,
   sortCol, sortDir, onSort,
   emptyText,
+  // Issue #83: internal scroll + infinite-scroll pagination.
+  maxHeight, onScroll, footerHint,
 }) {
   return (
-    <div className="table-wrap">
+    <div
+      className="table-wrap"
+      style={{ maxHeight, overflowY: 'auto' }}
+      onScroll={onScroll}
+    >
       <table className="data-table">
-        <thead>
+        <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
           <tr>
             <th style={{ width: 40 }} />
             <th className="sortable" onClick={() => onSort('db_id')} style={{ width: 110 }}>
@@ -108,11 +114,23 @@ function ProjectsTable({
           {items.length === 0 && (
             <tr><td colSpan={5} className="no-data">{emptyText}</td></tr>
           )}
+          {footerHint && (
+            <tr>
+              <td colSpan={5} className="no-data" style={{ fontStyle: 'italic', textAlign: 'center' }}>
+                {footerHint}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
   )
 }
+
+// Issue #83: pagination step for the Available table.  Render this many rows
+// initially and append PAGE_STEP more whenever the user scrolls within ~120 px
+// of the bottom of the scroll container.
+const PAGE_STEP = 50
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -133,6 +151,15 @@ export default function ProjectsPage({ setPage }) {
   const userInteractedRef = useRef(false)
   // Tracks whether xlsx auto-load has run for the current projects array.
   const autoLoadedFor     = useRef(null)
+
+  // Issue #83: Available-table pagination.  Render PAGE_STEP rows initially,
+  // append PAGE_STEP more on each scroll-near-bottom event.  Reset whenever
+  // the filter (search) or sort order changes so the user always starts at
+  // the top of the new result set.
+  const [visibleAvailableCount, setVisibleAvailableCount] = useState(PAGE_STEP)
+  useEffect(() => {
+    setVisibleAvailableCount(PAGE_STEP)
+  }, [search, sortCol, sortDir])
 
   useEffect(() => {
     if (connected) fetchProjects()
@@ -290,15 +317,35 @@ export default function ProjectsPage({ setPage }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, checked, search, sortCol, sortDir])
 
+  // Issue #83: only render the first N rows of the (sorted, search-filtered)
+  // unselected set; infinite scroll appends more as the user nears the
+  // bottom.  Drag-select is keyed against the SAME slice so dragging only
+  // ever touches rows the user can see.
+  const unselectedSlice = useMemo(
+    () => unselectedFiltered.slice(0, visibleAvailableCount),
+    [unselectedFiltered, visibleAvailableCount],
+  )
+  const hasMoreAvailable = unselectedFiltered.length > unselectedSlice.length
+
   // Drag-select is only wired to the bottom (Available) table — the top
   // table's checkbox always reads `true`, so dragging there would be a
   // no-op anyway.
   const { rowProps: dragRowProps, tbodyStyle } = useDragSelect({
-    items:    unselectedFiltered,
+    items:    unselectedSlice,
     getKey:   projKey,
     onAdd:    addKeys,
     onToggle: toggle,
   })
+
+  // Infinite-scroll handler — when the user scrolls within ~120 px of the
+  // bottom of the Available table, append the next PAGE_STEP rows.
+  function handleAvailableScroll(e) {
+    if (!hasMoreAvailable) return
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+      setVisibleAvailableCount(c => Math.min(c + PAGE_STEP, unselectedFiltered.length))
+    }
+  }
 
   const numSelected = selectedSorted.length
 
@@ -433,6 +480,7 @@ export default function ProjectsPage({ setPage }) {
               onToggle={toggle}
               sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
               emptyText="No projects selected — click rows in the table below to add them."
+              maxHeight="38vh"
             />
           </div>
 
@@ -447,7 +495,9 @@ export default function ProjectsPage({ setPage }) {
                 Available projects
               </h3>
               <span className="hint" style={{ fontSize: '.78rem' }}>
-                {unselectedFiltered.length} row{unselectedFiltered.length === 1 ? '' : 's'}
+                Showing {unselectedSlice.length} of {unselectedFiltered.length} row
+                {unselectedFiltered.length === 1 ? '' : 's'}
+                {hasMoreAvailable && ' · scroll for more'}
               </span>
               <div style={{ flex: 1 }} />
               <input
@@ -463,13 +513,18 @@ export default function ProjectsPage({ setPage }) {
               </button>
             </div>
             <ProjectsTable
-              items={unselectedFiltered}
+              items={unselectedSlice}
               checkedFlag={false}
               onToggle={toggle}
               dragRowProps={dragRowProps}
               tbodyStyle={tbodyStyle}
               sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
               emptyText={search ? 'No projects match the search.' : 'No more available projects.'}
+              maxHeight="48vh"
+              onScroll={handleAvailableScroll}
+              footerHint={hasMoreAvailable
+                ? `${unselectedFiltered.length - unselectedSlice.length} more row(s) — keep scrolling…`
+                : null}
             />
           </div>
         </>
