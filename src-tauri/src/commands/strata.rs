@@ -5,22 +5,23 @@
 //
 // The master "Strata" sheet matches the Strata_GIRTool template exactly:
 //
-//   Columns (row 1, 11 wide):
-//     A  ProjectID                    (text)
-//     B  PointID                      (text)
-//     C  PointNo                      (text)
-//     D  Depth From [m]               (number)
-//     E  Depth To [m]                 (number)
-//     F  Primary Layer                (text — master sheet label)
-//     G  Secondary Layer              (text — master sheet label)
-//     H  Layer Thickness [m]          (formula =E-D)
-//     I  Gap in boundary?             (formula — AND(D>prev.E, A=prev.A, B=prev.B))
-//     J  Overlapping?                 (formula — AND(D<prev.E, A=prev.A, B=prev.B))
-//     K  Negative thickness?          (formula =D>=E)
+//   Columns (row 1, 12 wide — issue #93):
+//     A  db_id                        (text — source database identifier)
+//     B  ProjectID                    (text)
+//     C  PointID                      (text)
+//     D  PointNo                      (text)
+//     E  Depth From [m]               (number)
+//     F  Depth To [m]                 (number)
+//     G  Primary Layer                (text — master sheet label)
+//     H  Secondary Layer              (text — master sheet label)
+//     I  Layer Thickness [m]          (formula =F-E)
+//     J  Gap in boundary?             (formula — AND(E>prev.F, B=prev.B, C=prev.C))
+//     K  Overlapping?                 (formula — AND(E<prev.F, B=prev.B, C=prev.C))
+//     L  Negative thickness?          (formula =E>=F)
 //
-//   Header: Verdana 9, row height 30.75, wrap-text on D, E, H–K
+//   Header: Verdana 9, row height 30.75, wrap-text on E, F, I–L
 //   Body:   Verdana 9, fill #D6DEE4
-//   Conditional formatting: A2:K{last} → red (#FFC7CE) when OR(I,J,K) is TRUE
+//   Conditional formatting: A2:L{last} → red (#FFC7CE) when OR(J,K,L) is TRUE
 //   Table:  TableStyleMedium2, displayName "Strata_{idx}"
 //   Frozen pane: A2
 //
@@ -70,8 +71,10 @@ const DATA_FILL_RGB: u32 = 0xD6_DE_E4;
 /// Conditional formatting fill (Excel "bad" light red).
 const RED_FILL_RGB: u32 = 0xFF_C7_CE;
 
-/// Headers for the master sheet (template labels in F/G).
+/// Headers for the master sheet (template labels in G/H).  Issue #93: column A
+/// is now `db_id` so multi-DB transfers can dedup by (db_id, project, point).
 const MASTER_HEADERS: &[&str] = &[
+    "db_id",
     "ProjectID",
     "PointID",
     "PointNo",
@@ -85,8 +88,10 @@ const MASTER_HEADERS: &[&str] = &[
     "Negative thickness?",
 ];
 
-/// Headers for raw download sheets (raw DB labels in F/G).
+/// Headers for raw download sheets (raw DB labels in G/H).  Issue #93: column A
+/// is now `db_id`.
 const DATA_HEADERS: &[&str] = &[
+    "db_id",
     "ProjectID",
     "PointID",
     "PointNo",
@@ -101,22 +106,23 @@ const DATA_HEADERS: &[&str] = &[
 ];
 
 /// Column widths (Excel character units).
-const COL_WIDTHS: [f64; 11] = [
-    13.2, // A ProjectID
-    13.2, // B PointID
-    15.0, // C PointNo
-    10.4, // D Depth From
-    9.2,  // E Depth To
-    24.4, // F Primary Layer / Layer
-    24.7, // G Secondary Layer / Description
-    12.5, // H Layer Thickness
-    10.6, // I Gap?
-    10.2, // J Overlapping?
-    10.6, // K Negative?
+const COL_WIDTHS: [f64; 12] = [
+    12.0, // A db_id
+    13.2, // B ProjectID
+    13.2, // C PointID
+    15.0, // D PointNo
+    10.4, // E Depth From
+    9.2,  // F Depth To
+    24.4, // G Primary Layer / Layer
+    24.7, // H Secondary Layer / Description
+    12.5, // I Layer Thickness
+    10.6, // J Gap?
+    10.2, // K Overlapping?
+    10.6, // L Negative?
 ];
 
 /// Header columns that need `wrap_text` because they contain `[m]` etc.
-const WRAP_COLS: [u16; 6] = [3, 4, 7, 8, 9, 10]; // D, E, H, I, J, K (0-indexed)
+const WRAP_COLS: [u16; 6] = [4, 5, 8, 9, 10, 11]; // E, F, I, J, K, L (0-indexed)
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -274,6 +280,10 @@ pub struct StrataRequest {
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct StrataRow {
+    /// Issue #93: source database identifier prepended by `fan_out_query_per_db`.
+    /// `None` for rows read from legacy 11-column strata.xlsx files.
+    #[serde(rename = "db_id", default)]
+    pub db_id: Option<String>,
     #[serde(rename = "ProjectId", default)]
     pub project_id: Option<Value>,
     #[serde(rename = "PointId", default)]
@@ -292,29 +302,31 @@ pub struct StrataRow {
 
 // ── Workbook builder ──────────────────────────────────────────────────────────
 
-/// Write formula cells for columns H–K at worksheet row `ri` (0-indexed).
+/// Write formula cells for columns I–L at worksheet row `ri` (0-indexed).
 /// Mirrors Python `_write_formula_cells` (1-indexed row in the formulas).
+/// Issue #93: column A is now `db_id` so depth columns shifted right by one
+/// (D→E, E→F) and the same-borehole guards now compare B/C (was A/B).
 fn write_formula_cells(ws: &mut Worksheet, ri: u32, fmt: &Format) -> Result<(), String> {
     let r = ri + 1; // Excel 1-indexed row used in formulas
 
-    // H: =E{r}-D{r}
-    ws.write_formula_with_format(ri, 7, &*format!("=E{r}-D{r}"), fmt)
-        .map_err(|e| format!("Formula H write error: {e}"))?;
-    // I: =AND(D>prev.E, A=prev.A, B=prev.B)
-    let i_formula = format!(
-        "=AND(D{r}>OFFSET(E{r},-1,0),AND(A{r}=OFFSET(A{r},-1,0),B{r}=OFFSET(B{r},-1,0)))"
-    );
-    ws.write_formula_with_format(ri, 8, i_formula.as_str(), fmt)
+    // I: =F{r}-E{r}
+    ws.write_formula_with_format(ri, 8, &*format!("=F{r}-E{r}"), fmt)
         .map_err(|e| format!("Formula I write error: {e}"))?;
-    // J: =AND(D<prev.E, A=prev.A, B=prev.B)
+    // J: =AND(E>prev.F, B=prev.B, C=prev.C)
     let j_formula = format!(
-        "=AND(D{r}<OFFSET(E{r},-1,0),AND(A{r}=OFFSET(A{r},-1,0),B{r}=OFFSET(B{r},-1,0)))"
+        "=AND(E{r}>OFFSET(F{r},-1,0),AND(B{r}=OFFSET(B{r},-1,0),C{r}=OFFSET(C{r},-1,0)))"
     );
     ws.write_formula_with_format(ri, 9, j_formula.as_str(), fmt)
         .map_err(|e| format!("Formula J write error: {e}"))?;
-    // K: =D{r}>=E{r}
-    ws.write_formula_with_format(ri, 10, &*format!("=D{r}>=E{r}"), fmt)
+    // K: =AND(E<prev.F, B=prev.B, C=prev.C)
+    let k_formula = format!(
+        "=AND(E{r}<OFFSET(F{r},-1,0),AND(B{r}=OFFSET(B{r},-1,0),C{r}=OFFSET(C{r},-1,0)))"
+    );
+    ws.write_formula_with_format(ri, 10, k_formula.as_str(), fmt)
         .map_err(|e| format!("Formula K write error: {e}"))?;
+    // L: =E{r}>=F{r}
+    ws.write_formula_with_format(ri, 11, &*format!("=E{r}>=F{r}"), fmt)
+        .map_err(|e| format!("Formula L write error: {e}"))?;
 
     Ok(())
 }
@@ -420,14 +432,17 @@ fn build_strata_sheet(
     ws.add_table(0, 0, max_data_row, (headers.len() - 1) as u16, &table)
         .map_err(|e| format!("Table error: {e}"))?;
 
-    // ── Conditional formatting: red row when any of I, J, K is TRUE ───────────
+    // ── Conditional formatting: red row when any of J, K, L is TRUE ───────────
+    // Issue #93: flag columns moved one right with the db_id insertion.
+    // Range starts at col 0 so the db_id cell also goes red — the whole row
+    // is highlighted, matching the previous behaviour visually.
     let red_fmt = Format::new().set_background_color(Color::RGB(RED_FILL_RGB));
     let cond = ConditionalFormatFormula::new()
-        .set_rule("=OR($I2,$J2,$K2)")
+        .set_rule("=OR($J2,$K2,$L2)")
         .set_format(red_fmt);
     // Apply over the visible data area + placeholder.  Use a generous max row
     // so the rule keeps working when the table auto-extends in Excel.
-    ws.add_conditional_format(1, 0, 1_048_575, 10, &cond)
+    ws.add_conditional_format(1, 0, 1_048_575, 11, &cond)
         .map_err(|e| format!("Conditional formatting error: {e}"))?;
 
     // ── Column widths + freeze pane ───────────────────────────────────────────
@@ -441,55 +456,73 @@ fn build_strata_sheet(
     Ok(())
 }
 
-/// Write columns A–G of one data row.
+/// Write columns A–H of one data row.  Issue #93: column A is now `db_id`
+/// (string, blank when `None`) and every other field shifted one column right.
 fn write_row_data(ws: &mut Worksheet, ri: u32, row: &StrataRow, fmt: &Format) {
-    // A — ProjectID
-    if let Some(v) = &row.project_id {
-        write_value(ws, ri, 0, v, fmt);
+    // A — db_id
+    if let Some(s) = row.db_id.as_deref().filter(|s| !s.is_empty()) {
+        let _ = ws.write_string_with_format(ri, 0, s, fmt);
     } else {
         let _ = ws.write_blank(ri, 0, fmt);
     }
-    // B — PointID
-    if let Some(v) = &row.point_id {
+    // B — ProjectID
+    if let Some(v) = &row.project_id {
         write_value(ws, ri, 1, v, fmt);
     } else {
         let _ = ws.write_blank(ri, 1, fmt);
     }
-    // C — PointNo
-    if let Some(v) = &row.point_no {
+    // C — PointID
+    if let Some(v) = &row.point_id {
         write_value(ws, ri, 2, v, fmt);
     } else {
         let _ = ws.write_blank(ri, 2, fmt);
     }
-    // D — From
-    if let Some(f) = row.from {
-        let _ = ws.write_number_with_format(ri, 3, f, fmt);
+    // D — PointNo
+    if let Some(v) = &row.point_no {
+        write_value(ws, ri, 3, v, fmt);
     } else {
         let _ = ws.write_blank(ri, 3, fmt);
     }
-    // E — To
-    if let Some(f) = row.to {
+    // E — From
+    if let Some(f) = row.from {
         let _ = ws.write_number_with_format(ri, 4, f, fmt);
     } else {
         let _ = ws.write_blank(ri, 4, fmt);
     }
-    // F — Layer / Primary
-    if let Some(s) = &row.layer {
-        let _ = ws.write_string_with_format(ri, 5, s, fmt);
+    // F — To
+    if let Some(f) = row.to {
+        let _ = ws.write_number_with_format(ri, 5, f, fmt);
     } else {
         let _ = ws.write_blank(ri, 5, fmt);
     }
-    // G — Description / Secondary
-    if let Some(s) = &row.description {
+    // G — Layer / Primary
+    if let Some(s) = &row.layer {
         let _ = ws.write_string_with_format(ri, 6, s, fmt);
     } else {
         let _ = ws.write_blank(ri, 6, fmt);
+    }
+    // H — Description / Secondary
+    if let Some(s) = &row.description {
+        let _ = ws.write_string_with_format(ri, 7, s, fmt);
+    } else {
+        let _ = ws.write_blank(ri, 7, fmt);
     }
 }
 
 // ── Workbook-level operations (read & rewrite) ────────────────────────────────
 
-/// Read master sheet rows into `StrataRow` objects (A–G only).
+/// Sniff whether the sheet uses the 12-column (db_id-prefixed) schema or the
+/// legacy 11-column schema.  Looks at the header row's leftmost cell — the
+/// 12-column schema has `db_id` there.
+fn has_db_id_column(header_row: Option<&[Data]>) -> bool {
+    let Some(row) = header_row else { return false };
+    matches!(row.first(), Some(Data::String(s)) if s.eq_ignore_ascii_case("db_id"))
+}
+
+/// Read master sheet rows into `StrataRow` objects.
+///
+/// Issue #93: handles both the new 12-column schema (col 0 = db_id) and the
+/// legacy 11-column schema (no db_id; db_id = None on every row).
 fn read_master_rows(path: &std::path::Path) -> Vec<StrataRow> {
     let mut out = Vec::new();
     let mut wb = match open_workbook_auto(path) {
@@ -501,17 +534,38 @@ fn read_master_rows(path: &std::path::Path) -> Vec<StrataRow> {
         Err(_) => return out,
     };
 
-    for row in range.rows().skip(1) {
-        let proj   = cell_to_string(row.first());
-        let pt_id  = cell_to_string(row.get(1));
-        let pt_no  = cell_to_string(row.get(2));
-        let from_v = cell_to_f64(row.get(3));
-        let to_v   = cell_to_f64(row.get(4));
-        let layer  = cell_to_string(row.get(5));
-        let desc   = cell_to_string(row.get(6));
+    let mut rows_iter = range.rows();
+    let header = rows_iter.next();
+    let has_db_id = has_db_id_column(header);
+
+    for row in rows_iter {
+        let (db_id, proj, pt_id, pt_no, from_v, to_v, layer, desc) = if has_db_id {
+            (
+                cell_to_string(row.first()),
+                cell_to_string(row.get(1)),
+                cell_to_string(row.get(2)),
+                cell_to_string(row.get(3)),
+                cell_to_f64(row.get(4)),
+                cell_to_f64(row.get(5)),
+                cell_to_string(row.get(6)),
+                cell_to_string(row.get(7)),
+            )
+        } else {
+            (
+                None,
+                cell_to_string(row.first()),
+                cell_to_string(row.get(1)),
+                cell_to_string(row.get(2)),
+                cell_to_f64(row.get(3)),
+                cell_to_f64(row.get(4)),
+                cell_to_string(row.get(5)),
+                cell_to_string(row.get(6)),
+            )
+        };
 
         // Skip fully blank rows (e.g. the placeholder row in an empty table).
-        if proj.is_none()
+        if db_id.is_none()
+            && proj.is_none()
             && pt_id.is_none()
             && pt_no.is_none()
             && from_v.is_none()
@@ -523,6 +577,7 @@ fn read_master_rows(path: &std::path::Path) -> Vec<StrataRow> {
         }
 
         out.push(StrataRow {
+            db_id,
             project_id:  proj.map(Value::String),
             point_id:    pt_id.map(Value::String),
             point_no:    pt_no.map(Value::String),
@@ -569,6 +624,9 @@ fn read_sheet_names(path: &std::path::Path) -> Vec<String> {
 }
 
 /// Read all rows from a non-master data sheet into `StrataRow`s.
+///
+/// Issue #93: handles both the new 12-column schema (col 0 = db_id) and the
+/// legacy 11-column schema (no db_id; db_id = None on every row).
 fn read_data_sheet(path: &std::path::Path, sheet_name: &str) -> Vec<StrataRow> {
     let mut out = Vec::new();
     let mut wb = match open_workbook_auto(path) {
@@ -580,20 +638,41 @@ fn read_data_sheet(path: &std::path::Path, sheet_name: &str) -> Vec<StrataRow> {
         Err(_) => return out,
     };
 
-    for row in range.rows().skip(1) {
-        let proj   = cell_to_string(row.first());
-        let pt_id  = cell_to_string(row.get(1));
-        let pt_no  = cell_to_string(row.get(2));
-        let from_v = cell_to_f64(row.get(3));
-        let to_v   = cell_to_f64(row.get(4));
-        let layer  = cell_to_string(row.get(5));
-        let desc   = cell_to_string(row.get(6));
+    let mut rows_iter = range.rows();
+    let header = rows_iter.next();
+    let has_db_id = has_db_id_column(header);
+
+    for row in rows_iter {
+        let (db_id, proj, pt_id, pt_no, from_v, to_v, layer, desc) = if has_db_id {
+            (
+                cell_to_string(row.first()),
+                cell_to_string(row.get(1)),
+                cell_to_string(row.get(2)),
+                cell_to_string(row.get(3)),
+                cell_to_f64(row.get(4)),
+                cell_to_f64(row.get(5)),
+                cell_to_string(row.get(6)),
+                cell_to_string(row.get(7)),
+            )
+        } else {
+            (
+                None,
+                cell_to_string(row.first()),
+                cell_to_string(row.get(1)),
+                cell_to_string(row.get(2)),
+                cell_to_f64(row.get(3)),
+                cell_to_f64(row.get(4)),
+                cell_to_string(row.get(5)),
+                cell_to_string(row.get(6)),
+            )
+        };
 
         if from_v.is_none() && to_v.is_none() && layer.is_none() {
             continue;
         }
 
         out.push(StrataRow {
+            db_id,
             project_id:  proj.map(Value::String),
             point_id:    pt_id.map(Value::String),
             point_no:    pt_no.map(Value::String),
@@ -739,6 +818,7 @@ pub async fn load_strata(state: State<'_, AppState>) -> Result<Vec<Value>, Strin
         .into_iter()
         .map(|r| {
             json!({
+                "db_id":       r.db_id,
                 "ProjectId":   r.project_id,
                 "PointId":     r.point_id,
                 "PointNo":     r.point_no,
@@ -965,13 +1045,9 @@ pub async fn get_strata_data(
 /// the rows are concatenated.  Each selection still maps to a single sheet
 /// in strata.xlsx named `{interpretation}_{series}`.
 ///
-/// NOTE: the on-disk strata.xlsx is still 11 columns (no `db_id` column) —
-/// the schema bump to 12 columns is tracked as a follow-up.  In the
-/// meantime, multi-DB downloads that hit the same `(interpretation, series)`
-/// pair on different DBs will concatenate rows into one sheet without a way
-/// to tell them apart visually.  The READ side already keys by
-/// `(db_id, point_id)` via `load_strata_lookup` to avoid collisions in
-/// downstream code.
+/// Issue #93: the on-disk strata.xlsx now has 12 columns with `db_id` as
+/// column A, so multi-DB downloads that hit the same `(interpretation,
+/// series)` pair on different DBs render the source DB visibly per row.
 #[tauri::command]
 pub async fn download_strata(
     body: StrataRequest,
@@ -1057,8 +1133,7 @@ pub async fn download_strata(
         new_sheets.push((desired_names[i].clone(), rows));
     }
 
-    // Write the sheets to strata.xlsx (still 11 columns — db_id column on
-    // the WRITE side is a follow-up).
+    // Write the sheets to strata.xlsx (12 columns including `db_id` — #93).
     let path_clone = path.clone();
     tokio::task::spawn_blocking(move || add_data_sheets(&path_clone, &new_sheets))
         .await
@@ -1067,8 +1142,15 @@ pub async fn download_strata(
     Ok(json!({ "path": path.display().to_string(), "sheets": desired_names }))
 }
 
-/// Transfer selected strata from the database into the Strata master sheet,
-/// skipping any (ProjectId, PointId) borehole that already exists.
+/// Transfer selected strata from the database(s) into the Strata master sheet,
+/// skipping any `(db_id, ProjectId, PointId)` borehole that already exists.
+///
+/// Issue #93: refactored to the multi-DB fan-out pattern (mirrors
+/// `download_strata` / `get_strata_data`).  Each selection resolves its target
+/// DBs via `StrataSelection::target_dbs` (db_ids > db_id > all active).  Rows
+/// arrive from `fan_out_query_per_db` with `db_id` already prepended, so the
+/// dedup key `(db_id, project_id, point_id)` keeps the same point from
+/// different databases as separate rows.
 #[tauri::command]
 pub async fn transfer_strata(
     body: StrataRequest,
@@ -1077,12 +1159,10 @@ pub async fn transfer_strata(
     if body.selections.is_empty() {
         return Err("No strata types selected.".into());
     }
-    let cfg = state
-        .db
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "No database connection configured.".to_string())?;
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
+    }
     let folder = state.output_folder().ok_or("No output folder configured.")?;
     let path = strata_xlsx_path(&folder);
 
@@ -1094,59 +1174,65 @@ pub async fn transfer_strata(
     }
 
     let project_ids_sql = ids_clause(&body.project_ids)?;
-    let point_filter = point_filter_clause(&body.point_ids)?;
+    let point_filter    = point_filter_clause(&body.point_ids)?;
 
-    // SQL override lookup (issue #47) keyed on this DB's `query_type` (#46).
-    // NOTE: `transfer_strata` is still single-DB — the #48 multi-DB fan-out
-    // hasn't been applied here yet (the master sheet write-path needs a
-    // schema bump for db_id first).  Tracked as a follow-up.
-    let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &cfg.query_type)
-        .unwrap_or_else(|| DATA_SQL.to_string());
+    // Run every selection × target-DB pair in parallel, concatenate the rows.
+    // Each row carries `db_id` automatically (prepended by `fan_out_query_per_db`).
+    let mut new_rows: Vec<StrataRow> = Vec::new();
+    for sel in &body.selections {
+        let targets = sel.target_dbs(&state, &databases);
 
+        let pairs: Vec<(crate::state::DbConfig, String)> = targets
+            .into_iter()
+            .map(|d| {
+                let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &d.query_type)
+                    .unwrap_or_else(|| DATA_SQL.to_string());
+                let sql = template
+                    .replace("{project_ids}", &project_ids_sql)
+                    .replace("{point_filter}", &point_filter)
+                    .replace("{series}", &safe_str(&sel.series))
+                    .replace("{interpretation}", &safe_str(&sel.interpretation));
+                (d, sql)
+            })
+            .collect();
+
+        let mut errors = Vec::new();
+        let rows_json = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut errors).await;
+
+        for v in rows_json {
+            if let Ok(r) = serde_json::from_value::<StrataRow>(v) {
+                new_rows.push(r);
+            }
+        }
+    }
+
+    // Read existing master rows, build the (db_id, project, point) dedup set,
+    // filter out duplicates, then rebuild the workbook.
     let path_clone = path.clone();
-    let cfg_clone = cfg.clone();
-    let selections = body.selections;
     let (transferred, skipped, total) = tokio::task::spawn_blocking(
         move || -> Result<(usize, usize, usize), String> {
-            // Read existing master rows + (proj, pt) pairs.
             let existing = read_master_rows(&path_clone);
-            let pairs: HashSet<(String, String)> = existing
+            let keys: HashSet<(String, String, String)> = existing
                 .iter()
                 .map(|r| {
                     (
+                        r.db_id.clone().unwrap_or_default(),
                         value_to_str(&r.project_id),
                         value_to_str(&r.point_id),
                     )
                 })
                 .collect();
 
-            // Fetch all new rows.
-            let mut new_rows: Vec<StrataRow> = Vec::new();
-            for sel in &selections {
-                let sql = template
-                    .replace("{project_ids}", &project_ids_sql)
-                    .replace("{point_filter}", &point_filter)
-                    .replace("{series}", &safe_str(&sel.series))
-                    .replace("{interpretation}", &safe_str(&sel.interpretation));
-                let rows_json =
-                    crate::db::query_rows(&cfg_clone, &sql).map_err(|e| format!("{e:#}"))?;
-                for v in rows_json {
-                    if let Ok(r) = serde_json::from_value::<StrataRow>(v) {
-                        new_rows.push(r);
-                    }
-                }
-            }
             let new_count = new_rows.len();
-
-            // Filter: skip rows whose borehole already exists.
             let filtered: Vec<StrataRow> = new_rows
                 .into_iter()
                 .filter(|r| {
                     let key = (
+                        r.db_id.clone().unwrap_or_default(),
                         value_to_str(&r.project_id),
                         value_to_str(&r.point_id),
                     );
-                    !pairs.contains(&key)
+                    !keys.contains(&key)
                 })
                 .collect();
 
