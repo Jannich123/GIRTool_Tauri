@@ -59,12 +59,15 @@ function ProjectsTable({
   sortCol, sortDir, onSort,
   emptyText,
   // Issue #83: internal scroll + infinite-scroll pagination.
-  maxHeight, onScroll, footerHint,
+  // Issue #85: `height` is a fixed window (Selected table); `maxHeight` is a
+  // soft cap (Available table).  When both are provided `height` wins so the
+  // layout is stable regardless of row count.
+  maxHeight, height, onScroll, footerHint,
 }) {
   return (
     <div
       className="table-wrap"
-      style={{ maxHeight, overflowY: 'auto' }}
+      style={{ height, maxHeight: height ? undefined : maxHeight, overflowY: 'auto' }}
       onScroll={onScroll}
     >
       <table className="data-table">
@@ -480,7 +483,10 @@ export default function ProjectsPage({ setPage }) {
               onToggle={toggle}
               sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
               emptyText="No projects selected — click rows in the table below to add them."
-              maxHeight="38vh"
+              // Issue #85: fixed window — always tall enough for header + 5
+              // rows, scrolls internally past that.  Keeps the Available
+              // table below from jumping as selections change.
+              height="210px"
             />
           </div>
 
