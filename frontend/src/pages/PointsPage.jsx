@@ -39,6 +39,11 @@ function DbIdPill({ id }) {
   )
 }
 
+// Issue #89: same pagination cadence the Available table on the Projects tab
+// uses (#83).  Render this many rows initially and append PAGE_STEP more
+// whenever the user scrolls within ~120 px of the bottom.
+const PAGE_STEP = 50
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function PointsPage({ setPage }) {
@@ -251,12 +256,38 @@ export default function PointsPage({ setPage }) {
     })
   }, [points, search, sortCol, sortDir])
 
+  // Issue #89: only render the first N rows of the (sorted, search-filtered)
+  // points list.  Reset to PAGE_STEP whenever the filter / sort changes so
+  // the user always starts at the top of the new result set.
+  const [visibleCount, setVisibleCount] = useState(PAGE_STEP)
+  useEffect(() => {
+    setVisibleCount(PAGE_STEP)
+  }, [search, sortCol, sortDir, points])
+
+  const visibleSlice = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
+  )
+  const hasMore = filtered.length > visibleSlice.length
+
+  // Drag-select is bound to the visible slice so dragging only touches rows
+  // the user can actually see — matches the Available table on Projects.
   const { rowProps: dragRowProps, tbodyStyle } = useDragSelect({
-    items:    filtered,
+    items:    visibleSlice,
     getKey:   p => ptKey(p),
     onAdd:    addKeys,
     onToggle: toggle,
   })
+
+  // Infinite-scroll handler — bump visibleCount when the user nears the
+  // bottom of the table-wrap scroll container.
+  function handleTableScroll(e) {
+    if (!hasMore) return
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+      setVisibleCount(c => Math.min(c + PAGE_STEP, filtered.length))
+    }
+  }
 
   const numChecked = Object.values(checked).filter(Boolean).length
 
@@ -315,9 +346,20 @@ export default function PointsPage({ setPage }) {
       {loading ? (
         <p className="hint">Loading…</p>
       ) : (
-        <div className="table-wrap">
+        <>
+          {/* Row-count + "scroll for more" hint above the scroll container
+              so it doesn't jiggle inside the scroll area. */}
+          <p className="hint" style={{ margin: '0 0 .35rem 0', fontSize: '.78rem' }}>
+            Showing {visibleSlice.length} of {filtered.length} row{filtered.length === 1 ? '' : 's'}
+            {hasMore && ' · scroll for more'}
+          </p>
+        <div
+          className="table-wrap"
+          style={{ maxHeight: '62vh', overflowY: 'auto' }}
+          onScroll={handleTableScroll}
+        >
           <table className="data-table">
-            <thead>
+            <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
               <tr>
                 <th style={{ width: 40 }}>
                   <input
@@ -358,7 +400,7 @@ export default function PointsPage({ setPage }) {
               </tr>
             </thead>
             <tbody style={tbodyStyle}>
-              {filtered.map((p, idx) => {
+              {visibleSlice.map((p, idx) => {
                 const k = ptKey(p)
                 return (
                   <tr
@@ -397,9 +439,17 @@ export default function PointsPage({ setPage }) {
               {filtered.length === 0 && (
                 <tr><td colSpan={11} className="no-data">No points found</td></tr>
               )}
+              {hasMore && (
+                <tr>
+                  <td colSpan={11} className="no-data" style={{ fontStyle: 'italic', textAlign: 'center' }}>
+                    {filtered.length - visibleSlice.length} more row(s) — keep scrolling…
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   )
