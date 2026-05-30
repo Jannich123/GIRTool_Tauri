@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import { useFilter } from '../context/FilterContext'
 
 export default function DataPage() {
   const { selectedProjects, selectedPoints, connection } = useApp()
@@ -20,6 +21,41 @@ export default function DataPage() {
 
   // ── Shared error ──────────────────────────────────────────────────────────
   const [error, setError] = useState('')
+
+  // ── Issue #113: Datasheet subtabs (one per .xlsx under output/Datasheets/) ─
+  const [datasheets, setDatasheets] = useState([])
+  const [activeTab,  setActiveTab]  = useState(null)
+  // Cache for the preview's read_datasheet results.  Lives on the page so
+  // flipping between subtabs is instant; cleared per-fname when the
+  // datasheet list refreshes (after Download / Append).
+  const previewCacheRef = useRef(new Map())
+
+  async function refreshDatasheets({ keepActive = true, invalidate = null } = {}) {
+    try {
+      const list = await invoke('list_datasheets')
+      // Drop any stale preview cache entries for files that no longer exist
+      // (deleted) or that we know just changed.
+      const live = new Set(list.map(e => e.fname))
+      for (const k of [...previewCacheRef.current.keys()]) {
+        if (!live.has(k) || (invalidate && invalidate.has(k))) {
+          previewCacheRef.current.delete(k)
+        }
+      }
+      setDatasheets(list)
+      if (!keepActive || !list.some(e => e.fname === activeTab)) {
+        setActiveTab(list[0]?.fname ?? null)
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  // Initial + connection-change load.  Pre-existing files surface before the
+  // user even clicks Download.
+  useEffect(() => {
+    refreshDatasheets({ keepActive: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection?.output_folder])
 
   const projectId = selectedProjects[0]?.ProjectId
 
@@ -82,6 +118,9 @@ export default function DataPage() {
     try {
       const res = await invoke('download_data', { projectId, query: buildPayload(queryNames) })
       setSaveResult(res)
+      // Issue #113: refresh subtab list + invalidate cache for files just rewritten.
+      const touched = new Set((res?.saved ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
+      await refreshDatasheets({ keepActive: true, invalidate: touched })
     } catch (err) {
       console.error(err)
       setError(err || 'Save failed — check the backend log.')
@@ -94,6 +133,8 @@ export default function DataPage() {
     try {
       const res = await invoke('append_data', { projectId, query: buildPayload(queryNames) })
       setAppendResult(res)
+      const touched = new Set((res?.saved ?? res?.results ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
+      await refreshDatasheets({ keepActive: true, invalidate: touched })
     } catch (err) {
       console.error(err)
       setError(err || 'Append failed — check the backend log.')
@@ -105,6 +146,8 @@ export default function DataPage() {
     try {
       const res = await invoke('readd_strata', { projectId, query: buildPayload([]) })
       setReaddResult(res)
+      const touched = new Set((res?.updated ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
+      await refreshDatasheets({ keepActive: true, invalidate: touched })
     } catch (err) {
       console.error(err)
       setError(err || 'Re-add strata failed — check the backend log.')
@@ -286,7 +329,304 @@ export default function DataPage() {
         </div>
       )}
 
+      {/* ══ DATASHEET SUBTABS (issue #113) ═════════════════════════════════ */}
+      {datasheets.length > 0 && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <div className="datasheet-tabs"
+               style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem',
+                        marginBottom: '.75rem' }}>
+            {datasheets.map(ds => {
+              const active = ds.fname === activeTab
+              return (
+                <button
+                  key={ds.fname}
+                  className="datasheet-tab-pill"
+                  onClick={() => setActiveTab(ds.fname)}
+                  style={{
+                    padding:      '.35rem .8rem',
+                    borderRadius: 999,
+                    border:       active ? '1px solid var(--primary, #2563eb)' : '1px solid var(--border, #d1d5db)',
+                    background:   active ? 'var(--primary, #2563eb)' : 'var(--surface, #f9fafb)',
+                    color:        active ? '#fff' : 'inherit',
+                    cursor:       'pointer',
+                    fontSize:     '.82rem',
+                    fontWeight:   active ? 600 : 500,
+                    transition:   'background .12s, color .12s',
+                  }}
+                  title={ds.has_strata ? 'Includes Primary Layer column' : 'No strata column'}
+                >
+                  {ds.fname}
+                  <span style={{
+                    marginLeft: '.4rem', opacity: 0.7, fontSize: '.78rem',
+                  }}>
+                    ({ds.row_count.toLocaleString()})
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {activeTab && (
+            <DatasheetPreview
+              key={activeTab}
+              fname={activeTab}
+              cacheRef={previewCacheRef}
+            />
+          )}
+        </div>
+      )}
+
       {/* The in-page Query Config tab moved to Settings → Query Config (issue #47). */}
     </div>
   )
+}
+
+// ── Issue #113: Paginated, filterable preview of one datasheet xlsx ──────────
+
+const PAGE_STEP = 50
+
+function DatasheetPreview({ fname, cacheRef }) {
+  const [data, setData]       = useState({ columns: [], rows: [] })
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+
+  // Sort + search + pagination state.  All reset whenever `fname` changes.
+  const [sortCol, setSortCol] = useState(null)   // index into visibleColumns
+  const [sortDir, setSortDir] = useState('asc')
+  const [search,  setSearch]  = useState('')
+  const [visibleCount, setVisibleCount] = useState(PAGE_STEP)
+
+  const { filteredPtIds, checkedStrataPrimary, checkedStrataSecondary } = useFilter()
+
+  // Load + cache on fname change.
+  useEffect(() => {
+    let cancelled = false
+    const cached = cacheRef.current.get(fname)
+    if (cached) {
+      setData(cached)
+      setLoading(false)
+      setLoadError('')
+    } else {
+      setLoading(true)
+      setLoadError('')
+      setData({ columns: [], rows: [] })
+      invoke('read_datasheet', { fname })
+        .then(res => {
+          if (cancelled) return
+          const payload = {
+            columns: Array.isArray(res?.columns) ? res.columns : [],
+            rows:    Array.isArray(res?.rows)    ? res.rows    : [],
+          }
+          cacheRef.current.set(fname, payload)
+          setData(payload)
+        })
+        .catch(err => {
+          if (cancelled) return
+          console.error(err)
+          setLoadError(String(err))
+        })
+        .finally(() => { if (!cancelled) setLoading(false) })
+    }
+    setSortCol(null); setSortDir('asc'); setSearch('')
+    setVisibleCount(PAGE_STEP)
+    return () => { cancelled = true }
+  }, [fname, cacheRef])
+
+  // Hide every column whose header ends in `Id` (case-insensitive),
+  // EXCEPT `db_id` which always stays visible.  Mirrors the xlsx behaviour
+  // in `is_id_column` (download.rs) and matches the acceptance criteria.
+  const visibleColumns = useMemo(() => {
+    return data.columns
+      .map((c, i) => ({ name: c, idx: i }))
+      .filter(c => /^db_id$/i.test(c.name) || !/id$/i.test(c.name))
+  }, [data.columns])
+
+  // Column lookups used for filter wiring (case-insensitive against the raw
+  // column names, not the visible subset — filter must apply even if
+  // PointId itself is hidden from the table).
+  const filterIdx = useMemo(() => {
+    const find = (re) => data.columns.findIndex(c => re.test(c))
+    return {
+      pid: find(/^pointid$/i),
+      pri: find(/^primary layer$/i),
+      sec: find(/^secondary layer$/i),
+    }
+  }, [data.columns])
+
+  // Apply the global FilterPanel selection (same axes Map/Charts consume).
+  // A null selection on a given axis means "no filter on that axis".  If a
+  // row's value isn't in the active set the row is filtered out.
+  const filteredRows = useMemo(() => {
+    const anyFilter = filteredPtIds !== null
+                   || checkedStrataPrimary   !== null
+                   || checkedStrataSecondary !== null
+    if (!anyFilter) return data.rows
+
+    return data.rows.filter(row => {
+      if (filteredPtIds !== null && filterIdx.pid >= 0) {
+        const v = row[filterIdx.pid]
+        if (v == null || !filteredPtIds.has(String(v))) return false
+      }
+      if (checkedStrataPrimary !== null && filterIdx.pri >= 0) {
+        const v = row[filterIdx.pri] ?? 'Unknown'
+        if (!checkedStrataPrimary.has(v)) return false
+      }
+      if (checkedStrataSecondary !== null && filterIdx.sec >= 0) {
+        const v = row[filterIdx.sec] ?? 'Unknown'
+        if (!checkedStrataSecondary.has(v)) return false
+      }
+      return true
+    })
+  }, [data.rows, filteredPtIds, checkedStrataPrimary, checkedStrataSecondary, filterIdx])
+
+  // Search across the *visible* columns only — hidden ID columns shouldn't
+  // pollute the search.
+  const searchedRows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return filteredRows
+    const visIdxs = visibleColumns.map(c => c.idx)
+    return filteredRows.filter(row => {
+      for (const i of visIdxs) {
+        const v = row[i]
+        if (v == null) continue
+        if (String(v).toLowerCase().includes(q)) return true
+      }
+      return false
+    })
+  }, [filteredRows, search, visibleColumns])
+
+  // Sort by the clicked visible column.  Stable, simple — copies once.
+  const sortedRows = useMemo(() => {
+    if (sortCol == null || !visibleColumns[sortCol]) return searchedRows
+    const realIdx = visibleColumns[sortCol].idx
+    const dir = sortDir === 'asc' ? 1 : -1
+    const rows = [...searchedRows]
+    rows.sort((a, b) => {
+      const av = a[realIdx]; const bv = b[realIdx]
+      if (av == null && bv == null) return 0
+      if (av == null) return  1
+      if (bv == null) return -1
+      // Numeric compare when both look numeric, else lexicographic.
+      const an = typeof av === 'number' ? av : Number(av)
+      const bn = typeof bv === 'number' ? bv : Number(bv)
+      if (Number.isFinite(an) && Number.isFinite(bn)) return dir * (an - bn)
+      return dir * String(av).localeCompare(String(bv))
+    })
+    return rows
+  }, [searchedRows, sortCol, sortDir, visibleColumns])
+
+  // Reset pagination whenever the result set or sort changes.
+  useEffect(() => { setVisibleCount(PAGE_STEP) }, [search, sortCol, sortDir,
+                                                  filteredPtIds, checkedStrataPrimary, checkedStrataSecondary])
+
+  const displayed = sortedRows.slice(0, visibleCount)
+  const hasMore   = sortedRows.length > displayed.length
+
+  function handleScroll(e) {
+    if (!hasMore) return
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+      setVisibleCount(c => Math.min(c + PAGE_STEP, sortedRows.length))
+    }
+  }
+
+  function handleSort(visColIdx) {
+    setSortCol(prev => {
+      if (prev === visColIdx) {
+        setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+        return prev
+      }
+      setSortDir('asc')
+      return visColIdx
+    })
+  }
+
+  if (loadError) {
+    return <p className="msg err">Failed to load <code>{fname}.xlsx</code>: {loadError}</p>
+  }
+  if (loading && !data.columns.length) {
+    return <p className="hint">Loading {fname}…</p>
+  }
+  if (!data.columns.length) {
+    return <p className="hint">No data in <code>{fname}.xlsx</code>.</p>
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    gap: '.75rem', marginBottom: '.5rem', flexWrap: 'wrap' }}>
+        <span className="hint" style={{ fontSize: '.82rem' }}>
+          Showing {displayed.length.toLocaleString()} of {sortedRows.length.toLocaleString()} rows
+          {hasMore && ' · scroll for more'}
+        </span>
+        <input
+          type="text"
+          placeholder="Search…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{
+            padding: '.25rem .5rem', borderRadius: 4,
+            border: '1px solid var(--border, #d1d5db)', fontSize: '.82rem',
+            minWidth: 180,
+          }}
+        />
+      </div>
+
+      <div
+        style={{ maxHeight: '60vh', overflowY: 'auto',
+                 border: '1px solid var(--border, #d1d5db)', borderRadius: 6 }}
+        onScroll={handleScroll}
+      >
+        <table className="data-table" style={{ fontSize: '.82rem' }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
+            <tr>
+              {visibleColumns.map((c, i) => (
+                <th
+                  key={c.idx}
+                  onClick={() => handleSort(i)}
+                  style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+                           padding: '.4rem .55rem', borderBottom: '1px solid var(--border, #d1d5db)' }}
+                  title={`Sort by ${c.name}`}
+                >
+                  {c.name}{sortCol === i ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {displayed.map((row, ri) => (
+              <tr key={ri}>
+                {visibleColumns.map(c => (
+                  <td key={c.idx} style={{ padding: '.3rem .55rem',
+                                            whiteSpace: 'nowrap',
+                                            borderBottom: '1px solid var(--border-light, #f1f5f9)' }}>
+                    {formatCell(row[c.idx])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {displayed.length === 0 && (
+              <tr>
+                <td colSpan={visibleColumns.length}
+                    style={{ padding: '1rem .55rem', color: 'var(--muted, #6b7280)',
+                             textAlign: 'center' }}>
+                  No rows match the current filter / search.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function formatCell(v) {
+  if (v == null) return ''
+  if (typeof v === 'number') {
+    // Preserve integers exactly; trim trailing-zero float noise.
+    return Number.isInteger(v) ? v.toLocaleString() : v.toString()
+  }
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
+  return String(v)
 }

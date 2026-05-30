@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use calamine::{open_workbook, Data, Reader, Xlsx};
 use rust_xlsxwriter::{Format, Table, TableColumn, TableStyle, Workbook};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
 
@@ -2324,5 +2324,127 @@ pub async fn restore_session(state: State<'_, AppState>) -> Result<Value, String
     match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).map_err(|e| format!("Parse error: {e}")),
         Err(_) => Ok(json!({})),
+    }
+}
+
+// ── Issue #113: Data-tab subtab listing + preview ────────────────────────────
+
+/// One entry per `.xlsx` file in `{output_folder}/Datasheets/`.
+/// Used by the Data tab to render the subtab pills.
+#[derive(Debug, Serialize)]
+pub struct DatasheetEntry {
+    /// File name without extension (e.g. `"CPTData"`).
+    pub fname:      String,
+    /// Row count excluding the header row.  Computed via a cheap header-only
+    /// pass over the first sheet.
+    pub row_count:  usize,
+    /// Whether a `Primary Layer` column is present in the header (case-insensitive).
+    pub has_strata: bool,
+}
+
+/// Scan `{output_folder}/Datasheets/` and return one [`DatasheetEntry`] per
+/// `.xlsx` file.  Returns an empty Vec when the folder doesn't exist (the
+/// user simply hasn't downloaded anything yet).
+///
+/// All disk I/O runs on a blocking task so the Tokio runtime isn't stalled.
+/// Entries are returned sorted by `fname` so the frontend gets a stable
+/// pill order.
+#[tauri::command]
+pub async fn list_datasheets(
+    state: State<'_, AppState>,
+) -> Result<Vec<DatasheetEntry>, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let ds_dir = datasheets_dir(&folder);
+
+    tokio::task::spawn_blocking(move || -> Vec<DatasheetEntry> {
+        use calamine::{open_workbook_auto, Reader, Data};
+
+        if !ds_dir.exists() {
+            return Vec::new();
+        }
+        let read_dir = match std::fs::read_dir(&ds_dir) {
+            Ok(r)  => r,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut entries: Vec<DatasheetEntry> = Vec::new();
+        for ent in read_dir.flatten() {
+            let path = ent.path();
+            if !path.is_file() { continue; }
+            if path.extension().and_then(|e| e.to_str()).map(|e| !e.eq_ignore_ascii_case("xlsx")).unwrap_or(true) {
+                continue;
+            }
+            let fname = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None    => continue,
+            };
+
+            // Open + cheap header-only read of the first sheet.
+            let mut wb = match open_workbook_auto(&path) {
+                Ok(w)  => w,
+                Err(_) => continue,
+            };
+            let sheet_name = match wb.sheet_names().first().cloned() {
+                Some(n) => n,
+                None    => continue,
+            };
+            let range = match wb.worksheet_range(&sheet_name) {
+                Ok(r)  => r,
+                Err(_) => continue,
+            };
+
+            // Calamine's `range.height()` includes the header; row_count is
+            // height - 1, saturating to 0 for empty / header-only files.
+            let row_count = range.height().saturating_sub(1);
+
+            // Scan the first row for a `Primary Layer` column (case-insensitive).
+            let has_strata = range
+                .rows()
+                .next()
+                .map(|hdr| hdr.iter().any(|cell| matches!(cell, Data::String(s) if s.eq_ignore_ascii_case("primary layer"))))
+                .unwrap_or(false);
+
+            entries.push(DatasheetEntry { fname, row_count, has_strata });
+        }
+
+        entries.sort_by(|a, b| a.fname.cmp(&b.fname));
+        entries
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))
+}
+
+/// Read a single datasheet `.xlsx` and return its contents as
+/// `{ columns: [...], rows: [[...], ...] }` for the Data tab preview.
+///
+/// `fname` is the file stem (no extension), restricted to `[A-Za-z0-9_-]` to
+/// rule out path traversal.  Path separators are rejected outright.
+#[tauri::command]
+pub async fn read_datasheet(
+    fname: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    // Validate fname: bare file stem only, no separators, no traversal.
+    if fname.is_empty() {
+        return Err("Empty datasheet name.".into());
+    }
+    if fname.contains('/') || fname.contains('\\') || fname.contains("..") {
+        return Err("Invalid datasheet name.".into());
+    }
+    if !fname.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("Invalid datasheet name — only letters, digits, underscore and hyphen allowed.".into());
+    }
+
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let path = datasheets_dir(&folder).join(format!("{fname}.xlsx"));
+
+    let path_clone = path.clone();
+    let parsed = tokio::task::spawn_blocking(move || read_existing_datasheet(&path_clone))
+        .await
+        .map_err(|e| format!("internal task error: {e}"))?;
+
+    match parsed {
+        Some((columns, rows)) => Ok(json!({ "columns": columns, "rows": rows })),
+        None => Err(format!("Datasheet not found: {}", path.display())),
     }
 }

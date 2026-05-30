@@ -96,7 +96,7 @@ function Shell() {
     }
   }
 
-  const showFilter = page === 'map' || page === 'charts'
+  const showFilter = page === 'map' || page === 'charts' || page === 'data'
 
   return (
     <div className="layout">
