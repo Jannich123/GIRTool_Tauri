@@ -44,11 +44,15 @@ use crate::state::AppState;
 pub struct DownloadRequest {
     /// Primary project ID — used for strata lookup.
     pub project_id: String,
-    /// All project IDs to include in the SQL IN clause.
-    pub project_ids: Vec<String>,
-    /// Optional point filter; empty = all points.
+    /// All project IDs to include in the SQL IN clause.  Issue #105:
+    /// accept either the legacy flat string list OR a per-DB list of
+    /// `{db_id, ProjectId}` so the backend can fan out across every
+    /// configured database.
+    pub project_ids: ProjectIdsArg,
+    /// Optional point filter; empty = all points.  Same shape choice
+    /// as `project_ids`.
     #[serde(default)]
-    pub point_ids: Vec<String>,
+    pub point_ids: PointIdsArg,
     /// Run only these query names; empty = run all.
     #[serde(default)]
     pub query_names: Vec<String>,
@@ -60,6 +64,43 @@ pub struct DownloadRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub points_meta: Vec<Value>,
+}
+
+/// Either a flat list of project IDs (legacy single-DB form) or a list of
+/// `{db_id, ProjectId}` entries (issue #105 multi-DB form).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ProjectIdsArg {
+    Flat(Vec<String>),
+    PerDb(Vec<ProjectIdEntry>),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProjectIdEntry {
+    pub db_id: String,
+    #[serde(rename = "ProjectId", alias = "project_id")]
+    pub project_id: String,
+}
+
+/// Same as `ProjectIdsArg` but for points.  Defaults to an empty flat list
+/// when the field is missing so existing call sites that don't filter by
+/// point keep working.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum PointIdsArg {
+    Flat(Vec<String>),
+    PerDb(Vec<PointIdEntry>),
+}
+
+impl Default for PointIdsArg {
+    fn default() -> Self { PointIdsArg::Flat(Vec::new()) }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PointIdEntry {
+    pub db_id: String,
+    #[serde(rename = "PointId", alias = "point_id")]
+    pub point_id: String,
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -1649,17 +1690,52 @@ pub async fn download_data(
     query: DownloadRequest,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    if query.project_ids.is_empty() {
-        return Err("No project IDs provided.".into());
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+
+    // Issue #105: fan out across every active DB.  active_databases reads
+    // from in-memory state, falling back to GIRTool_settings.json + the
+    // legacy state.db single DB.
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
     }
 
-    let folder = state.output_folder().ok_or("No output folder configured.")?;
-    let cfg = state
-        .db
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "No database connection configured.".to_string())?;
+    // Group the request's project_ids / point_ids by db_id.  Legacy flat
+    // lists are duplicated to every active DB (same posture as the
+    // get_points fallback in points.rs).
+    use std::collections::HashMap;
+    let mut per_db_projects: HashMap<String, Vec<String>> = HashMap::new();
+    match &query.project_ids {
+        ProjectIdsArg::Flat(ids) => {
+            if ids.is_empty() {
+                return Err("No project IDs provided.".into());
+            }
+            for db in &databases {
+                per_db_projects.insert(db.effective_id(), ids.clone());
+            }
+        }
+        ProjectIdsArg::PerDb(entries) => {
+            if entries.is_empty() {
+                return Err("No project IDs provided.".into());
+            }
+            for e in entries {
+                per_db_projects.entry(e.db_id.clone()).or_default().push(e.project_id.clone());
+            }
+        }
+    }
+    let mut per_db_points: HashMap<String, Vec<String>> = HashMap::new();
+    match &query.point_ids {
+        PointIdsArg::Flat(ids) => {
+            for db in &databases {
+                per_db_points.insert(db.effective_id(), ids.clone());
+            }
+        }
+        PointIdsArg::PerDb(entries) => {
+            for e in entries {
+                per_db_points.entry(e.db_id.clone()).or_default().push(e.point_id.clone());
+            }
+        }
+    }
 
     // Ensure Datasheets directory exists.
     let ds_dir = datasheets_dir(&folder);
@@ -1680,10 +1756,6 @@ pub async fn download_data(
     // Load strata lookup once (used for apply_strata="Yes" queries).
     let strata_lookup = load_strata_lookup(&folder, &query.project_id);
 
-    // Resolve the active query_type once (issue #47).  Each query's SQL may
-    // be overridden via Settings → Query Config → Datasheet queries.
-    let qt = crate::commands::query_configs::current_query_type(&state);
-
     // Per-file results, structured to match the frontend's expected shape:
     //   { folder, saved: [{file, rows}], errors: [{file, error}] }
     let mut saved:  Vec<Value> = Vec::new();
@@ -1692,38 +1764,52 @@ pub async fn download_data(
     for q in queries_to_run {
         let xlsx_name = format!("{}.xlsx", q.fname);
 
-        // Override lookup: query_configs.datasheet_queries.<qt>.<fname>
-        // Falls back to the SQL stored in queries.json.
-        let raw_sql = crate::commands::query_configs::lookup_datasheet_sql(&folder, &qt, &q.fname)
-            .unwrap_or_else(|| q.sql_script.clone());
+        // Build per-DB (cfg, sql) pairs.  Each DB resolves its own SQL
+        // template via `query_type` (issue #47), falling back to the SQL
+        // stored in queries.json.
+        let mut pairs: Vec<(crate::state::DbConfig, String)> = Vec::new();
+        let mut build_error: Option<String> = None;
+        for db in databases.iter() {
+            let id = db.effective_id();
+            let Some(proj_ids) = per_db_projects.get(&id) else { continue };
+            if proj_ids.is_empty() { continue }
+            let empty_pts: Vec<String> = Vec::new();
+            let pt_ids = per_db_points.get(&id).unwrap_or(&empty_pts);
 
-        let sql = match build_sql(
-            &raw_sql,
-            &q.pointfilter,
-            &query.project_ids,
-            &query.point_ids,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                errors.push(json!({ "file": xlsx_name, "error": format!("SQL build error — {e}") }));
-                continue;
+            let raw_sql = crate::commands::query_configs::lookup_datasheet_sql(
+                &folder, &db.query_type, &q.fname,
+            ).unwrap_or_else(|| q.sql_script.clone());
+
+            match build_sql(&raw_sql, &q.pointfilter, proj_ids, pt_ids) {
+                Ok(sql) => pairs.push((db.clone(), sql)),
+                Err(e)  => { build_error = Some(format!("SQL build error — {e}")); break }
             }
-        };
+        }
+        if let Some(e) = build_error {
+            errors.push(json!({ "file": xlsx_name, "error": e }));
+            continue;
+        }
+        if pairs.is_empty() {
+            errors.push(json!({
+                "file":  xlsx_name,
+                "error": "No configured database has any of the selected project IDs.",
+            }));
+            continue;
+        }
 
-        let cfg_clone = cfg.clone();
-        let rows_result = tokio::task::spawn_blocking(move || {
-            crate::db::query_rows(&cfg_clone, &sql)
-        })
-        .await
-        .map_err(|e| format!("internal task error: {e}"))?;
+        // Fan out — rows come back with `db_id` prepended (issue #51).
+        let mut fan_errors = Vec::new();
+        let raw_rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut fan_errors).await;
 
-        let raw_rows = match rows_result {
-            Ok(r) => r,
-            Err(e) => {
-                errors.push(json!({ "file": xlsx_name, "error": format!("query failed — {e:#}") }));
-                continue;
-            }
-        };
+        if raw_rows.is_empty() && !fan_errors.is_empty() {
+            let first = fan_errors.first()
+                .and_then(|e| e.get("error"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| "All databases failed.".into());
+            errors.push(json!({ "file": xlsx_name, "error": format!("query failed — {first}") }));
+            continue;
+        }
 
         let row_count = raw_rows.len();
         let (mut columns, mut rows) = objects_to_columnar(raw_rows);
@@ -1761,10 +1847,12 @@ pub async fn download_data(
         "selected_projects".to_string(),
         Value::Array(query.projects_meta.clone()),
     );
-    new_settings.insert(
-        "point_count".to_string(),
-        json!(query.point_ids.len()),
-    );
+    // Issue #105: PointIdsArg is an enum now — match to count entries.
+    let point_count = match &query.point_ids {
+        PointIdsArg::Flat(v)  => v.len(),
+        PointIdsArg::PerDb(v) => v.len(),
+    };
+    new_settings.insert("point_count".to_string(), json!(point_count));
 
     if let Ok(s) = serde_json::to_string_pretty(&Value::Object(new_settings)) {
         let _ = std::fs::write(&settings_file, s);

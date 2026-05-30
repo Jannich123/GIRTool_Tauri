@@ -50,12 +50,22 @@ export default function DataPage() {
   const [appending,    setAppending]    = useState(false)
 
   function buildPayload(queryNames) {
+    // Issue #105: send project_ids / point_ids in per-DB form so the
+    // backend can fan out across every database.  Each entry carries
+    // the db_id of the source database so download_data groups them
+    // correctly.  Falls back to the legacy ProjectId-only shape when
+    // the upstream rows don't have db_id (shouldn't happen post-#51).
+    const hasProjDb = selectedProjects.some(p => p?.db_id)
+    const hasPtDb   = selectedPoints.some(p => p?.db_id)
     return {
       // Primary project — used by the backend for strata lookup.
-      // (The full project_ids list is used for the SQL IN clause.)
       project_id:    selectedProjects[0]?.ProjectId ?? '',
-      project_ids:   selectedProjects.map(p => p.ProjectId),
-      point_ids:     selectedPoints.map(p => p.PointId),
+      project_ids:   hasProjDb
+        ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+        : selectedProjects.map(p => p.ProjectId),
+      point_ids:     hasPtDb
+        ? selectedPoints.map(p => ({ db_id: p.db_id, PointId: p.PointId }))
+        : selectedPoints.map(p => p.PointId),
       query_names:   queryNames,
       projects_meta: selectedProjects.map(p => ({
         ProjectId: p.ProjectId, ProjectNo: p.ProjectNo, Title: p.Title,
