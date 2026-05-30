@@ -691,16 +691,32 @@ pub async fn test_database(cfg: DbConfig) -> Result<TestResult, String> {
 pub async fn connect_all_databases(
     state: State<'_, AppState>,
 ) -> Result<Vec<TestResult>, String> {
-    let mut databases: Vec<DbConfig> = state.databases.lock().unwrap().clone();
-    if databases.is_empty() {
-        let folder = state.output_folder().unwrap_or_default();
-        if !folder.is_empty() {
-            databases = tokio::task::spawn_blocking(move || load_databases_from_settings(&folder))
-                .await
-                .map_err(|e| format!("internal task error: {e}"))?;
-            *state.databases.lock().unwrap() = databases.clone();
+    // Issue #107: ALWAYS prefer the disk copy when a folder is set.  The
+    // legacy `connect` command pushes a `{ id: "primary", … }` entry into
+    // `state.databases` as a bridge to the multi-DB world; without this
+    // refresh, that stale "primary" entry would shadow the real DB1/DB2
+    // list saved in `{folder}/GIRTool_settings.json::databases`.
+    //
+    // The Database-tab "Save & connect all" flow calls `save_databases`
+    // immediately before this command, so re-reading from disk just
+    // confirms the user's just-saved write — no race.
+    let folder = state.output_folder().unwrap_or_default();
+    let databases: Vec<DbConfig> = if !folder.is_empty() {
+        let folder_clone = folder.clone();
+        let loaded = tokio::task::spawn_blocking(move || load_databases_from_settings(&folder_clone))
+            .await
+            .map_err(|e| format!("internal task error: {e}"))?;
+        if !loaded.is_empty() {
+            *state.databases.lock().unwrap() = loaded.clone();
+            loaded
+        } else {
+            // settings.json has no `databases` list — fall back to whatever
+            // is in memory (legacy single-DB bridge from `connect`).
+            state.databases.lock().unwrap().clone()
         }
-    }
+    } else {
+        state.databases.lock().unwrap().clone()
+    };
     if databases.is_empty() {
         return Ok(Vec::new());
     }
