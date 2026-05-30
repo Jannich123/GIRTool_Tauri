@@ -634,13 +634,25 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
       {blocks.map(({ start, end }, blockIdx) => (
-        <div key={blockIdx} style={{ border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <div
+          key={blockIdx}
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            // Issue #99: full width + horizontal scroll instead of clip.
+            width: '100%',
+            overflowX: 'auto',
+          }}
+        >
           {start > 0 && (
             <div style={{ fontSize: '0.72em', color: '#9ca3af', padding: '2px 8px', background: '#f9fafb' }}>
               ↑ {start} row{start !== 1 ? 's' : ''} above not shown
             </div>
           )}
-          <table className="data-table" style={{ margin: 0 }}>
+          {/* `minWidth: 100%` lets the table stretch when the column content
+              is narrow, but maintain its natural width (triggering the
+              wrapper's overflowX scroll) when content is wide. */}
+          <table className="data-table" style={{ margin: 0, minWidth: '100%' }}>
             <thead>
               <tr>
                 <th style={{ width: 100 }}>Issue</th>
@@ -650,7 +662,18 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
                 <th style={{ textAlign: 'right' }}>Depth To [m]</th>
                 <th>Primary Layer</th>
                 <th>Secondary Layer</th>
-                <th style={{ width: 90 }} />
+                {/* Issue #99: delete column pinned to the right edge so the
+                    button is always visible regardless of horizontal scroll. */}
+                <th
+                  style={{
+                    width: 90,
+                    position: 'sticky',
+                    right: 0,
+                    background: '#fff',
+                    zIndex: 1,
+                    boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
+                  }}
+                />
               </tr>
             </thead>
             <tbody>
@@ -696,7 +719,18 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
                     </td>
                     <td>{row.Layer}</td>
                     <td>{row.Description}</td>
-                    <td>
+                    {/* Issue #99: pinned to right edge with row-matching
+                        background so the button is always reachable even
+                        when the table is horizontally scrolled. */}
+                    <td
+                      style={{
+                        position: 'sticky',
+                        right: 0,
+                        background: bg ?? '#fff',
+                        zIndex: 1,
+                        boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
+                      }}
+                    >
                       <button
                         className="btn-secondary btn-sm"
                         style={{ color: '#dc2626', borderColor: '#dc2626', padding: '1px 6px' }}
