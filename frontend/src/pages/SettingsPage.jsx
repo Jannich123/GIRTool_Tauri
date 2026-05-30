@@ -396,12 +396,55 @@ export default function SettingsPage({ setPage }) {
       // 4. Ensure strata.xlsx exists in this folder (fire and forget)
       invoke('ensure_strata_file').catch(() => {})
 
-      // 5. Issue #95: selection restoration moved out of GIRTool_settings.json
-      //    and into the xlsx workflow.  projects.xlsx auto-loads on the
-      //    Projects page mount (#82); points.xlsx auto-loads on the Points
-      //    page mount (#78).  We no longer call `load_selection` here.
+      // 5. Issue #103: hydrate the in-memory selection by cross-matching
+      //    projects.xlsx / points.xlsx against the live DB contents.  After
+      //    this the user can jump straight to Strata / Data / Charts
+      //    without first walking the Projects → Points click path.
+      const anyDbOk = dbOk || multiDb.okCount > 0
+      let restoredProjects = 0
+      let restoredPoints   = 0
+      if (anyDbOk) {
+        try {
+          const [allProjects, xlsxProjects] = await Promise.all([
+            invoke('list_projects').catch(() => []),
+            invoke('load_projects_xlsx').catch(() => []),
+          ])
+          if (Array.isArray(allProjects) && Array.isArray(xlsxProjects) && xlsxProjects.length > 0) {
+            const projKey = (p) => `${p?.db_id ?? '?'}||${p?.ProjectId ?? ''}`
+            const xlsxKeys = new Set(xlsxProjects.map(projKey))
+            const matched = allProjects.filter(p => xlsxKeys.has(projKey(p)))
+            if (matched.length > 0) {
+              setSelectedProjects(matched)
+              restoredProjects = matched.length
+              // Chain: pull points for those projects, then match against points.xlsx.
+              try {
+                const idArg = matched.some(p => p?.db_id)
+                  ? matched.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+                  : matched.map(p => p.ProjectId)
+                const [allPoints, xlsxPoints] = await Promise.all([
+                  invoke('get_points', { projectIds: idArg }).catch(() => []),
+                  invoke('load_points_xlsx').catch(() => []),
+                ])
+                if (Array.isArray(allPoints) && Array.isArray(xlsxPoints) && xlsxPoints.length > 0) {
+                  const ptKey = (p) => `${p?.db_id ?? '?'}||${p?.PointId ?? ''}`
+                  const ptKeys = new Set(xlsxPoints.map(ptKey))
+                  const ptMatched = allPoints.filter(p => ptKeys.has(ptKey(p)))
+                  if (ptMatched.length > 0) {
+                    setSelectedPoints(ptMatched)
+                    restoredPoints = ptMatched.length
+                  }
+                }
+              } catch (err) {
+                console.warn('restore points failed:', err)
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('restore projects failed:', err)
+        }
+      }
 
-      // 6. Compose a friendly status line covering folder + DB.
+      // 6. Compose a friendly status line covering folder + DB + restored.
       const dbBit = dbOk
         ? `connected to ${merged.database || 'database'}`
         : merged.server
@@ -410,16 +453,20 @@ export default function SettingsPage({ setPage }) {
       const multiBit = multiDb.total > 0
         ? ` · ${multiDb.okCount}/${multiDb.total} multi-DB${multiDb.failCount > 0 ? ` (${multiDb.failCount} failed)` : ''}`
         : ''
-      // The whole flow is "OK" if EITHER the legacy connect worked OR at
-      // least one multi-DB connected OR there's no DB configured at all.
-      const anyDbOk = dbOk || multiDb.okCount > 0
+      const restoredBit = (restoredProjects > 0 || restoredPoints > 0)
+        ? ` · restored ${restoredProjects} project${restoredProjects === 1 ? '' : 's'}` +
+          (restoredPoints > 0 ? ` + ${restoredPoints} point${restoredPoints === 1 ? '' : 's'}` : '')
+        : ''
       setFolderStatus(anyDbOk || !merged.server ? 'ok' : 'warn')
-      setFolderMsg(`${folderRes.message} — ${dbBit}${multiBit}`)
+      setFolderMsg(`${folderRes.message} — ${dbBit}${multiBit}${restoredBit}`)
 
-      // Issue #95: no auto-navigate based on restored selection — that flow
-      // is gone.  The user lands here on the Settings → Project folder
-      // subtab; navigating to Projects auto-loads projects.xlsx (#82) and
-      // navigating to Points auto-loads points.xlsx (#78).
+      // Issue #103: auto-navigate to the most relevant tab once selection
+      // has been restored.  Strata if we restored points, Projects if only
+      // projects were restored, else stay on Settings.
+      if (anyDbOk && (restoredProjects > 0 || restoredPoints > 0) && setPage) {
+        const target = restoredPoints > 0 ? 'strata' : 'projects'
+        setTimeout(() => setPage(target), 1200)
+      }
     } catch (err) {
       console.error(err)
       setFolderStatus('error')
