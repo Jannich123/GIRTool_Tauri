@@ -378,6 +378,63 @@ pub(crate) fn apply_strata_columns(
     }
 }
 
+/// Issue #111: like `apply_strata_columns`, but detects existing
+/// "Primary Layer" / "Secondary Layer" columns and **overwrites their
+/// values in place** instead of always pushing new columns at the end.
+/// Used by `readd_strata` to re-apply strata to already-downloaded
+/// datasheets without changing the column order.
+fn upsert_strata_columns(
+    columns: &mut Vec<String>,
+    rows: &mut Vec<Vec<Value>>,
+    strata_lookup: &std::collections::HashMap<(String, String, String), Vec<(f64, f64, String, String)>>,
+) {
+    use crate::commands::multi_db::LEGACY_DB_ID;
+    let col_lower: Vec<String> = columns.iter().map(|c| c.to_lowercase()).collect();
+
+    let db_idx: Option<usize>    = col_lower.iter().position(|c| c == "db_id");
+    let proj_idx: Option<usize>  = col_lower.iter().position(|c| c == "projectid");
+    let pt_idx: Option<usize>    = col_lower.iter().position(|c| c == "pointid");
+    let depth_idx: Option<usize> = col_lower
+        .iter()
+        .position(|c| c == "depth")
+        .or_else(|| col_lower.iter().position(|c| c.contains("depth")));
+
+    // Locate or append the Primary Layer / Secondary Layer columns.
+    let pri_idx = match col_lower.iter().position(|c| c == "primary layer") {
+        Some(i) => i,
+        None    => { columns.push("Primary Layer".to_string()); columns.len() - 1 }
+    };
+    let sec_idx = match columns.iter().position(|c| c.eq_ignore_ascii_case("secondary layer")) {
+        Some(i) => i,
+        None    => { columns.push("Secondary Layer".to_string()); columns.len() - 1 }
+    };
+
+    let need_len = pri_idx.max(sec_idx) + 1;
+    for row in rows.iter_mut() {
+        let result = (|| -> Option<(String, String)> {
+            let pid = row.get(pt_idx?)?.as_str()?.to_string();
+            let depth = match row.get(depth_idx?)? {
+                Value::Number(n) => n.as_f64()?,
+                _ => return None,
+            };
+            let db_id = db_idx
+                .and_then(|i| row.get(i).and_then(|v| v.as_str()).map(str::to_string))
+                .unwrap_or_else(|| LEGACY_DB_ID.to_string());
+            let project_id = proj_idx
+                .and_then(|i| row.get(i).and_then(|v| v.as_str()).map(str::to_string))
+                .unwrap_or_default();
+            Some(strata_at(strata_lookup, &db_id, &project_id, &pid, depth))
+        })();
+        let (primary, secondary) = result.unwrap_or_else(|| ("Unknown".to_string(), "Unknown".to_string()));
+        // Pad row so the indices we computed are in-bounds.
+        while row.len() < need_len {
+            row.push(Value::Null);
+        }
+        row[pri_idx] = Value::String(primary);
+        row[sec_idx] = Value::String(secondary);
+    }
+}
+
 // ── xlsx writing ──────────────────────────────────────────────────────────────
 
 fn write_datasheet(
@@ -2152,6 +2209,82 @@ pub async fn append_data(
         "folder": ds_dir.to_string_lossy(),
         "saved":  saved,
         "errors": errors,
+    }))
+}
+
+/// Issue #111: walk every previously-downloaded \"apply_strata: Yes\" datasheet
+/// in `{output_folder}/Datasheets/`, re-apply the strata lookup from the
+/// current `strata.xlsx` master, and write the file back.  Upserts the
+/// `Primary Layer` / `Secondary Layer` columns — overwrites in place when
+/// they exist, appends them when they don't.
+///
+/// Files for queries with `apply_strata: \"No\"` are skipped.  Files missing
+/// from disk are silently skipped (nothing to re-apply).
+#[tauri::command]
+pub async fn readd_strata(
+    query: DownloadRequest,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let ds_dir = datasheets_dir(&folder);
+    if !ds_dir.exists() {
+        return Err("No Datasheets folder yet — download some files first.".into());
+    }
+
+    let strata_lookup = load_strata_lookup(&folder, &query.project_id);
+
+    let all_queries = crate::commands::queries::load_queries(&state);
+    let queries_to_check: Vec<_> = if query.query_names.is_empty() {
+        all_queries.iter().collect()
+    } else {
+        all_queries.iter().filter(|q| query.query_names.contains(&q.fname)).collect()
+    };
+
+    let mut updated: Vec<Value> = Vec::new();
+    let mut errors:  Vec<Value> = Vec::new();
+
+    for q in queries_to_check {
+        if !q.apply_strata.eq_ignore_ascii_case("yes") {
+            continue;
+        }
+        let xlsx_name = format!("{}.xlsx", q.fname);
+        let path = ds_dir.join(&xlsx_name);
+        if !path.exists() {
+            continue;
+        }
+
+        let read_path = path.clone();
+        let existing = tokio::task::spawn_blocking(move || read_existing_datasheet(&read_path))
+            .await
+            .map_err(|e| format!("internal task error: {e}"))?;
+
+        let Some((mut columns, mut rows)) = existing else {
+            errors.push(json!({ "file": xlsx_name, "error": "Failed to read existing datasheet." }));
+            continue;
+        };
+
+        let row_count = rows.len();
+        upsert_strata_columns(&mut columns, &mut rows, &strata_lookup);
+
+        let cols_clone = columns.clone();
+        let rows_clone = rows.clone();
+        let write_path = path.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            write_datasheet(&write_path, &cols_clone, &rows_clone)
+        })
+        .await
+        .map_err(|e| format!("internal task error: {e}"))?
+        {
+            errors.push(json!({ "file": xlsx_name, "error": format!("xlsx write failed — {e}") }));
+        } else {
+            updated.push(json!({ "file": xlsx_name, "rows": row_count }));
+        }
+    }
+
+    Ok(json!({
+        "folder":  ds_dir.to_string_lossy(),
+        "updated": updated,
+        "errors":  errors,
     }))
 }
 
