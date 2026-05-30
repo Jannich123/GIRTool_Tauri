@@ -25,12 +25,22 @@ export default function DataPage() {
   // ── Issue #113: Datasheet subtabs (one per .xlsx under output/Datasheets/) ─
   const [datasheets, setDatasheets] = useState([])
   const [activeTab,  setActiveTab]  = useState(null)
+  // Issue #115: top-level toggle between the Download menu and the Data
+  // preview.  Default chosen on first render based on whether any files
+  // already exist; auto-switches to 'preview' after a successful
+  // Download / Append.
+  const [viewTab,    setViewTab]    = useState('download')
   // Cache for the preview's read_datasheet results.  Lives on the page so
   // flipping between subtabs is instant; cleared per-fname when the
   // datasheet list refreshes (after Download / Append).
   const previewCacheRef = useRef(new Map())
 
-  async function refreshDatasheets({ keepActive = true, invalidate = null } = {}) {
+  // Tracks whether the user has manually toggled the top view tab.  Stops the
+  // initial-load auto-switch from overriding their choice on later
+  // connection-folder changes.
+  const viewTabTouchedRef = useRef(false)
+
+  async function refreshDatasheets({ keepActive = true, invalidate = null, autoSwitchView = false } = {}) {
     try {
       const list = await invoke('list_datasheets')
       // Drop any stale preview cache entries for files that no longer exist
@@ -45,15 +55,22 @@ export default function DataPage() {
       if (!keepActive || !list.some(e => e.fname === activeTab)) {
         setActiveTab(list[0]?.fname ?? null)
       }
+      // Issue #115: on first load, jump to the Data preview if there are
+      // already files on disk.  Skip the jump once the user has clicked the
+      // top tab themselves.
+      if (autoSwitchView && !viewTabTouchedRef.current && list.length > 0) {
+        setViewTab('preview')
+      }
     } catch (err) {
       console.error(err)
     }
   }
 
   // Initial + connection-change load.  Pre-existing files surface before the
-  // user even clicks Download.
+  // user even clicks Download.  `autoSwitchView` lets refreshDatasheets jump
+  // to the Data preview tab when files already exist on first mount.
   useEffect(() => {
-    refreshDatasheets({ keepActive: true })
+    refreshDatasheets({ keepActive: true, autoSwitchView: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection?.output_folder])
 
@@ -121,6 +138,9 @@ export default function DataPage() {
       // Issue #113: refresh subtab list + invalidate cache for files just rewritten.
       const touched = new Set((res?.saved ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
       await refreshDatasheets({ keepActive: true, invalidate: touched })
+      // Issue #115: jump to the preview so the user sees the result.
+      setViewTab('preview')
+      viewTabTouchedRef.current = true
     } catch (err) {
       console.error(err)
       setError(err || 'Save failed — check the backend log.')
@@ -135,6 +155,9 @@ export default function DataPage() {
       setAppendResult(res)
       const touched = new Set((res?.saved ?? res?.results ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
       await refreshDatasheets({ keepActive: true, invalidate: touched })
+      // Issue #115: jump to the preview so the user sees the appended rows.
+      setViewTab('preview')
+      viewTabTouchedRef.current = true
     } catch (err) {
       console.error(err)
       setError(err || 'Append failed — check the backend log.')
@@ -187,8 +210,41 @@ export default function DataPage() {
 
       {error && <p className="msg err" style={{ marginBottom: '1rem' }}>{error}</p>}
 
+      {/* ══ TOP VIEW TABS (issue #115) ═════════════════════════════════════ */}
+      <div style={{
+        display: 'flex', gap: '.4rem', marginBottom: '1rem',
+        borderBottom: '1px solid var(--border, #e5e7eb)', paddingBottom: '.4rem',
+      }}>
+        {[
+          { key: 'download', label: '⬇ Download menu' },
+          { key: 'preview',  label: `📊 Data preview${datasheets.length > 0 ? ` (${datasheets.length})` : ''}` },
+        ].map(t => {
+          const active = viewTab === t.key
+          return (
+            <button
+              key={t.key}
+              onClick={() => { setViewTab(t.key); viewTabTouchedRef.current = true }}
+              style={{
+                padding:      '.45rem .9rem',
+                borderRadius: '6px 6px 0 0',
+                border:       active ? '1px solid var(--border, #d1d5db)' : '1px solid transparent',
+                borderBottom: active ? '1px solid #fff' : '1px solid transparent',
+                background:   active ? '#fff' : 'transparent',
+                color:        active ? 'var(--primary, #1d4ed8)' : '#374151',
+                cursor:       'pointer',
+                fontSize:     '.88rem',
+                fontWeight:   active ? 600 : 500,
+                marginBottom: '-1px',
+              }}
+            >
+              {t.label}
+            </button>
+          )
+        })}
+      </div>
+
       {/* ══ SAVE DATA ═════════════════════════════════════════════════════ */}
-      {(
+      {viewTab === 'download' && (
         <div className="card" style={{ maxWidth: 620, gap: '1rem' }}>
 
           {/* Query checklist */}
@@ -329,9 +385,15 @@ export default function DataPage() {
         </div>
       )}
 
-      {/* ══ DATASHEET SUBTABS (issue #113) ═════════════════════════════════ */}
-      {datasheets.length > 0 && (
-        <div style={{ marginTop: '1.5rem' }}>
+      {/* ══ DATASHEET SUBTABS (issue #113) — gated by top view tab (#115) ═ */}
+      {viewTab === 'preview' && datasheets.length === 0 && (
+        <p className="hint">
+          No downloaded datasheets in <code>{connection?.output_folder || '<output folder>'}/Datasheets/</code> yet.
+          Switch to the <strong>Download menu</strong> tab above to fetch some.
+        </p>
+      )}
+      {viewTab === 'preview' && datasheets.length > 0 && (
+        <div style={{ marginTop: '0.5rem' }}>
           <div className="datasheet-tabs"
                style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem',
                         marginBottom: '.75rem' }}>
