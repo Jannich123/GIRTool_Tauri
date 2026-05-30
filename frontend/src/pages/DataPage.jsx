@@ -183,7 +183,7 @@ export default function DataPage() {
                 <div style={{ display: 'flex', gap: '.6rem', flexWrap: 'wrap' }}>
                   <button className="btn-primary" onClick={handleSave}
                           disabled={savingData || appending || readdingStrata || numSelected === 0} style={{ minWidth: 180 }}>
-                    {savingData ? '⏳ Saving…' : `💾 Save ${numSelected} file${numSelected !== 1 ? 's' : ''}`}
+                    {savingData ? '⏳ Downloading…' : `⬇ Download ${numSelected} datasheet${numSelected !== 1 ? 's' : ''}`}
                   </button>
                   <button className="btn-secondary" onClick={handleAppend}
                           disabled={savingData || appending || readdingStrata || numSelected === 0} style={{ minWidth: 180 }}
