@@ -113,6 +113,28 @@ fn datasheets_dir(folder: &str) -> PathBuf {
     PathBuf::from(folder).join("Datasheets")
 }
 
+/// Issue #117: persist per-datasheet metadata to GIRTool_settings.json so
+/// `list_datasheets` can return instantly without opening every xlsx.
+/// Settings shape:
+///   "datasheets": { "CPTData": { "row_count": 1247, "has_strata": true }, ... }
+fn persist_datasheet_meta(folder: &str, fname: &str, row_count: usize, has_strata: bool) {
+    let path = settings_path(folder);
+    let existing: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(json!({}));
+    let mut obj = existing.as_object().cloned().unwrap_or_default();
+    let mut sheets = obj.get("datasheets").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    sheets.insert(fname.to_string(), json!({
+        "row_count": row_count,
+        "has_strata": has_strata,
+    }));
+    obj.insert("datasheets".to_string(), Value::Object(sheets));
+    if let Ok(s) = serde_json::to_string_pretty(&Value::Object(obj)) {
+        let _ = std::fs::write(&path, s);
+    }
+}
+
 // ── SQL building ──────────────────────────────────────────────────────────────
 
 fn sanitise_id(raw: &str) -> Result<String, String> {
@@ -1989,6 +2011,14 @@ pub async fn download_data(
             errors.push(json!({ "file": xlsx_name, "error": format!("xlsx write failed — {e}") }));
         } else {
             saved.push(json!({ "file": xlsx_name, "rows": row_count }));
+            // Issue #117: persist row_count + has_strata so list_datasheets
+            // can answer without re-opening the xlsx.
+            persist_datasheet_meta(
+                &folder,
+                &q.fname,
+                row_count,
+                q.apply_strata.eq_ignore_ascii_case("yes"),
+            );
         }
     }
 
@@ -2202,6 +2232,13 @@ pub async fn append_data(
                 "appended": appended,
                 "skipped":  skipped,
             }));
+            // Issue #117: persist updated row count so list_datasheets stays cheap.
+            persist_datasheet_meta(
+                &folder,
+                &q.fname,
+                final_rows.len(),
+                q.apply_strata.eq_ignore_ascii_case("yes"),
+            );
         }
     }
 
@@ -2355,6 +2392,35 @@ pub async fn list_datasheets(
 ) -> Result<Vec<DatasheetEntry>, String> {
     let folder = state.output_folder().ok_or("No output folder configured.")?;
     let ds_dir = datasheets_dir(&folder);
+
+    // Issue #117: fast path — settings.json carries persisted row counts and
+    // strata flags after every download / append.  Fall through to the disk
+    // scan only when the entry is missing (first run, manual edits, etc.).
+    let folder_clone = folder.clone();
+    let from_settings: Option<Vec<DatasheetEntry>> = tokio::task::spawn_blocking(move || -> Option<Vec<DatasheetEntry>> {
+        let path = settings_path(&folder_clone);
+        let raw  = std::fs::read_to_string(&path).ok()?;
+        let v: Value = serde_json::from_str(&raw).ok()?;
+        let map = v.get("datasheets")?.as_object()?;
+        if map.is_empty() { return None; }
+        let mut entries: Vec<DatasheetEntry> = map.iter().filter_map(|(fname, val)| {
+            let obj = val.as_object()?;
+            let row_count = obj.get("row_count")?.as_u64()? as usize;
+            let has_strata = obj.get("has_strata")?.as_bool()?;
+            // Drop entries whose file no longer exists on disk.  Cheap is_file
+            // check per entry; far cheaper than opening every xlsx.
+            let ds_dir = datasheets_dir(&folder_clone);
+            let p = ds_dir.join(format!("{fname}.xlsx"));
+            if !p.is_file() { return None; }
+            Some(DatasheetEntry { fname: fname.clone(), row_count, has_strata })
+        }).collect();
+        entries.sort_by(|a, b| a.fname.cmp(&b.fname));
+        Some(entries)
+    }).await.map_err(|e| format!("internal task error: {e}"))?;
+
+    if let Some(entries) = from_settings {
+        return Ok(entries);
+    }
 
     tokio::task::spawn_blocking(move || -> Vec<DatasheetEntry> {
         use calamine::{open_workbook_auto, Reader, Data};
