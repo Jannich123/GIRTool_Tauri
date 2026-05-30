@@ -198,7 +198,7 @@ export default function DataPage() {
                   <button className="btn-secondary" onClick={handleAppend}
                           disabled={savingData || appending || readdingStrata || numSelected === 0} style={{ minWidth: 180 }}
                           title="Append only rows whose ID is not already in the file">
-                    {appending ? '⏳ Appending…' : `⊕ Append ${numSelected} file${numSelected !== 1 ? 's' : ''}`}
+                    {appending ? '⏳ Appending…' : `⊕ Append ${numSelected} datasheet${numSelected !== 1 ? 's' : ''}`}
                   </button>
                   <button className="btn-secondary" onClick={handleReaddStrata}
                           disabled={savingData || appending || readdingStrata}

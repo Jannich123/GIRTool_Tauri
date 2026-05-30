@@ -94,6 +94,7 @@ pub fn run() {
             // download
             commands::download::download_data,
             commands::download::append_data,
+            commands::download::readd_strata,
             commands::download::save_session,
             commands::download::restore_session,
             // sharepoint
