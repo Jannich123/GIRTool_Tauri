@@ -453,6 +453,106 @@ fn is_id_column(name: &str) -> bool {
     name.ends_with("Id")
 }
 
+/// Issue #109: dedup-key helper.  A column qualifies for the composite key
+/// when its name is `db_id` (case-insensitive) OR ends in `Id` / `ID`.
+/// Typical members for an SPTData sheet: db_id, ProjectId, PointId, TestId,
+/// SampleId, DataSourceId.
+fn is_dedup_id_column(name: &str) -> bool {
+    let lc = name.to_ascii_lowercase();
+    lc == "db_id" || lc.ends_with("id")
+}
+
+fn id_key_indices(columns: &[String]) -> Vec<usize> {
+    columns.iter().enumerate()
+        .filter(|(_, c)| is_dedup_id_column(c))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+fn row_id_key(row: &[Value], indices: &[usize]) -> Vec<String> {
+    indices.iter()
+        .map(|&i| match row.get(i) {
+            Some(Value::Null)      => String::new(),
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            Some(Value::Bool(b))   => b.to_string(),
+            Some(other)            => other.to_string(),
+            None                   => String::new(),
+        })
+        .collect()
+}
+
+/// Read an existing datasheet xlsx back into `(columns, rows)` format
+/// compatible with `write_datasheet`.  Returns `None` if the file is
+/// missing or unreadable; returns an empty rows vec if the sheet only has
+/// the header row.
+fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>)> {
+    use calamine::{open_workbook_auto, Reader, Data};
+    if !path.exists() {
+        return None;
+    }
+    let mut wb = open_workbook_auto(path).ok()?;
+    let sheet_name = wb.sheet_names().first().cloned()?;
+    let range = wb.worksheet_range(&sheet_name).ok()?;
+    let mut rows_iter = range.rows();
+
+    let header = rows_iter.next()?;
+    let columns: Vec<String> = header.iter()
+        .map(|c| match c {
+            Data::String(s)   => s.clone(),
+            Data::Int(i)      => i.to_string(),
+            Data::Float(f)    => f.to_string(),
+            Data::Bool(b)     => b.to_string(),
+            Data::DateTime(d) => d.to_string(),
+            _                  => String::new(),
+        })
+        .collect();
+    if columns.is_empty() {
+        return None;
+    }
+
+    let n_cols = columns.len();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    for row in rows_iter {
+        let mut out = Vec::with_capacity(n_cols);
+        for c in row.iter().take(n_cols) {
+            let v = match c {
+                Data::Empty | Data::Error(_) => Value::Null,
+                Data::Bool(b)                => Value::Bool(*b),
+                Data::Int(i)                 => Value::Number((*i).into()),
+                Data::Float(f) => {
+                    if f.fract() == 0.0 && f.is_finite() && (*f as i64) as f64 == *f {
+                        Value::Number((*f as i64).into())
+                    } else if let Some(n) = serde_json::Number::from_f64(*f) {
+                        Value::Number(n)
+                    } else {
+                        Value::Null
+                    }
+                }
+                Data::String(s)              => Value::String(s.clone()),
+                Data::DateTime(d)            => Value::String(d.to_string()),
+                _                            => Value::Null,
+            };
+            out.push(v);
+        }
+        // Pad short rows so every row has exactly n_cols entries.
+        while out.len() < n_cols {
+            out.push(Value::Null);
+        }
+        // Skip completely blank rows (Excel artefacts).
+        let all_blank = out.iter().all(|v| match v {
+            Value::Null               => true,
+            Value::String(s) if s.is_empty() => true,
+            _                          => false,
+        });
+        if all_blank {
+            continue;
+        }
+        rows.push(out);
+    }
+    Some((columns, rows))
+}
+
 fn write_cell(ws: &mut rust_xlsxwriter::Worksheet, row: u32, col: u16, val: &Value) {
     match val {
         Value::Null => { let _ = ws.write_blank(row, col, &Format::default()); }
@@ -1856,6 +1956,196 @@ pub async fn download_data(
 
     if let Ok(s) = serde_json::to_string_pretty(&Value::Object(new_settings)) {
         let _ = std::fs::write(&settings_file, s);
+    }
+
+    Ok(json!({
+        "folder": ds_dir.to_string_lossy(),
+        "saved":  saved,
+        "errors": errors,
+    }))
+}
+
+/// Issue #109: like `download_data`, but the per-file save step opens any
+/// existing datasheet xlsx, builds a composite ID dedup key from each row
+/// (db_id + every column ending in Id/ID), and appends only the rows whose
+/// key isn't already present.  When the file doesn't exist, behaves the
+/// same as `download_data` (writes fresh).
+#[tauri::command]
+pub async fn append_data(
+    query: DownloadRequest,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
+    }
+
+    use std::collections::{HashMap, HashSet};
+    let mut per_db_projects: HashMap<String, Vec<String>> = HashMap::new();
+    match &query.project_ids {
+        ProjectIdsArg::Flat(ids) => {
+            if ids.is_empty() {
+                return Err("No project IDs provided.".into());
+            }
+            for db in &databases {
+                per_db_projects.insert(db.effective_id(), ids.clone());
+            }
+        }
+        ProjectIdsArg::PerDb(entries) => {
+            if entries.is_empty() {
+                return Err("No project IDs provided.".into());
+            }
+            for e in entries {
+                per_db_projects.entry(e.db_id.clone()).or_default().push(e.project_id.clone());
+            }
+        }
+    }
+    let mut per_db_points: HashMap<String, Vec<String>> = HashMap::new();
+    match &query.point_ids {
+        PointIdsArg::Flat(ids) => {
+            for db in &databases {
+                per_db_points.insert(db.effective_id(), ids.clone());
+            }
+        }
+        PointIdsArg::PerDb(entries) => {
+            for e in entries {
+                per_db_points.entry(e.db_id.clone()).or_default().push(e.point_id.clone());
+            }
+        }
+    }
+
+    let ds_dir = datasheets_dir(&folder);
+    std::fs::create_dir_all(&ds_dir)
+        .map_err(|e| format!("Cannot create Datasheets dir: {e}"))?;
+
+    let all_queries = crate::commands::queries::load_queries(&state);
+    let queries_to_run: Vec<_> = if query.query_names.is_empty() {
+        all_queries.iter().collect()
+    } else {
+        all_queries.iter().filter(|q| query.query_names.contains(&q.fname)).collect()
+    };
+
+    let strata_lookup = load_strata_lookup(&folder, &query.project_id);
+
+    let mut saved:  Vec<Value> = Vec::new();
+    let mut errors: Vec<Value> = Vec::new();
+
+    for q in queries_to_run {
+        let xlsx_name = format!("{}.xlsx", q.fname);
+
+        // Same fan-out as download_data.
+        let mut pairs: Vec<(crate::state::DbConfig, String)> = Vec::new();
+        let mut build_error: Option<String> = None;
+        for db in databases.iter() {
+            let id = db.effective_id();
+            let Some(proj_ids) = per_db_projects.get(&id) else { continue };
+            if proj_ids.is_empty() { continue }
+            let empty_pts: Vec<String> = Vec::new();
+            let pt_ids = per_db_points.get(&id).unwrap_or(&empty_pts);
+
+            let raw_sql = crate::commands::query_configs::lookup_datasheet_sql(
+                &folder, &db.query_type, &q.fname,
+            ).unwrap_or_else(|| q.sql_script.clone());
+
+            match build_sql(&raw_sql, &q.pointfilter, proj_ids, pt_ids) {
+                Ok(sql) => pairs.push((db.clone(), sql)),
+                Err(e)  => { build_error = Some(format!("SQL build error — {e}")); break }
+            }
+        }
+        if let Some(e) = build_error {
+            errors.push(json!({ "file": xlsx_name, "error": e }));
+            continue;
+        }
+        if pairs.is_empty() {
+            errors.push(json!({
+                "file":  xlsx_name,
+                "error": "No configured database has any of the selected project IDs.",
+            }));
+            continue;
+        }
+
+        let mut fan_errors = Vec::new();
+        let raw_rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut fan_errors).await;
+
+        if raw_rows.is_empty() && !fan_errors.is_empty() {
+            let first = fan_errors.first()
+                .and_then(|e| e.get("error"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| "All databases failed.".into());
+            errors.push(json!({ "file": xlsx_name, "error": format!("query failed — {first}") }));
+            continue;
+        }
+
+        let (mut columns, mut new_rows) = objects_to_columnar(raw_rows);
+
+        if q.apply_strata.eq_ignore_ascii_case("yes") {
+            apply_strata_columns(&mut columns, &mut new_rows, &strata_lookup);
+        }
+
+        // ── Dedup-append (#109) ──────────────────────────────────────────────
+        let path = ds_dir.join(&xlsx_name);
+        let path_clone = path.clone();
+        let existing = tokio::task::spawn_blocking(move || read_existing_datasheet(&path_clone))
+            .await
+            .map_err(|e| format!("internal task error: {e}"))?;
+
+        let new_row_count = new_rows.len();
+        let (final_columns, final_rows, appended) = match existing {
+            Some((existing_columns, existing_rows)) => {
+                if existing_columns != columns {
+                    errors.push(json!({
+                        "file":  xlsx_name,
+                        "error": format!(
+                            "Schema mismatch — existing file has {} columns, new data has {}. Use Download to overwrite, or delete the existing file first.",
+                            existing_columns.len(), columns.len(),
+                        ),
+                    }));
+                    continue;
+                }
+                let indices = id_key_indices(&columns);
+                let existing_keys: HashSet<Vec<String>> = existing_rows.iter()
+                    .map(|r| row_id_key(r, &indices))
+                    .collect();
+                let mut kept: Vec<Vec<Value>> = existing_rows;
+                let mut new_appended = 0usize;
+                for r in new_rows {
+                    let k = row_id_key(&r, &indices);
+                    if !existing_keys.contains(&k) {
+                        kept.push(r);
+                        new_appended += 1;
+                    }
+                }
+                (columns, kept, new_appended)
+            }
+            None => {
+                // File didn't exist — write everything (same as Download).
+                (columns, new_rows, new_row_count)
+            }
+        };
+        let skipped = new_row_count.saturating_sub(appended);
+
+        // Write the combined sheet.
+        let cols_clone = final_columns.clone();
+        let rows_clone = final_rows.clone();
+        let path_clone = path.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            write_datasheet(&path_clone, &cols_clone, &rows_clone)
+        })
+        .await
+        .map_err(|e| format!("internal task error: {e}"))?
+        {
+            errors.push(json!({ "file": xlsx_name, "error": format!("xlsx write failed — {e}") }));
+        } else {
+            saved.push(json!({
+                "file":     xlsx_name,
+                "rows":     final_rows.len(),
+                "appended": appended,
+                "skipped":  skipped,
+            }));
+        }
     }
 
     Ok(json!({
