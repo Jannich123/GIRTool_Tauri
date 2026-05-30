@@ -146,7 +146,7 @@ fn build_sql(
 pub(crate) fn load_strata_lookup(
     output_folder: &str,
     _project_id: &str,
-) -> HashMap<(String, String), Vec<(f64, f64, String, String)>> {
+) -> HashMap<(String, String, String), Vec<(f64, f64, String, String)>> {
     use calamine::open_workbook_auto;
     use crate::commands::multi_db::LEGACY_DB_ID;
 
@@ -178,7 +178,9 @@ pub(crate) fn load_strata_lookup(
         .unwrap_or(false);
     let off: usize = if has_db_id_col { 1 } else { 0 };
 
-    let mut lookup: HashMap<(String, String), Vec<(f64, f64, String, String)>> = HashMap::new();
+    // Issue #101: lookup key is now (db_id, project_id, point_id) — adds
+    // project_id to defend against same-PointID collisions across projects.
+    let mut lookup: HashMap<(String, String, String), Vec<(f64, f64, String, String)>> = HashMap::new();
 
     fn cell_to_string(cell: Option<&Data>) -> Option<String> {
         cell.and_then(|c| match c {
@@ -197,6 +199,9 @@ pub(crate) fn load_strata_lookup(
         } else {
             LEGACY_DB_ID.to_string()
         };
+        // ProjectID is column A in the 11-column legacy schema and column B
+        // in the 12-column schema — i.e. `row.get(0 + off)`.
+        let project_id = cell_to_string(row.get(off)).unwrap_or_default();
         let pid = match cell_to_string(row.get(1 + off)) {
             Some(s) => s,
             None    => continue,
@@ -227,12 +232,12 @@ pub(crate) fn load_strata_lookup(
             .unwrap_or_else(|| "Unknown".to_string());
 
         lookup
-            .entry((db_id, pid))
+            .entry((db_id, project_id, pid))
             .or_default()
             .push((from, to, primary, secondary));
     }
 
-    // Sort each (db_id, point_id) bucket by depth-from.
+    // Sort each (db_id, project_id, point_id) bucket by depth-from.
     for intervals in lookup.values_mut() {
         intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     }
@@ -240,26 +245,39 @@ pub(crate) fn load_strata_lookup(
     lookup
 }
 
-/// Return the strata label `(primary, secondary)` for a given `(db_id, pointId, depth)`.
+/// Return the strata label `(primary, secondary)` for a given
+/// `(db_id, project_id, point_id, depth)`.
 ///
-/// The lookup falls back to `LEGACY_DB_ID` if the row has no `db_id` value —
-/// matches what `load_strata_lookup` writes for legacy 11-column files.
+/// Issue #101: project_id is now part of the lookup key so the same PointId
+/// reused across two projects within one DB never grabs the wrong layer.
+///
+/// The lookup falls back to `LEGACY_DB_ID` for db_id and an empty project_id
+/// matches `load_strata_lookup`'s default for rows missing those values.
 fn strata_at(
-    lookup: &HashMap<(String, String), Vec<(f64, f64, String, String)>>,
+    lookup: &HashMap<(String, String, String), Vec<(f64, f64, String, String)>>,
     db_id: &str,
+    project_id: &str,
     point_id: &str,
     depth: f64,
 ) -> (String, String) {
     use crate::commands::multi_db::LEGACY_DB_ID;
-    let mut key = (db_id.to_string(), point_id.to_string());
+    let key_primary = (db_id.to_string(), project_id.to_string(), point_id.to_string());
     let intervals = lookup
-        .get(&key)
+        .get(&key_primary)
         .or_else(|| {
-            // Fall back to LEGACY_DB_ID when the row's db_id is unknown to the
-            // lookup — gives single-DB callers (no db_id column on rows) the
-            // expected behaviour.
-            key.0 = LEGACY_DB_ID.to_string();
-            lookup.get(&key)
+            // Legacy single-DB fallback — when the row's db_id is unknown to
+            // the lookup, try the LEGACY_DB_ID bucket instead.
+            let key_legacy = (LEGACY_DB_ID.to_string(), project_id.to_string(), point_id.to_string());
+            lookup.get(&key_legacy)
+        })
+        .or_else(|| {
+            // Last-resort fallback — when project_id is missing or doesn't
+            // match (e.g. the data row doesn't have a ProjectID column),
+            // fall back to db_id + point_id only by scanning the lookup for
+            // any (db_id, *, point_id) match.
+            lookup.iter()
+                .find(|((d, _p, pt), _)| d == db_id && pt == point_id)
+                .map(|(_, v)| v)
         });
     if let Some(intervals) = intervals {
         for (from, to, primary, secondary) in intervals {
@@ -271,20 +289,24 @@ fn strata_at(
     ("Unknown".to_string(), "Unknown".to_string())
 }
 
-/// Extract PointId + Depth from a row-object, inject Primary/Secondary Layer columns.
+/// Extract PointId + ProjectId + Depth from a row-object, inject
+/// Primary/Secondary Layer columns.
 ///
-/// As of issue #48 the strata lookup is keyed by `(db_id, point_id)`.  Each
-/// row's db_id is taken from the optional `db_id` column (case-insensitive
-/// lookup); rows without one fall back to `LEGACY_DB_ID`.
+/// As of issue #101 the strata lookup is keyed by
+/// `(db_id, project_id, point_id)`.  Each row's `db_id` and `ProjectId` are
+/// taken from the matching column (case-insensitive); rows without `db_id`
+/// fall back to `LEGACY_DB_ID`, and rows without `ProjectId` use the empty
+/// string (`strata_at` handles that case via its scan fallback).
 pub(crate) fn apply_strata_columns(
     columns: &mut Vec<String>,
     rows: &mut Vec<Vec<Value>>,
-    strata_lookup: &HashMap<(String, String), Vec<(f64, f64, String, String)>>,
+    strata_lookup: &HashMap<(String, String, String), Vec<(f64, f64, String, String)>>,
 ) {
     use crate::commands::multi_db::LEGACY_DB_ID;
     let col_lower: Vec<String> = columns.iter().map(|c| c.to_lowercase()).collect();
 
     let db_idx: Option<usize>    = col_lower.iter().position(|c| c == "db_id");
+    let proj_idx: Option<usize>  = col_lower.iter().position(|c| c == "projectid");
     let pt_idx: Option<usize>    = col_lower.iter().position(|c| c == "pointid");
     let depth_idx: Option<usize> = col_lower
         .iter()
@@ -304,7 +326,10 @@ pub(crate) fn apply_strata_columns(
             let db_id = db_idx
                 .and_then(|i| row.get(i).and_then(|v| v.as_str()).map(str::to_string))
                 .unwrap_or_else(|| LEGACY_DB_ID.to_string());
-            Some(strata_at(strata_lookup, &db_id, &pid, depth))
+            let project_id = proj_idx
+                .and_then(|i| row.get(i).and_then(|v| v.as_str()).map(str::to_string))
+                .unwrap_or_default();
+            Some(strata_at(strata_lookup, &db_id, &project_id, &pid, depth))
         })();
         let (primary, secondary) = result.unwrap_or_else(|| ("Unknown".to_string(), "Unknown".to_string()));
         row.push(Value::String(primary));
