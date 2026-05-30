@@ -39,6 +39,33 @@ export default function DataPage() {
   // initial-load auto-switch from overriding their choice on later
   // connection-folder changes.
   const viewTabTouchedRef = useRef(false)
+  // Issue #117: pre-load all datasheets into the cache so flipping between
+  // subtabs is instant.  This flag lets us show a small "Loading…" hint while
+  // the parallel fetches resolve.
+  const [preloading, setPreloading] = useState(false)
+  const [reloadTick, setReloadTick] = useState(0)
+
+  // Pre-load every fname in `names` into `previewCacheRef` in parallel.
+  // Already-cached entries are skipped unless `force` is true.
+  async function preloadDatasheets(names, { force = false } = {}) {
+    const toFetch = force
+      ? names
+      : names.filter(n => !previewCacheRef.current.has(n))
+    if (toFetch.length === 0) return
+    setPreloading(true)
+    try {
+      await Promise.all(toFetch.map(async fname => {
+        try {
+          const data = await invoke('read_datasheet', { fname })
+          if (data) previewCacheRef.current.set(fname, data)
+        } catch (err) {
+          console.warn(`preload ${fname} failed:`, err)
+        }
+      }))
+    } finally {
+      setPreloading(false)
+    }
+  }
 
   async function refreshDatasheets({ keepActive = true, invalidate = null, autoSwitchView = false } = {}) {
     try {
@@ -61,9 +88,21 @@ export default function DataPage() {
       if (autoSwitchView && !viewTabTouchedRef.current && list.length > 0) {
         setViewTab('preview')
       }
+      // Issue #117: pre-load every datasheet into the cache in parallel.
+      // Fire-and-forget; the subtab UI shows whatever is cached.
+      preloadDatasheets(list.map(e => e.fname))
     } catch (err) {
       console.error(err)
     }
+  }
+
+  // Manual "↻ Reload data" — drops the cache and re-fetches every file.
+  async function reloadAllDatasheets() {
+    previewCacheRef.current.clear()
+    // Bump tick so the DatasheetPreview re-reads from cache (otherwise it
+    // would keep showing the old data because activeTab didn't change).
+    setReloadTick(t => t + 1)
+    await preloadDatasheets(datasheets.map(d => d.fname), { force: true })
   }
 
   // Initial + connection-change load.  Pre-existing files surface before the
@@ -395,8 +434,18 @@ export default function DataPage() {
       {viewTab === 'preview' && datasheets.length > 0 && (
         <div style={{ marginTop: '0.5rem' }}>
           <div className="datasheet-tabs"
-               style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem',
-                        marginBottom: '.75rem' }}>
+               style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+                        gap: '.4rem', marginBottom: '.75rem' }}>
+            {/* Issue #117: drop the in-memory cache + re-fetch every file. */}
+            <button
+              onClick={reloadAllDatasheets}
+              disabled={preloading}
+              className="btn-secondary btn-sm"
+              title="Drop cached previews and re-read every datasheet from disk"
+              style={{ marginRight: '.3rem' }}
+            >
+              {preloading ? '⏳ Loading…' : '↻ Reload data'}
+            </button>
             {datasheets.map(ds => {
               const active = ds.fname === activeTab
               return (
@@ -430,7 +479,10 @@ export default function DataPage() {
 
           {activeTab && (
             <DatasheetPreview
-              key={activeTab}
+              // Issue #117: include reloadTick in the key so Reload forces a
+              // fresh DatasheetPreview mount that re-reads the (now empty
+              // and re-populated) cache.
+              key={`${activeTab}#${reloadTick}`}
               fname={activeTab}
               cacheRef={previewCacheRef}
             />

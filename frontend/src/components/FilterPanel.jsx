@@ -169,7 +169,9 @@ export default function FilterPanel({ page }) {
 
   const [activeTab, setActiveTab] = useState('points')
 
-  const showStrataFilter = page === 'charts' || page === 'map'
+  // Issue #117: Data tab also shows the Primary / Secondary Layer tabs —
+  // DatasheetPreview already consumes the filter state.
+  const showStrataFilter = page === 'charts' || page === 'map' || page === 'data'
 
   const tabs = [
     { key: 'points', label: 'Points' },
