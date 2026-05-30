@@ -44,7 +44,9 @@ export default function SettingsPage({ setPage }) {
   const [folderStatus,   setFolderStatus]   = useState(null)
   const [folderMsg,      setFolderMsg]      = useState('')
   const [browsingFolder, setBrowsingFolder] = useState(false)
-  const [restoredSession, setRestoredSession] = useState(null)
+  // Issue #95: restoredSession state removed — selection no longer flows
+  // through GIRTool_settings.json.  projects.xlsx / points.xlsx are the
+  // source of truth and auto-load on their respective page mounts.
   const [recentFolders,   setRecentFolders]   = useState([])
   // Subtab: 'folder' (project folder picker), 'database' (DB connect), or
   // 'queryConfig' (SQL overrides — issue #47).  Folder is shown first because
@@ -276,7 +278,7 @@ export default function SettingsPage({ setPage }) {
 
   // ── Test & save folder — then auto-load DB config and restore session ────────
   const testFolder = async () => {
-    setFolderStatus('testing'); setFolderMsg(''); setRestoredSession(null)
+    setFolderStatus('testing'); setFolderMsg('')
     try {
       // 1. Verify the folder is accessible
       const folderRes = await invoke('test_folder', { path: form.output_folder })
@@ -356,25 +358,12 @@ export default function SettingsPage({ setPage }) {
       // 4. Ensure strata.xlsx exists in this folder (fire and forget)
       invoke('ensure_strata_file').catch(() => {})
 
-      // 5. Restore the saved project / point selection from
-      //    {output_folder}/GIRTool_settings.json (top-level
-      //    selected_projects / selected_points keys).
-      let restored = { selectedProjects: [], selectedPoints: [] }
-      try {
-        restored = await invoke('load_selection') || restored
-      } catch {
-        // folder may be empty — not an error
-      }
-      const projects = Array.isArray(restored.selectedProjects) ? restored.selectedProjects : []
-      const points   = Array.isArray(restored.selectedPoints)   ? restored.selectedPoints   : []
+      // 5. Issue #95: selection restoration moved out of GIRTool_settings.json
+      //    and into the xlsx workflow.  projects.xlsx auto-loads on the
+      //    Projects page mount (#82); points.xlsx auto-loads on the Points
+      //    page mount (#78).  We no longer call `load_selection` here.
 
-      if (projects.length > 0 || points.length > 0) {
-        if (projects.length) setSelectedProjects(projects)
-        if (points.length)   setSelectedPoints(points)
-        setRestoredSession({ selectedProjects: projects, selectedPoints: points })
-      }
-
-      // 6. Compose a friendly status line covering folder + DB + restored.
+      // 6. Compose a friendly status line covering folder + DB.
       const dbBit = dbOk
         ? `connected to ${merged.database || 'database'}`
         : merged.server
@@ -383,20 +372,16 @@ export default function SettingsPage({ setPage }) {
       const multiBit = multiDb.total > 0
         ? ` · ${multiDb.okCount}/${multiDb.total} multi-DB${multiDb.failCount > 0 ? ` (${multiDb.failCount} failed)` : ''}`
         : ''
-      const sessionBit = (projects.length || points.length)
-        ? ` · restored ${projects.length} project${projects.length === 1 ? '' : 's'}${points.length ? ` + ${points.length} point${points.length === 1 ? '' : 's'}` : ''}`
-        : ''
       // The whole flow is "OK" if EITHER the legacy connect worked OR at
       // least one multi-DB connected OR there's no DB configured at all.
       const anyDbOk = dbOk || multiDb.okCount > 0
       setFolderStatus(anyDbOk || !merged.server ? 'ok' : 'warn')
-      setFolderMsg(`${folderRes.message} — ${dbBit}${multiBit}${sessionBit}`)
+      setFolderMsg(`${folderRes.message} — ${dbBit}${multiBit}`)
 
-      // 7. Auto-navigate ONLY if at least one DB is up AND we have a selection.
-      if (anyDbOk && (projects.length || points.length) && setPage) {
-        const target = points.length ? 'strata' : 'projects'
-        setTimeout(() => setPage(target), 1200)
-      }
+      // Issue #95: no auto-navigate based on restored selection — that flow
+      // is gone.  The user lands here on the Settings → Project folder
+      // subtab; navigating to Projects auto-loads projects.xlsx (#82) and
+      // navigating to Points auto-loads points.xlsx (#78).
     } catch (err) {
       console.error(err)
       setFolderStatus('error')
@@ -755,24 +740,9 @@ export default function SettingsPage({ setPage }) {
           }`}>{folderMsg}</p>
         )}
 
-        {/* Restored session summary */}
-        {restoredSession && (
-          <div style={{
-            marginTop: '0.75rem', padding: '0.6rem 0.85rem',
-            background: '#f0fdf4', border: '1px solid #bbf7d0',
-            borderRadius: 6, fontSize: '.82rem', color: '#166534',
-          }}>
-            <strong>Session restored from:</strong>{' '}
-            {restoredSession.database} on {restoredSession.server}
-            {restoredSession.point_count != null && (
-              <> · {restoredSession.point_count} point{restoredSession.point_count !== 1 ? 's' : ''} were selected</>
-            )}
-            <br />
-            <span style={{ color: '#6b7280', fontSize: '.78rem' }}>
-              Points must be re-selected on the Points page (they are not stored in the session for privacy).
-            </span>
-          </div>
-        )}
+        {/* Issue #95: "Restored session" banner removed — selection now
+            lives in projects.xlsx / points.xlsx and auto-loads on the
+            relevant page mounts, not on folder-connect. */}
 
       </div>
 
