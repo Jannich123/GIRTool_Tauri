@@ -273,13 +273,9 @@ export default function ProjectsPage({ setPage }) {
     const selected = projects.filter(p => checked[projKey(p)])
     setSelectedProjects(selected)
     setSelectedPoints([])
-    // Persist top-level selection state to GIRTool_settings.json so the
-    // tool restores it on the next launch.  Fire-and-forget — we don't
-    // want to block navigation on disk I/O.
-    invoke('save_selection', {
-      selectedProjects: selected,
-      selectedPoints:   [],
-    }).catch(err => console.warn('save_selection failed:', err))
+    // Issue #95: projects.xlsx is the SOLE persistence path for the project
+    // selection (auto-saved on every checkbox change via the useEffect
+    // above).  GIRTool_settings.json no longer carries selectedProjects.
     setPage('points')
   }
 

@@ -68,21 +68,13 @@ function Shell() {
           })
             .then(() => {
               setConnected(true)
-              // Restore selection from GIRTool_settings.json (if any).
-              // For pop-out windows, DO NOT auto-navigate — they were
-              // opened on a specific page and should stay there.
-              invoke('load_selection').then(sel => {
-                const projs = Array.isArray(sel?.selectedProjects) ? sel.selectedProjects : []
-                const pts   = Array.isArray(sel?.selectedPoints)   ? sel.selectedPoints   : []
-                if (projs.length) setSelectedProjects(projs)
-                if (pts.length)   setSelectedPoints(pts)
-                if (isMainWindow) {
-                  // Main window — land on the most-specific tab we have state for.
-                  if (pts.length)        setPage('strata')
-                  else if (projs.length) setPage('points')
-                  else                   setPage('projects')
-                }
-              }).catch(() => { if (isMainWindow) setPage('projects') })
+              // Issue #95: selection no longer flows through
+              // GIRTool_settings.json — projects.xlsx and points.xlsx
+              // auto-load on their respective page mounts.  Main window
+              // lands on the Projects tab and the user navigates from
+              // there.  Pop-out windows stay on whatever page they were
+              // opened to (no setPage call).
+              if (isMainWindow) setPage('projects')
             })
             .catch(() => { if (isMainWindow) setPage('settings') })
         }
