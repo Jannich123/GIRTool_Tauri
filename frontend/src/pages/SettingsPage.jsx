@@ -26,14 +26,43 @@ const ID_RE = /^[A-Za-z0-9_-]+$/
 // Issue #73: per-row IDs are auto-generated and read-only.  Numbers start at
 // `DB1` and grow as the user adds rows.  `nextDbId` returns the lowest unused
 // `DB<N>` so deleting a middle row and re-adding fills the gap rather than
-// always climbing.  Rows that were saved before this change keep whatever id
-// they have (e.g. `primary`) — only NEW rows pick up the DB<N> format so
-// external references like an existing `projects.xlsx` continue to work.
+// always climbing.
 function nextDbId(rows) {
   const used = new Set((rows || []).map(r => r.id))
   let n = 1
   while (used.has(`DB${n}`)) n += 1
   return `DB${n}`
+}
+
+// Issue #97: canonicalise legacy IDs (e.g. `primary`, `db_2`) to the
+// `DB<N>` format on load.  Rows already matching the canonical pattern keep
+// their number; the rest get assigned the lowest unused number in row order.
+// Examples:
+//   ['primary']             → ['DB1']
+//   ['primary', 'db_2']     → ['DB1', 'DB2']
+//   ['DB1', 'primary']      → ['DB1', 'DB2']     (DB1 kept; primary → next free)
+//   ['DB5', 'primary']      → ['DB5', 'DB1']     (DB5 kept; primary → DB1)
+const DB_ID_RE = /^DB\d+$/
+function canonicaliseDbIds(rows) {
+  const taken = new Set()
+  // Pass 1: rows already canonical keep their id; record their number.
+  const out = rows.map(r => {
+    if (typeof r?.id === 'string' && DB_ID_RE.test(r.id)) {
+      taken.add(parseInt(r.id.slice(2), 10))
+      return r
+    }
+    return null
+  })
+  // Pass 2: fill the placeholders with the lowest unused DB<N>.
+  let nextN = 1
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] !== null) continue
+    while (taken.has(nextN)) nextN += 1
+    out[i] = { ...rows[i], id: `DB${nextN}` }
+    taken.add(nextN)
+    nextN += 1
+  }
+  return out
 }
 
 export default function SettingsPage({ setPage }) {
@@ -93,9 +122,18 @@ export default function SettingsPage({ setPage }) {
             password:    form.password    || '',
           }])
         } else {
-          // Existing saved data — keep whatever ids it has (legacy `primary`
-          // etc.) so external `projects.xlsx` references stay valid.
-          setDbRows(arr.map(d => ({ ...DEFAULT_DB_ROW(), ...d })))
+          // Issue #97: canonicalise legacy IDs (`primary`, `db_2`, …) to
+          // the `DB<N>` format on load.  Rows already matching the
+          // canonical pattern keep their number; the rest get the lowest
+          // unused DB number in row order.  If anything changed, persist
+          // the rewrite so future reads are no-ops.
+          const canonical = canonicaliseDbIds(arr)
+          const changed = canonical.some((d, i) => d.id !== arr[i].id)
+          setDbRows(canonical.map(d => ({ ...DEFAULT_DB_ROW(), ...d })))
+          if (changed) {
+            invoke('save_databases', { body: { databases: canonical } })
+              .catch(err => console.warn('canonicalise save_databases failed:', err))
+          }
         }
         setDbStatus({})
         setDbMsg(null)
