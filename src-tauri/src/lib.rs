@@ -93,6 +93,7 @@ pub fn run() {
             commands::strata::get_strata_point_layers,
             // download
             commands::download::download_data,
+            commands::download::append_data,
             commands::download::save_session,
             commands::download::restore_session,
             // sharepoint
