@@ -35,6 +35,34 @@ function toWGS84(x, y, epsg) {
   }
 }
 
+// Issue #122: Normalise a raw `Projection1` cell value into the canonical
+// `EPSG:NNNN` form proj4 expects.  Accepts:
+//   * `25832`                 → `"EPSG:25832"`
+//   * `"25832"`               → `"EPSG:25832"`
+//   * `"EPSG:25832"`          → unchanged
+//   * `"epsg:25832"`          → `"EPSG:25832"`
+//   * anything unknown/null   → null (caller falls back to the page CRS)
+function normaliseEpsg(raw) {
+  if (raw == null) return null
+  const s = String(raw).trim()
+  if (s === '') return null
+  if (/^epsg:/i.test(s)) return 'EPSG:' + s.slice(5).trim()
+  if (/^\d+$/.test(s)) return `EPSG:${s}`
+  return s // already some other form — proj4 will reject if unknown
+}
+
+// Resolve the source CRS for one point: prefer its own Projection1 column,
+// fall back to the page-level default when missing or unknown to proj4.
+function pointSourceCrs(p, fallbackCrs) {
+  const own = normaliseEpsg(p?.Projection1 ?? p?.projection1)
+  if (!own) return fallbackCrs
+  // proj4 considers a CRS "known" once it has a def — either we registered
+  // one in PROJ_DEFS, or proj4.defs(name) returns one.  Otherwise fall
+  // through to the page setting.
+  if (PROJ_DEFS[own] || proj4.defs(own)) return own
+  return fallbackCrs
+}
+
 // ── Symbol SVG helpers ────────────────────────────────────────────────────────
 
 const SZ = 20   // icon canvas size (px)
@@ -387,7 +415,10 @@ export default function MapPage() {
     return allPoints
       .filter(p => p.X1 != null && p.Y1 != null)
       .map(p => {
-        const latlng = toWGS84(Number(p.X1), Number(p.Y1), crs)
+        // Issue #122: prefer the point's own Projection1 column; fall back
+        // to the page-level CRS when missing or unknown to proj4.
+        const srcCrs = pointSourceCrs(p, crs)
+        const latlng = toWGS84(Number(p.X1), Number(p.Y1), srcCrs)
         if (!latlng) return null
         return {
           id:        `db_${p.PointId}`,
