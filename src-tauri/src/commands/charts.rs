@@ -90,9 +90,13 @@ pub async fn save_chart_config(
 
 #[derive(Debug, Deserialize)]
 pub struct ChartQuery {
-    pub project_ids: Vec<String>,
+    /// Issue #124: accept either the legacy flat string list OR the per-DB
+    /// `[{db_id, ProjectId}]` form so the chart query can fan out across
+    /// every configured database — same shape choice `DownloadRequest`
+    /// uses since #105.
+    pub project_ids: crate::commands::download::ProjectIdsArg,
     #[serde(default)]
-    pub point_ids: Vec<String>,
+    pub point_ids: crate::commands::download::PointIdsArg,
     pub query_name: String,
 }
 
@@ -177,23 +181,80 @@ pub async fn run_chart_query(
     query: ChartQuery,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    if query.project_ids.is_empty() {
+    use crate::commands::download::{ProjectIdsArg, PointIdsArg};
+
+    // Issue #124: fan out across every configured DB.  Mirrors the
+    // download_data refactor in #105 and the get_strata_data path in #79.
+    let databases = crate::commands::multi_db::active_databases(&state);
+    if databases.is_empty() {
+        return Err("No database connection configured.".into());
+    }
+
+    // Group the request by db_id.  Legacy flat lists are duplicated to
+    // every active DB (same posture as download_data).
+    use std::collections::HashMap;
+    let mut per_db_projects: HashMap<String, Vec<String>> = HashMap::new();
+    match &query.project_ids {
+        ProjectIdsArg::Flat(ids) => {
+            if ids.is_empty() {
+                return Ok(json!({ "columns": [], "rows": [], "truncated": false }));
+            }
+            for db in &databases {
+                per_db_projects.insert(db.effective_id(), ids.clone());
+            }
+        }
+        ProjectIdsArg::PerDb(entries) => {
+            if entries.is_empty() {
+                return Ok(json!({ "columns": [], "rows": [], "truncated": false }));
+            }
+            for e in entries {
+                per_db_projects.entry(e.db_id.clone()).or_default().push(e.project_id.clone());
+            }
+        }
+    }
+    let mut per_db_points: HashMap<String, Vec<String>> = HashMap::new();
+    match &query.point_ids {
+        PointIdsArg::Flat(ids) => {
+            for db in &databases {
+                per_db_points.insert(db.effective_id(), ids.clone());
+            }
+        }
+        PointIdsArg::PerDb(entries) => {
+            for e in entries {
+                per_db_points.entry(e.db_id.clone()).or_default().push(e.point_id.clone());
+            }
+        }
+    }
+
+    // Build (DbConfig, sql) pairs per DB.  build_chart_sql is per-DB-agnostic
+    // — we just pass it that DB's subset of project_ids / point_ids.
+    let mut pairs: Vec<(crate::state::DbConfig, String)> = Vec::new();
+    for db in databases.iter() {
+        let id = db.effective_id();
+        let Some(proj_ids) = per_db_projects.get(&id) else { continue };
+        if proj_ids.is_empty() { continue }
+        let empty_pts: Vec<String> = Vec::new();
+        let pt_ids = per_db_points.get(&id).unwrap_or(&empty_pts);
+        match build_chart_sql(&state, &query.query_name, proj_ids, pt_ids) {
+            Ok(sql) => pairs.push((db.clone(), sql)),
+            Err(e)  => return Err(e),
+        }
+    }
+    if pairs.is_empty() {
         return Ok(json!({ "columns": [], "rows": [], "truncated": false }));
     }
 
-    let cfg = state
-        .db
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "No database connection configured.".to_string())?;
+    let mut fan_errors = Vec::new();
+    let raw_rows = crate::commands::multi_db::fan_out_query_per_db(pairs, &mut fan_errors).await;
 
-    let sql = build_chart_sql(&state, &query.query_name, &query.project_ids, &query.point_ids)?;
-
-    let raw_rows = tokio::task::spawn_blocking(move || crate::db::query_rows(&cfg, &sql))
-        .await
-        .map_err(|e| format!("internal task error: {e}"))?
-        .map_err(|e| format!("{e:#}"))?;
+    if raw_rows.is_empty() && !fan_errors.is_empty() {
+        let first = fan_errors.first()
+            .and_then(|e| e.get("error"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "All databases failed.".into());
+        return Err(first);
+    }
 
     let truncated = raw_rows.len() > MAX_CHART_ROWS;
     let raw_rows: Vec<Value> = raw_rows.into_iter().take(MAX_CHART_ROWS).collect();
