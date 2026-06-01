@@ -11,10 +11,20 @@ const { BaseLayer } = LayersControl
 // ── Projection definitions ────────────────────────────────────────────────────
 
 const PROJ_DEFS = {
+  // ETRS89 / UTM (modern Danish standard)
   'EPSG:25832': '+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
   'EPSG:25833': '+proj=utm +zone=33 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  // WGS84 / UTM (often interchangeable with the ETRS89 set above for plotting)
   'EPSG:32632': '+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs',
   'EPSG:32633': '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs',
+  // KP2000 (older Danish national; #126 — common in legacy GeoGIS datasets)
+  'EPSG:4093':  '+proj=tmerc +lat_0=0 +lon_0=9 +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  'EPSG:4094':  '+proj=tmerc +lat_0=0 +lon_0=10 +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  // ED50 / UTM (very old European datum; #126 — still surfaces in some Danish DBs)
+  'EPSG:23032': '+proj=utm +zone=32 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs',
+  'EPSG:23033': '+proj=utm +zone=33 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs',
+  'EPSG:4230':  '+proj=longlat +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +no_defs',
+  // Generic / web
   'EPSG:3857':  '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs',
   'EPSG:4326':  '+proj=longlat +datum=WGS84 +no_defs',
   'EPSG:4258':  '+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs',
@@ -412,14 +422,56 @@ export default function MapPage() {
 
   const dbPoints = useMemo(() => {
     if (!allPoints?.length) return []
-    return allPoints
+    // Issue #126: per-load diagnostics so the user can spot points whose
+    // Projection1 we don't recognise (silent fallback to the page CRS is
+    // what landed Aalborg in Africa).  Counts every (Projection1 raw value
+    // → resolved srcCrs) combo and logs the histogram once.  Also warns —
+    // deduped per unique value — for Projection1 codes that didn't
+    // resolve to a registered def.
+    const histo = new Map() // raw -> { count, resolved }
+    const unknownSeen = new Set()
+    const suspicious = []
+    const result = allPoints
       .filter(p => p.X1 != null && p.Y1 != null)
       .map(p => {
         // Issue #122: prefer the point's own Projection1 column; fall back
         // to the page-level CRS when missing or unknown to proj4.
-        const srcCrs = pointSourceCrs(p, crs)
+        const rawProj = p?.Projection1 ?? p?.projection1
+        const normalised = normaliseEpsg(rawProj)
+        const knownPerPoint = normalised && (PROJ_DEFS[normalised] || proj4.defs(normalised))
+        const srcCrs = knownPerPoint ? normalised : crs
+
+        // Histogram bookkeeping.
+        const rawKey = rawProj == null ? '<null>' : String(rawProj)
+        const entry  = histo.get(rawKey) || { count: 0, resolved: srcCrs }
+        entry.count += 1
+        histo.set(rawKey, entry)
+        if (normalised && !knownPerPoint && !unknownSeen.has(normalised)) {
+          unknownSeen.add(normalised)
+          console.warn(
+            `[map] Projection1=${normalised} not in PROJ_DEFS — falling back to page CRS ${crs}.  ` +
+            `Affected point example: db_id=${p.db_id ?? '?'} PointId=${p.PointId} PointNo=${p.PointNo}`,
+          )
+        }
+
         const latlng = toWGS84(Number(p.X1), Number(p.Y1), srcCrs)
         if (!latlng) return null
+        // Suspicious-coordinate sniff: anything within 1° of (0, 0) when the
+        // source CRS wasn't already lat/long usually means the projection
+        // silently produced garbage.  Capture a few examples for the user.
+        if (srcCrs !== 'EPSG:4326' && Math.abs(latlng[0]) < 1 && Math.abs(latlng[1]) < 1
+            && suspicious.length < 5) {
+          suspicious.push({
+            db_id:       p.db_id,
+            PointId:     p.PointId,
+            PointNo:     p.PointNo,
+            X1:          p.X1,
+            Y1:          p.Y1,
+            Projection1: rawProj,
+            srcCrs,
+            latlng,
+          })
+        }
         return {
           id:        `db_${p.PointId}`,
           latlng,
@@ -430,6 +482,30 @@ export default function MapPage() {
         }
       })
       .filter(Boolean)
+
+    // Issue #126: print the projection histogram once per allPoints load
+    // so the user can see at a glance which Projection1 codes their data
+    // carries and how many points fell back to the page CRS.
+    if (histo.size > 0) {
+      const rows = [...histo.entries()].map(([raw, info]) => ({
+        'Projection1 raw': raw,
+        'count':           info.count,
+        'projected via':   info.resolved,
+      }))
+      // eslint-disable-next-line no-console
+      console.info('[map] Per-point CRS distribution:')
+      // eslint-disable-next-line no-console
+      console.table(rows)
+    }
+    if (suspicious.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[map] ${suspicious.length} point(s) projected to suspiciously near (0, 0) — ` +
+        `their Projection1 may be wrong or unknown to proj4.  Examples:`,
+        suspicious,
+      )
+    }
+    return result
   }, [allPoints, crs])
 
   // WFS replaces db points when available; otherwise fall back to db coordinates
