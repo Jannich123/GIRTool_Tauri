@@ -1462,11 +1462,21 @@ export default function ChartsPage() {
 
     updateChart(id, { loading: true, error: '', columns: [], rows: [] })
     try {
+      // Issue #124: send project_ids / point_ids in per-DB form when the
+      // upstream rows carry db_id (post-#71 / #78) so the backend can fan
+      // out across every configured database.  Falls back to the legacy
+      // flat shape for older session restores.
+      const hasProjDb = selectedProjects.some(p => p?.db_id)
+      const hasPtDb   = selectedPoints.some(p => p?.db_id)
       const res = await invoke('run_chart_query', {
         projectId,
         query: {
-          project_ids: selectedProjects.map(p => p.ProjectId),
-          point_ids:   selectedPoints.map(p => p.PointId),
+          project_ids: hasProjDb
+            ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+            : selectedProjects.map(p => p.ProjectId),
+          point_ids:   hasPtDb
+            ? selectedPoints.map(p => ({ db_id: p.db_id, PointId: p.PointId }))
+            : selectedPoints.map(p => p.PointId),
           query_name:  chart.queryName,
         },
       })
