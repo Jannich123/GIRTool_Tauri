@@ -220,7 +220,7 @@ export default function DataPage() {
 
   if (!selectedProjects.length) {
     return (
-      <div className="page">
+      <div className="page page-wide">
         <h2 className="page-title">Data</h2>
         <p className="hint">Select a project first.</p>
       </div>
@@ -231,7 +231,7 @@ export default function DataPage() {
   const hasFolder   = !!connection?.output_folder
 
   return (
-    <div className="page">
+    <div className="page page-wide">
       <div className="page-header">
         <h2 className="page-title">Data</h2>
         {/*

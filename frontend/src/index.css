@@ -137,6 +137,10 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
 
 /* ── Page ────────────────────────────────────── */
 .page { max-width: 1200px; }
+/* Issue #120: opt-in full-window width — applied to Projects / Points /
+   Strata / Data so they extend with the window like Charts / Colors /
+   Map / Grouping / Boundaries already do. */
+.page.page-wide { max-width: 100%; }
 
 .page-header {
   display: flex;

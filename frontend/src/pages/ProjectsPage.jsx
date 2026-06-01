@@ -410,7 +410,7 @@ export default function ProjectsPage({ setPage }) {
 
   if (!connected) {
     return (
-      <div className="page">
+      <div className="page page-wide">
         <h2 className="page-title">Projects</h2>
         <p className="hint">Go to <strong>Settings</strong> and connect to the database first.</p>
       </div>
@@ -420,7 +420,7 @@ export default function ProjectsPage({ setPage }) {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="page">
+    <div className="page page-wide">
       <div className="page-header">
         <h2 className="page-title">Projects</h2>
         <div className="page-actions">
