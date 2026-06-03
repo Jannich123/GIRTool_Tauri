@@ -113,6 +113,53 @@ fn datasheets_dir(folder: &str) -> PathBuf {
     PathBuf::from(folder).join("Datasheets")
 }
 
+// ── Datasheet JSON sidecar cache (issue #128) ────────────────────────────────
+//
+// The slow part of `read_datasheet` is unzipping + XML-parsing the xlsx and
+// converting 3.2M cells into JSON.  We cache the already-converted
+// `{ columns, rows }` next to the xlsx at
+// `{folder}/Datasheets/.cache/{fname}.json`.
+//
+// AUTO-INVALIDATION: the cache is only used when its mtime is >= the xlsx
+// mtime.  If the user edits the xlsx in Excel (which bumps the xlsx mtime),
+// the next read sees the cache is older, falls through to the slow path, and
+// rewrites a fresh cache.  So edits are always picked up — at the cost of one
+// slow read after each edit.
+
+fn datasheet_cache_dir(folder: &str) -> PathBuf {
+    datasheets_dir(folder).join(".cache")
+}
+
+fn datasheet_cache_path(folder: &str, fname: &str) -> PathBuf {
+    datasheet_cache_dir(folder).join(format!("{fname}.json"))
+}
+
+/// Write the parsed `{columns, rows}` to the sidecar.  Best-effort — any
+/// failure is swallowed (the next read just takes the slow path again).
+fn write_datasheet_cache(folder: &str, fname: &str, columns: &[String], rows: &[Vec<Value>]) {
+    let _ = std::fs::create_dir_all(datasheet_cache_dir(folder));
+    let path = datasheet_cache_path(folder, fname);
+    if let Ok(text) = serde_json::to_string(&json!({ "columns": columns, "rows": rows })) {
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+/// Try to satisfy a read from the sidecar.  Returns `Some(value)` only when
+/// the cache exists AND is at least as new as the source xlsx.  Returns
+/// `None` (caller falls through to the slow xlsx parse) when the cache is
+/// missing, stale, or unparseable.
+fn read_datasheet_cached(folder: &str, fname: &str) -> Option<Value> {
+    let xlsx  = datasheets_dir(folder).join(format!("{fname}.xlsx"));
+    let cache = datasheet_cache_path(folder, fname);
+    let xlsx_mtime  = xlsx.metadata().ok()?.modified().ok()?;
+    let cache_mtime = cache.metadata().ok()?.modified().ok()?;
+    if cache_mtime < xlsx_mtime {
+        return None; // xlsx edited since the cache was written — stale.
+    }
+    let text = std::fs::read_to_string(&cache).ok()?;
+    serde_json::from_str::<Value>(&text).ok()
+}
+
 /// Issue #117: persist per-datasheet metadata to GIRTool_settings.json so
 /// `list_datasheets` can return instantly without opening every xlsx.
 /// Settings shape:
@@ -2019,6 +2066,10 @@ pub async fn download_data(
                 row_count,
                 q.apply_strata.eq_ignore_ascii_case("yes"),
             );
+            // Issue #128: write the JSON sidecar from the in-memory data so
+            // the very first read_datasheet is already fast (no xlsx parse).
+            // Written AFTER write_datasheet so the cache mtime >= xlsx mtime.
+            write_datasheet_cache(&folder, &q.fname, &columns, &rows);
         }
     }
 
@@ -2239,6 +2290,10 @@ pub async fn append_data(
                 final_rows.len(),
                 q.apply_strata.eq_ignore_ascii_case("yes"),
             );
+            // Issue #128: refresh the JSON sidecar from the combined data so
+            // the next read_datasheet is fast.  Written after write_datasheet
+            // so cache mtime >= xlsx mtime.
+            write_datasheet_cache(&folder, &q.fname, &final_columns, &final_rows);
         }
     }
 
@@ -2504,13 +2559,27 @@ pub async fn read_datasheet(
     let folder = state.output_folder().ok_or("No output folder configured.")?;
     let path = datasheets_dir(&folder).join(format!("{fname}.xlsx"));
 
-    let path_clone = path.clone();
-    let parsed = tokio::task::spawn_blocking(move || read_existing_datasheet(&path_clone))
-        .await
-        .map_err(|e| format!("internal task error: {e}"))?;
+    // Issue #128: fast path — return the JSON sidecar when it's fresh
+    // (mtime >= the xlsx).  All cache + parse I/O runs on a blocking task.
+    let folder_c = folder.clone();
+    let fname_c  = fname.clone();
+    let path_c   = path.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        // 1. Try the cache.
+        if let Some(cached) = read_datasheet_cached(&folder_c, &fname_c) {
+            return Ok(cached);
+        }
+        // 2. Slow path — parse the xlsx, then write a fresh cache.
+        match read_existing_datasheet(&path_c) {
+            Some((columns, rows)) => {
+                write_datasheet_cache(&folder_c, &fname_c, &columns, &rows);
+                Ok(json!({ "columns": columns, "rows": rows }))
+            }
+            None => Err(format!("Datasheet not found: {}", path_c.display())),
+        }
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
 
-    match parsed {
-        Some((columns, rows)) => Ok(json!({ "columns": columns, "rows": rows })),
-        None => Err(format!("Datasheet not found: {}", path.display())),
-    }
+    result
 }
