@@ -308,20 +308,28 @@ Behaviour:
 - `cpt_calc` is copied with the project (Q-A2 copies everything), so a copied project keeps
   the same calc setup.
 
-❓ **Q-E4a** (minor): the point-data (cone ratio / levels / water) and layer-data (UW / Nkt)
-**tables the user fills in** — persist those in `GIRTool_settings.json` too (e.g.
-`cpt_point_inputs` / `cpt_layer_inputs`), or in their own xlsx like projects/points? Lean:
-settings.json keys, since they're small and project-scoped.
+✅ **Decided (Q-E4a)**: The user-filled **input tables are stored as xlsx files** in a new
+project subfolder **`cpt calc settings/`** (mirrors the editable projects.xlsx / points.xlsx
+pattern — user can open/edit them in Excel, the tool loads them back):
+- `cpt calc settings/cpt_point_data.xlsx` — the Subtab-2 point inputs
+- `cpt calc settings/cpt_layer_data.xlsx` — the Subtab-3 layer inputs
+
+Both follow the same lifecycle as projects.xlsx: load on subtab open, auto-save on edit,
+re-derive missing rows from the current selection, survive project copy (Q-A2 copies the
+whole folder). The **scalar config** (`nkt_method`, `γ_water`) and the **column selection /
+rounds** (Subtab 1, Q-E4) stay in `GIRTool_settings.json::cpt_calc` — they're config, not
+tabular input.
 
 ### Subtab 2 — CPT point data (per-point inputs)
-Table keyed by **`PointNo`**, columns:
+Backed by **`cpt calc settings/cpt_point_data.xlsx`**.  Table keyed by **`PointNo`**, columns:
 `Insert Cone Area Ratio [-]` (default **0.8**) · `Ground/Seabed Level [m]` ·
 `Insert Water Level [m]` (default **0**).
-- One row per CPT point in the selection; user fills / overrides defaults.
+- One row per CPT point in the selection; user fills / overrides defaults; auto-saved to the xlsx.
 - Feeds the pore-pressure / normalisation formulas (u_n, Qt, Bq …).
 
 ### Subtab 3 — CPT layer data (per-strata inputs)
-Table keyed by **`Strata`** code, columns: `Unit weight [kN/m^3]` · `Nkt [-]`.
+Backed by **`cpt calc settings/cpt_layer_data.xlsx`**.  Table keyed by **`Strata`** code,
+columns: `Unit weight [kN/m^3]` · `Nkt [-]`.
 - Rows are the strata codes present (e.g. `DG, DI, DL, DS, Fyld/Overjord, HG, HL, HP, HS,
   ML, MV, PL, TI, TL, TS, Unknown`).
 
@@ -437,9 +445,9 @@ M1–M3 are low-risk (reuse existing pieces). M4–M5 and M8 are the real new en
 - **Q-E5**: manual cell wins; blank → estimate. **Nkt** has a user-selectable method
   (Mayne-Peuchen 2022 [default] / Robertson 2012); UW estimate is single-method.
 
-### ❓ Secondary (decide during the relevant milestone)
-- **Q-E4a**: persist the user-filled point-data / layer-data input tables in settings.json
-  (`cpt_point_inputs` / `cpt_layer_inputs`) vs. their own xlsx. Lean: settings.json.
+- **Q-E4a**: point-data + layer-data input tables → **xlsx files in a `cpt calc settings/`
+  project subfolder** (`cpt_point_data.xlsx`, `cpt_layer_data.xlsx`); editable in Excel,
+  auto-loaded. Scalars (nkt_method, γ_water) + column selection stay in settings.json.
 
 ---
 
