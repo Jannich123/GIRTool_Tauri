@@ -78,10 +78,12 @@ chosen** (New / Copy / Open). The rest of the app does not render until a projec
 
 ### A2. Project indicator + quick-open
 - Sidebar already shows the **folder name** as the active project (issue #68) ✅.
-- 🆕 Add: clicking the Settings button (or the project name) **opens the project folder in
-  Explorer** so the user can see all the xlsx files etc. easily.
+- The **Settings button** behaves normally — it opens the **Settings tab** (no folder action).
+- 🆕 Add: clicking the **project name** (the folder-name label in the sidebar) **opens the
+  project folder in Explorer** so the user can see all the xlsx files etc. easily.
 
-✅ **Decided (Q-A3)**: Reveal the folder in **Explorer** (via `tauri_plugin_opener`).
+✅ **Decided (Q-A3)**: Only the **project name** reveals the folder in **Explorer** (via
+`tauri_plugin_opener`); the Settings button just navigates to the Settings tab.
 
 ### A3. Settings subtabs
 
