@@ -92,15 +92,45 @@ chosen** (New / Copy / Open). The rest of the app does not render until a projec
 | **Project selection** | 🔧 (rework of "Project folder") | See selected project, open another, new/copy. Becomes the in-app twin of the startup flow. |
 | **Databases** | ✅ | Multi-DB connector exists (DB1, DB2 …, MSSQL + Access). **Preset databases with fixed IDs** to be defined later (Q-A4, deferred). |
 | **Query Config** | ✅ | Per-section SQL with GeoGIS preset; referenced by each DB's `query_type`. Already wired so Databases pick a valid query set. |
-| **Map addons** | 🆕 | Load shapefile / Excel / CSV / WMS / WFS. Each addon targets a chosen map. See A4. |
+| **Coordinate system** | 🆕 | Pick a target horizontal CRS + elevation (vertical) system; converts all points' coordinates to it. See A5. |
+| **Map addons** | 🆕 | Load shapefile / Excel / CSV / WMS / WFS. Each addon targets a chosen map. See A6. |
 
 🕓 **Deferred (Q-A4)**: HoleBase + the **preset databases and their fixed IDs** will be
 defined later by the user.
 
-✅ **Decided (Q-A5)**: Two maps. The **existing project map** (downloaded data only) stays as
-its own tab. A **new selection map** (available data, selectable) lives in Data Selection.
+✅ **Decided (Q-A5-maps)**: Two maps. The **existing project map** (downloaded data only)
+stays as its own tab. A **new selection map** (available data, selectable) lives in Data
+Selection.
 
-### A4. Map addons 🆕
+### A5. Coordinate system 🆕
+A Settings subtab where the user chooses the **target coordinate system** for the project:
+- **Horizontal CRS** — e.g. EPSG:25832 (ETRS89 / UTM 32N), EPSG:25833, etc.
+- **Elevation (vertical) system** — e.g. DVR90, mean sea level, local datum.
+
+On apply, the tool **converts every point's `X1`, `Y1`, `Z1` into the chosen system,
+overwriting those columns** so the whole app (tables, map, exports, CPT calcs) works in one
+consistent system.  The **original values are preserved** alongside as
+**`origin_X1`, `origin_Y1`, `origin_Z1`** (and the original EPSG, e.g. `origin_Projection1`),
+so a re-projection is always reversible / re-derivable from source.
+
+Behaviour:
+- Source CRS per point comes from `Projection1` (the per-point projection already used by
+  the map, #122).  Horizontal reprojection reuses the existing proj4 machinery.
+- `X1`/`Y1` → target horizontal CRS; `Z1` → target elevation system.
+- First conversion creates the `origin_*` columns from the raw DB values; subsequent
+  conversions re-project **from `origin_*`** (never chain-convert already-converted values).
+- The chosen system is **persisted in `GIRTool_settings.json`** (project-scoped) and applied
+  to points as they load.
+
+❓ **Q-A5a**: Elevation/datum transforms (e.g. ellipsoidal→DVR90) need a geoid model or an
+offset table — proj4 alone won't do DVR90 accurately. For Phase 1, is a **simple constant
+offset** (or "no vertical transform, keep Z1 as-is") acceptable, with proper geoid support
+later?  Horizontal reprojection is exact today; vertical is the open part.
+
+❓ **Q-A5b**: Apply the conversion **everywhere** (project map, selection map, downloaded
+datasheets, CPT calcs) or only to the points tables + maps?  (Datasheets store coords too.)
+
+### A6. Map addons 🆕
 A list of overlay layers.  The subtab UI:
 - A **list of addon layers** (each with a visibility toggle and a delete button).
 - Adding an addon offers **two categories** (dropdown / segmented):
@@ -396,7 +426,8 @@ single unified concept of a **data source** spanning DB connections *and* file/W
 
 ## G. Suggested build order (milestones)
 
-1. **M1 — Settings rework**: Project selection subtab + Map addons subtab + HoleBase type.
+1. **M1 — Settings rework**: Project selection subtab + Coordinate system subtab + Map
+   addons subtab + HoleBase type.
 2. **M2 — Startup flow**: new / copy / open project screen.
 3. **M3 — Data Selection shell**: merge Projects/Points/Map into one tab with subtabs
    (mostly relocation of existing pages).
@@ -434,8 +465,16 @@ M1–M3 are low-risk (reuse existing pieces). M4–M5 and M8 are the real new en
 - **Q-E6**: Calc engine = **Rust port + Python oracle** (option 3). App ships pure Rust;
   Python only generates committed test fixtures during development.
 
+### 🆕 Added — Coordinate system subtab (§A5)
+- New Settings subtab: pick target **horizontal CRS** + **elevation system**; convert
+  `X1/Y1/Z1` in place, preserving originals as `origin_X1/Y1/Z1` (+ `origin_Projection1`).
+- **Q-A5a** (open): vertical/datum transform fidelity for Phase 1 — constant offset / keep
+  Z1 as-is now, proper geoid (DVR90) later?
+- **Q-A5b** (open): apply conversion to datasheets + CPT calcs too, or only points/maps?
+
 ### ❓ Still open (deferred by you — not blocking M1–M7)
 - **Q-A4**: HoleBase type + the **preset databases and their fixed IDs**.
+- **Q-A5a/b**: coordinate-system vertical-transform fidelity + scope (see §A5).
 - **Q-F1b**: Jupiter↔GeoGIS match key (spatial vs DGU number).
 - **Q-F1c**: Jupiter reference points selectable vs. map-only.
 
