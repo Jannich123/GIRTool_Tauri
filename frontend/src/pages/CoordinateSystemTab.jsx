@@ -17,6 +17,10 @@ import { useApp } from '../context/AppContext'
 const TARGET_CRS_OPTIONS = [
   { value: 'EPSG:25832', label: 'EPSG:25832 — ETRS89 / UTM zone 32N' },
   { value: 'EPSG:25833', label: 'EPSG:25833 — ETRS89 / UTM zone 33N' },
+  { value: 'EPSG:4093',  label: 'EPSG:4093 — ETRS89 / DKTM1' },
+  { value: 'EPSG:4094',  label: 'EPSG:4094 — ETRS89 / DKTM2' },
+  { value: 'EPSG:4095',  label: 'EPSG:4095 — ETRS89 / DKTM3' },
+  { value: 'EPSG:4096',  label: 'EPSG:4096 — ETRS89 / DKTM4' },
   { value: 'EPSG:23032', label: 'EPSG:23032 — ED50 / UTM zone 32N' },
   { value: 'EPSG:4326',  label: 'EPSG:4326 — WGS 84 (lat/lon)' },
   { value: 'EPSG:3857',  label: 'EPSG:3857 — Web Mercator' },
