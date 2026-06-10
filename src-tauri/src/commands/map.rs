@@ -12,6 +12,8 @@
 
 use reqwest::Client;
 use serde_json::Value;
+use tauri::AppHandle;
+use tauri_plugin_opener::OpenerExt;
 
 /// Forward a WFS request URL to the remote server and return the parsed JSON.
 ///
@@ -58,4 +60,13 @@ pub fn os_username() -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+/// Open an external URL in the OS default browser (M4.2: Jupiter feature's
+/// `borerapport` link).  Uses the opener plugin so it opens outside the webview.
+#[tauri::command]
+pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("Failed to open URL: {e}"))
 }
