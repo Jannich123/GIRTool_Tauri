@@ -125,6 +125,7 @@ pub fn run() {
             commands::charts::open_datasheet,
             // map
             commands::map::wfs_proxy,
+            commands::map::os_username,
             // boundaries
             commands::boundaries::get_boundaries,
             commands::boundaries::save_boundaries,

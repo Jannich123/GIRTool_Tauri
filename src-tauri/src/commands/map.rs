@@ -47,3 +47,15 @@ pub async fn wfs_proxy(url: String) -> Result<Value, String> {
         format!("WFS server returned non-JSON body ({e}): {preview}")
     })
 }
+
+/// Return the current OS user name.  Used (M4.2) to derive the COWI initials for
+/// the Jupiter WMS `whoami=<initials>@cowi.com` parameter — COWI usernames are
+/// the user's initials.  Best-effort: empty string if not determinable.
+#[tauri::command]
+pub fn os_username() -> String {
+    std::env::var("USERNAME") // Windows
+        .or_else(|_| std::env::var("USER")) // unix/mac
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
