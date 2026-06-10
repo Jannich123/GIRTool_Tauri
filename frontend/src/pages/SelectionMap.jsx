@@ -68,9 +68,23 @@ function MapRef({ onMap }) {
 // (drag) and scroll-zoom are unaffected — Leaflet only fires `click` on a plain
 // click, so the in-progress polygon survives zoom/pan (plan Q-B1).
 function DrawHandler({ active, onVertex }) {
+  const map = useMap()
   useMapEvents({
     click: (e) => { if (active) onVertex([e.latlng.lat, e.latlng.lng]) },
   })
+  // While drawing, make existing markers/paths non-interactive (overlay pane
+  // pointer-events off) so a click only drops a vertex — never opens a popup or
+  // a Jupiter borerapport — and show a crosshair cursor.
+  useEffect(() => {
+    const pane = map.getPane('overlayPane')
+    const container = map.getContainer()
+    if (pane) pane.style.pointerEvents = active ? 'none' : ''
+    if (container) container.style.cursor = active ? 'crosshair' : ''
+    return () => {
+      if (pane) pane.style.pointerEvents = ''
+      if (container) container.style.cursor = ''
+    }
+  }, [active, map])
   return null
 }
 
@@ -207,7 +221,7 @@ export default function SelectionMap() {
   // each, run the spatial-intersect query, and render the results.  `merge`
   // adds to the loaded set (polygon "Add points"); otherwise it replaces it
   // (quick "Load in view").
-  async function loadFromLngLat(points, { merge = false } = {}) {
+  async function loadFromLngLat(points) {
     if (!points || points.length < 3) { setLoadStatus('need at least 3 points'); return }
     setLoading(true); setLoadStatus('finding coordinate systems…')
     try {
@@ -234,13 +248,19 @@ export default function SelectionMap() {
         if (!latlng) return null
         return { id: `${p.db_id ?? '?'}_${p.PointId}`, latlng, p }
       }).filter(Boolean)
+      // Always accumulate, but never add a point already on the map — neither an
+      // already-loaded available point nor a selected-project point (same
+      // db_id||PointId).  So repeated / overlapping loads don't duplicate.
+      const onMap = new Set([...loaded.map(f => f.id), ...pts.map(f => f.id)])
+      const fresh = feats.filter(f => !onMap.has(f.id))
       setLoaded(prev => {
-        if (!merge) return feats
-        const seen = new Set(prev.map(f => f.id))
+        const seen = new Set([...prev.map(f => f.id), ...pts.map(f => f.id)])
         return [...prev, ...feats.filter(f => !seen.has(f.id))]
       })
+      const dupes = feats.length - fresh.length
+      const dup  = dupes ? ` · ${dupes} already on map` : ''
       const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
-      setLoadStatus(`${feats.length} available point${feats.length === 1 ? '' : 's'} found${skip}`)
+      setLoadStatus(`${fresh.length} new point${fresh.length === 1 ? '' : 's'} added${dup}${skip}`)
     } catch (e) {
       setLoadStatus(`error: ${String(e).slice(0, 140)}`)
     } finally {
@@ -248,7 +268,7 @@ export default function SelectionMap() {
     }
   }
 
-  // Quick load: the current view rectangle (replaces the loaded set).
+  // Quick load: every available point inside the current view rectangle.
   function loadInView() {
     if (!map) return
     const b = map.getBounds()
@@ -257,16 +277,16 @@ export default function SelectionMap() {
       [b.getEast(), b.getSouth()],
       [b.getEast(), b.getNorth()],
       [b.getWest(), b.getNorth()],
-    ], { merge: false })
+    ])
   }
 
-  // Finish the drawn polygon: load points inside it, merged into the set.
+  // Finish the drawn polygon: load the available points inside it.
   function finishPolygon() {
     if (vertices.length < 3) return
     const ring4326 = vertices.map(([lat, lng]) => [lng, lat]) // [lat,lng] → [lng,lat]
     setDrawing(false)
     setVertices([])
-    loadFromLngLat(ring4326, { merge: true })
+    loadFromLngLat(ring4326)
   }
 
   return (
