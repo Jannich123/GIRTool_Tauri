@@ -83,6 +83,20 @@ export function reproject(x, y, fromEpsg, toEpsg) {
   }
 }
 
+// Convert a projected (or geographic) coordinate to Leaflet's [lat, lng].
+// Returns null when the CRS is unusable or the reprojection fails, so callers
+// can skip the point rather than place it at (0,0).
+export function toLatLng(x, y, epsg) {
+  const e = normaliseEpsg(epsg)
+  if (e === 'EPSG:4326') {
+    // Already geographic — x = lon, y = lat (proj4 axis order).
+    const lat = Number(y), lng = Number(x)
+    return (isFinite(lat) && isFinite(lng)) ? [lat, lng] : null
+  }
+  const out = reproject(Number(x), Number(y), e, 'EPSG:4326') // [lon, lat]
+  return out ? [out[1], out[0]] : null
+}
+
 const round2 = (n) =>
   (n == null || !isFinite(Number(n))) ? n : Math.round(Number(n) * 100) / 100
 
