@@ -91,12 +91,28 @@ chosen** (New / Copy / Open). The rest of the app does not render until a projec
 |---|---|---|
 | **Project selection** | 🔧 (rework of "Project folder") | See selected project, open another, new/copy. Becomes the in-app twin of the startup flow. |
 | **Databases** | ✅ | Multi-DB connector exists (DB1, DB2 …, MSSQL + Access). **Preset databases with fixed IDs** to be defined later (Q-A4, deferred). |
-| **Query Config** | ✅ | Per-section SQL with GeoGIS preset; referenced by each DB's `query_type`. Already wired so Databases pick a valid query set. |
+| **Query Config** | ✅🔧 | Per-section SQL with GeoGIS preset; referenced by each DB's `query_type`. **All sections must use the `#DB#` placeholder** (see below) + **two new map sections**. |
 | **Coordinate system** | 🆕 | Pick a target horizontal CRS + elevation (vertical) system; converts all points' coordinates to it. See A5. |
 | **Map addons** | 🆕 | Load shapefile / Excel / CSV / WMS / WFS. Each addon targets a chosen map. See A6. |
 
 🕓 **Deferred (Q-A4)**: HoleBase + the **preset databases and their fixed IDs** will be
 defined later by the user.
+
+#### Query Config additions 🔧🆕
+- 🔧 **Universal `#DB#` placeholder**: **every** Query Config section must template the
+  database/schema with `#DB#` so the same query runs against whichever databases are shown
+  in the Database tab. Today only `datasheet_queries` use `#DB#`; `project_list`,
+  `points_list`, `strata_series`, `strata_download` use bare `[Points]` / `[Projects]`.
+  **Update those builtins + the per-DB resolution to inject `#DB#`** (the multi-DB fan-out
+  already runs each query against the right DB connection — this just makes the table
+  references portable).
+- 🆕 **New section `map_distinct_epsg`** — returns the distinct `Projection1` EPSG codes in
+  a DB (drives step 1 of the polygon load, §B1a).
+- 🆕 **New section `map_polygon_points`** — the spatial-intersect query with `#DB#`,
+  `#EPSG#`, `#WKT#` placeholders (step 3 of §B1a). Editable so other schemas / systems can
+  have their own version.
+- Both new sections get GeoGIS-preset defaults (the SQL shown in §B1a) and follow the same
+  per-`query_type` override model as the existing sections.
 
 ✅ **Decided (Q-A5-maps)**: Two maps. The **existing project map** (downloaded data only)
 stays as its own tab. A **new selection map** (available data, selectable) lives in Data
@@ -164,9 +180,9 @@ Shows boreholes/CPTs/other geotechnical points from the **selected data sources*
 | Feature | Status | Notes |
 |---|---|---|
 | Render DB points on a map | ✅ | MapPage already does this, per-point EPSG projection (#122/#126). |
-| Per-point hover info: source, point no., type, depth | 🔧 | Hover exists; add **data source (db_id)** + **depth** to the tooltip. |
-| Toggle data sources on/off quickly | 🆕 | A source-list panel with checkboxes (DB1, DB2, HoleBase, addons). |
-| **Polygon select** to add/remove points | 🆕 | Draw a polygon → points inside get added (or removed) from the selection. |
+| Per-point hover info | 🔧 | Show **all non-ID, non-coordinate columns** the point query returns (db_id, PointNo, PublicNo, type, depth, …). |
+| Toggle data sources on/off quickly | 🆕 | A source-list panel with checkboxes (DB1, DB2, HoleBase, Jupiter, addons). |
+| **Polygon select** loads points from all shown DBs | 🆕 | Draw polygon → multi-EPSG spatial query across every Settings DB. See B1a. |
 | Selected points get a **red ring** | 🆕 | Visual marker; selecting here updates the Projects + Points subtabs. |
 | Source matching (Jupiter ↔ GeoGIS) | 🆕❓ | NOT deduplication — see **Cross-cutting** §F. |
 
@@ -180,6 +196,57 @@ projects** — both the Projects and Points subtabs populate.
   **Remove points** auto-finishes the polygon and applies the action.
 - (Implementation note: default `leaflet-draw` finishing-on-click conflicts with this; a
   custom draw handler or `leaflet.pm`/Geoman with a manual "finish on action" is likely needed.)
+
+#### B1a. Polygon-driven DB loading (multi-EPSG spatial query) 🆕 — the core new flow
+When the user draws a polygon and presses **Add points**, the selection map loads **all
+points inside the polygon, from every database shown in Settings → Database**, handling the
+fact that points within one DB can be stored in **different coordinate systems**:
+
+For each shown database, per polygon:
+1. **Find the distinct EPSG codes** in that DB (`Projection1` values) via a Query-Config
+   query (see new `map_distinct_epsg` section below).
+2. For **each distinct EPSG**, **convert the drawn polygon into that EPSG** (the polygon is
+   drawn in the map's CRS; reproject its vertices to the target EPSG — reuses proj4).
+3. Run a **spatial-intersect query** (new `map_polygon_points` section) with that EPSG and
+   the converted polygon WKT → returns the points in that EPSG inside the polygon.
+4. **Concatenate** the results from all EPSGs and all DBs into one set (each row tagged with
+   `db_id` and its source EPSG).
+5. **Convert every returned point's coordinates** to the map's display CRS and render.
+
+This is the same per-point projection model as #122, but the *filtering* happens server-side
+in SQL Server spatial (`geometry::Point(...).STIntersects(@Polygon)`) so we don't pull the
+whole DB to the client.
+
+**The two SQL queries are stored in Query Config** so they're editable / versionable per
+system (see §A3-Query-Config additions):
+
+`map_distinct_epsg`:
+```sql
+SELECT DISTINCT [Projection1]
+FROM #DB#[Points]
+WHERE [Projection1] IS NOT NULL
+```
+
+`map_polygon_points` (placeholders `#DB#`, `#EPSG#`, `#WKT#`):
+```sql
+DECLARE @EPSG INT = #EPSG#;
+DECLARE @WKT  NVARCHAR(MAX) = '#WKT#';
+DECLARE @Polygon GEOMETRY = geometry::STGeomFromText(@WKT, @EPSG);
+
+SELECT p.PointID, p.PointNo, p.PublicNo,
+       geometry::Point(p.X1, p.Y1, p.Projection1).STAsText() AS CoordinateText
+FROM #DB#[Points] p
+WHERE p.X1 IS NOT NULL AND p.Y1 IS NOT NULL AND p.Projection1 IS NOT NULL
+  AND geometry::Point(p.X1, p.Y1, p.Projection1).STIntersects(@Polygon) = 1;
+```
+
+- ❓ **Q-B1a**: `STIntersects` needs both geometries on the **same SRID**. Since the loop
+  already runs per-EPSG with the polygon converted to that EPSG, should the query also add
+  `AND p.Projection1 = @EPSG` so it only compares same-SRID points (avoids cross-SRID
+  intersect returning nothing / erroring)? Recommended — otherwise a DB with mixed EPSGs
+  may silently drop rows.
+- **Hover**: show **all non-ID, non-coordinate columns** the point query returns.
+- **Selecting** these polygon-loaded points still adds points + parent projects (Q-B2).
 
 ### B2. Projects subtab ✅ (already built — relocate)
 - Selected-projects table (top) + available-projects table (bottom) + search — issue #81/#83 ✅.
@@ -404,40 +471,53 @@ This is **spatial matching with source precedence**, not row deduplication:
 - Unmatched Jupiter point → render as reference-only (distinct marker / greyed), not
   selectable for data download.
 
-✅ **Decided (Q-F1a)**: **Jupiter via GEUS WFS** — fetch the boreholes shapefile from the
-GEUS geusmap WFS (layer `jupiter_lithologi_over_10m_dybe`, `OUTPUTFORMAT=shape`, EPSG:25832).
-- Example endpoint (provided): `https://data.geus.dk/geusmap/ows/25832.jsp?...REQUEST=GetFeature&LAYERS=jupiter_lithologi_over_10m_dybe&...&OUTPUTFORMAT=shape`
-- **Refresh once a day on program open**; cache it **where GIRTool is installed** (app
-  data dir, not per-project — it's national reference data shared across projects).
-- The shape carries **RGB colour per point** (preserve it for marker colouring) + info
-  fields (show on hover).
-- 🆕 Backend: a `refresh_jupiter()` command (download → unzip → convert to GeoJSON →
-  store in app dir, skip if today's copy already exists).
+✅ **Decided (Q-F1a, revised)**: **Jupiter is a live WFS layer** (not a daily shapefile
+download anymore). It's just another **data source** the user can toggle on the selection
+map.
+- Endpoint:
+  `http://data.geus.dk/geusmap/ows/25832.jsp?mapname=jupiter&whoami={initials}@cowi.com&LAYERS=jupiter_lithologi_over_10m_dybe`
+- **`{initials}`** is substituted with the **current PC user's initials** (derive from the
+  OS username; the COWI convention is `<initials>@cowi.com`).
+- **Hover** over a Jupiter point → show the info fields the WFS feature carries.
+- **Click** a Jupiter point → **open the borehole report ("borerapport") website** for that
+  point in the browser (the WFS feature should carry the borehole id / a link to build the
+  URL).
+- It coexists with rich DB points on the map (reference points the user can see but that
+  carry no GeoGIS test data).
+- 🆕 Backend/Frontend: fetch the WFS layer (likely via the existing `wfs_proxy`), render its
+  features, wire hover + click-to-open.
+
+❓ **Q-F1a-i**: How is the **borerapport URL** built from a Jupiter feature — is there a
+borehole id / DGU number field in the WFS response we template into a known GEUS report URL?
+(Need the URL pattern + the field name.)
 
 ❓ **Q-F1b** (deferred): match key Jupiter↔GeoGIS — spatial only or shared DGU/boring-no.
 ❓ **Q-F1c** (deferred): are Jupiter reference-only points selectable, or map-only.
 
 ### F2. Data-source model
-Today: `databases[]` (DB1, DB2 …) + map addons. The Map subtab's "toggle sources" needs a
-single unified concept of a **data source** spanning DB connections *and* file/WxS addons.
-🔧 Define a `DataSource` abstraction the map + selection consume.
+Today: `databases[]` (DB1, DB2 …) + map addons + Jupiter WFS. The Map subtab's "toggle
+sources" needs a single unified concept of a **data source** spanning DB connections,
+file/WxS addons, and the Jupiter WFS layer. 🔧 Define a `DataSource` abstraction the map +
+selection consume.
 
 ---
 
 ## G. Suggested build order (milestones)
 
 1. **M1 — Settings rework**: Project selection subtab + Coordinate system subtab + Map
-   addons subtab + HoleBase type.
+   addons subtab + HoleBase type + **Query Config: universal `#DB#` + the two new map
+   sections** (`map_distinct_epsg`, `map_polygon_points`).
 2. **M2 — Startup flow**: new / copy / open project screen.
 3. **M3 — Data Selection shell**: merge Projects/Points/Map into one tab with subtabs
    (mostly relocation of existing pages).
-4. **M4 — Map selection UX**: source toggles, polygon select, red-ring selection, richer hover.
-5. **M5 — Cross-reference dedup**: pick a strategy from §F1, implement + review UI.
+4. **M4 — Map selection UX**: source toggles, **polygon-driven multi-EPSG DB loading
+   (§B1a)**, red-ring selection, richer hover, **Jupiter WFS layer (hover + click→borerapport)**.
+5. **M5 — Source matching**: Jupiter↔rich-source matching per §F1 (after Q-F1b/c).
 6. **M6 — Strata cluster view**: per-borehole error/warning clustering.
 7. **M7 — CPT reduction subtab**: moving average / median (wavelet later).
 8. **M8 — CPT calculations tab**: the 3 subtabs; verify against old GIRTool.
 
-M1–M3 are low-risk (reuse existing pieces). M4–M5 and M8 are the real new engineering.
+M1–M3 are low-risk (reuse existing pieces). M4, M5 and M8 are the real new engineering.
 
 ---
 
@@ -460,7 +540,11 @@ M1–M3 are low-risk (reuse existing pieces). M4–M5 and M8 are the real new en
 - **Q-E1/E2/E3**: Source = `cpt_calc.py` + Robertson CSVs (✅ vendored to
   `docs/cpt_reference/`); inputs **manual** for now; output **into the same CPTData sheet**.
 - **Q-F1 (reframed)**: Rich (GeoGIS/HoleBase) vs. reference (Jupiter) source matching.
-- **Q-F1a**: Jupiter via **GEUS WFS**, daily refresh, cached in the install/app dir.
+- **Q-F1a (revised)**: Jupiter is a **live WFS layer** (`{initials}@cowi.com` substituted),
+  hover shows feature info, **click opens the borerapport website**. (No more daily shapefile.)
+- **Q-B1a-flow**: polygon → per-DB distinct EPSG → reproject polygon per EPSG → spatial
+  intersect query → concat + convert + show. The two SQL queries live in Query Config.
+- **Q-DB-placeholder**: ALL Query Config sections use `#DB#` so they run against any shown DB.
 
 - **Q-E6**: Calc engine = **Rust port + Python oracle** (option 3). App ships pure Rust;
   Python only generates committed test fixtures during development.
@@ -475,6 +559,10 @@ M1–M3 are low-risk (reuse existing pieces). M4–M5 and M8 are the real new en
 ### ❓ Still open (deferred by you — not blocking M1–M7)
 - **Q-A4**: HoleBase type + the **preset databases and their fixed IDs**.
 - **Q-A5a/b**: coordinate-system vertical-transform fidelity + scope (see §A5).
+- **Q-B1a**: add `AND p.Projection1 = @EPSG` to the polygon query so it only compares
+  same-SRID points (recommended; avoids mixed-EPSG rows being dropped by STIntersects).
+- **Q-F1a-i**: how the **borerapport URL** is built from a Jupiter WFS feature (id field +
+  URL pattern).
 - **Q-F1b**: Jupiter↔GeoGIS match key (spatial vs DGU number).
 - **Q-F1c**: Jupiter reference points selectable vs. map-only.
 
