@@ -24,6 +24,11 @@ const JUPITER_TYPENAME = 'jupiter_lithologi_over_10m_dybe'
 const JUPITER_MAX      = 2000
 const JUPITER_MIN_ZOOM = 11
 
+// Distinct colours for data sources (databases).  Assigned by the sorted db_id
+// set so DB1/DB2/… stay consistent across renders.  Jupiter is grey.
+const SOURCE_PALETTE = ['#2563eb', '#16a34a', '#db2777', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#dc2626']
+const JUPITER_COLOR  = '#cbd5e1'
+
 // Fit the view to the rendered DB points whenever their count changes.
 function FitBounds({ pts }) {
   const map = useMap()
@@ -154,6 +159,18 @@ export default function SelectionMap() {
       .filter(Boolean)
   }, [allPoints])
 
+  // Assign each database (data source) a stable colour from the palette,
+  // drawn from whatever db_ids are present across selected + loaded points.
+  const dbColors = useMemo(() => {
+    const ids = new Set()
+    pts.forEach(f => { if (f.p.db_id) ids.add(f.p.db_id) })
+    loaded.forEach(f => { if (f.p.db_id) ids.add(f.p.db_id) })
+    const m = {}
+    ;[...ids].sort().forEach((id, i) => { m[id] = SOURCE_PALETTE[i % SOURCE_PALETTE.length] })
+    return m
+  }, [pts, loaded])
+  const colorFor = (dbId) => dbColors[dbId] || SOURCE_PALETTE[0]
+
   // Load available DB points inside the current view (M4.3a): distinct EPSGs per
   // DB → reproject the view rectangle into each → spatial-intersect query.
   async function loadInView() {
@@ -229,6 +246,7 @@ export default function SelectionMap() {
 
       <div
         style={{
+          position: 'relative',
           height: '70vh', minHeight: 400, width: '100%',
           borderRadius: 8, overflow: 'hidden',
           border: '1px solid var(--border, #e2e8f0)',
@@ -260,7 +278,8 @@ export default function SelectionMap() {
               key={`avail_${id}`}
               center={latlng}
               radius={5}
-              pathOptions={{ color: '#fff', weight: 1.5, fillColor: '#f59e0b', fillOpacity: 0.9 }}
+              // Available = hollow ring in the source colour (vs solid = selected).
+              pathOptions={{ color: colorFor(p.db_id), weight: 2, fillColor: colorFor(p.db_id), fillOpacity: 0.2 }}
             >
               <Popup>
                 <div style={{ fontSize: '.8rem', lineHeight: 1.5 }}>
@@ -280,7 +299,8 @@ export default function SelectionMap() {
               key={id}
               center={latlng}
               radius={6}
-              pathOptions={{ color: '#fff', weight: 1.5, fillColor: '#2563eb', fillOpacity: 0.9 }}
+              // Selected = solid fill in the source colour.
+              pathOptions={{ color: '#fff', weight: 1.5, fillColor: colorFor(p.db_id), fillOpacity: 0.95 }}
             >
               <Popup>
                 <div style={{ fontSize: '.8rem', lineHeight: 1.5 }}>
@@ -294,6 +314,34 @@ export default function SelectionMap() {
             </CircleMarker>
           ))}
         </MapContainer>
+
+        {(Object.keys(dbColors).length > 0 || showJupiter) && (
+          <div
+            style={{
+              position: 'absolute', bottom: 12, left: 12, zIndex: 1000,
+              background: 'rgba(255,255,255,0.94)', borderRadius: 6,
+              padding: '.5rem .65rem', boxShadow: '0 1px 4px rgba(0,0,0,.25)',
+              fontSize: '.75rem', lineHeight: 1.7, maxWidth: 220,
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: '.15rem' }}>Data sources</div>
+            {Object.entries(dbColors).map(([id, c]) => (
+              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '.45rem' }}>
+                <span style={{ width: 11, height: 11, borderRadius: '50%', background: c, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #94a3b8', flex: '0 0 auto' }} />
+                {id}
+              </div>
+            ))}
+            {showJupiter && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.45rem' }}>
+                <span style={{ width: 11, height: 11, borderRadius: '50%', background: JUPITER_COLOR, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #475569', flex: '0 0 auto' }} />
+                Jupiter (GEUS)
+              </div>
+            )}
+            {(pts.length > 0 || loaded.length > 0) && (
+              <div className="hint" style={{ marginTop: '.3rem' }}>● selected · ○ available</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
