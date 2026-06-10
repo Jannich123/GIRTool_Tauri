@@ -80,9 +80,16 @@ export default function StartupScreen({ onOpen }) {
       alignItems: 'center', justifyContent: 'center', gap: '1.5rem',
       background: '#f8fafc', padding: '2rem',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-        <Logo size={48} />
-        <h1 style={{ margin: 0, fontSize: '1.8rem', fontWeight: 700 }}>GIRTool</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+        {/* Navy badge so the logo's white→dark strata blocks are visible,
+            matching the dark sidebar background everywhere else (#137-followup). */}
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          background: 'var(--navy, #1a3a5c)', borderRadius: 12, padding: 10,
+        }}>
+          <Logo size={48} />
+        </span>
+        <h1 style={{ margin: 0, fontSize: '1.8rem', fontWeight: 700, color: 'var(--navy, #1a3a5c)' }}>GIRTool</h1>
       </div>
       <p className="hint" style={{ margin: 0 }}>Start a project to continue.</p>
 
