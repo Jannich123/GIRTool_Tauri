@@ -4,13 +4,12 @@ import { useApp } from '../context/AppContext'
 import Logo from './Logo'
 
 const NAV_MAIN = [
-  { key: 'projects',  label: '📁 Projects'         },
-  { key: 'points',    label: '📍 Points'            },
+  { key: 'dataSelection', label: '🧭 Data Selection' },
   { key: 'strata',    label: '🪨 Strata'            },
   { key: 'data',      label: '📊 Data'              },
   { key: 'grouping',  label: '🏷️ Grouping'          },
   { key: 'colors',    label: '🎨 Colors & Symbols'  },
-  { key: 'map',        label: '🗺️ Map'               },
+  { key: 'map',        label: '🗺️ Project map'        },
   { key: 'charts',     label: '📈 Charts'            },
   { key: 'boundaries', label: '〰️ Boundaries'        },
 ]
