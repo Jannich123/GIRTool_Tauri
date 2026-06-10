@@ -74,9 +74,9 @@ SELECT
     A.[VerticalRefId1]    AS [LevelReference],
     C.[Projection]        AS [CoordinateSystem]
 FROM
-    ([Points] A
-     INNER JOIN [Projects]    B ON A.[ProjectId]  = B.[ProjectId])
-     INNER JOIN [Projections] C ON A.[Projection1] = C.[Epsg]
+    (#DB#[Points] A
+     INNER JOIN #DB#[Projects]    B ON A.[ProjectId]  = B.[ProjectId])
+     INNER JOIN #DB#[Projections] C ON A.[Projection1] = C.[Epsg]
 WHERE A.[ProjectId] IN ({ids})
 ORDER BY A.[PointNo] ASC
 "#;
@@ -140,7 +140,8 @@ pub async fn get_points(
         let Some(ids) = per_db.get(&id) else { continue };
         if ids.is_empty() { continue }
         let template = lookup_sql(&folder, SECTION_POINTS_LIST, &db.query_type)
-            .unwrap_or_else(|| POINTS_SQL.to_string());
+            .unwrap_or_else(|| POINTS_SQL.to_string())
+            .replace("#DB#", ""); // Issue #141: resolve the DB-prefix hook.
         let sql = template.replace("{ids}", &ids.join(", "));
         tasks.push((db, sql));
     }

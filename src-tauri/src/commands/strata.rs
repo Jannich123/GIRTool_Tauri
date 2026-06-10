@@ -147,10 +147,10 @@ FROM (
         A.[PointId],
         1 AS Layer_Count
     FROM
-        (([Strata]      A
-          INNER JOIN [Points]      B ON A.PointId  = B.PointId)
-          INNER JOIN [Layers]      C ON A.LayerId  = C.LayerId)
-          INNER JOIN [LayerSeries] D ON C.SeriesId = D.SeriesId
+        ((#DB#[Strata]      A
+          INNER JOIN #DB#[Points]      B ON A.PointId  = B.PointId)
+          INNER JOIN #DB#[Layers]      C ON A.LayerId  = C.LayerId)
+          INNER JOIN #DB#[LayerSeries] D ON C.SeriesId = D.SeriesId
     WHERE B.ProjectID IN ({project_ids})
     {point_filter}
 ) sub
@@ -168,11 +168,11 @@ SELECT DISTINCT
     C.[Layer],
     C.[Description]
 FROM
-    [Strata]      A
-    INNER JOIN [Points]      B ON A.PointId  = B.PointId
-    INNER JOIN [Layers]      C ON A.LayerId  = C.LayerId
-    INNER JOIN [LayerSeries] D ON C.SeriesId = D.SeriesId
-    INNER JOIN [Projects]    E ON B.ProjectID = E.ProjectID
+    #DB#[Strata]      A
+    INNER JOIN #DB#[Points]      B ON A.PointId  = B.PointId
+    INNER JOIN #DB#[Layers]      C ON A.LayerId  = C.LayerId
+    INNER JOIN #DB#[LayerSeries] D ON C.SeriesId = D.SeriesId
+    INNER JOIN #DB#[Projects]    E ON B.ProjectID = E.ProjectID
 WHERE
     B.ProjectID IN ({project_ids})
     {point_filter}
@@ -888,7 +888,8 @@ pub async fn get_strata_types(
         .into_iter()
         .map(|d| {
             let template = lookup_sql(&folder, SECTION_STRATA_SERIES, &d.query_type)
-                .unwrap_or_else(|| TYPES_SQL.to_string());
+                .unwrap_or_else(|| TYPES_SQL.to_string())
+                .replace("#DB#", ""); // Issue #141: resolve the DB-prefix hook.
             let sql = template
                 .replace("{project_ids}", &project_ids_sql)
                 .replace("{point_filter}", &point_filter);
@@ -1014,7 +1015,8 @@ pub async fn get_strata_data(
             .into_iter()
             .map(|d| {
                 let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &d.query_type)
-                    .unwrap_or_else(|| DATA_SQL.to_string());
+                    .unwrap_or_else(|| DATA_SQL.to_string())
+                    .replace("#DB#", ""); // Issue #141: resolve the DB-prefix hook.
                 let sql = template
                     .replace("{project_ids}", &project_ids_sql)
                     .replace("{point_filter}", &point_filter)
@@ -1113,7 +1115,8 @@ pub async fn download_strata(
             .into_iter()
             .map(|d| {
                 let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &d.query_type)
-                    .unwrap_or_else(|| DATA_SQL.to_string());
+                    .unwrap_or_else(|| DATA_SQL.to_string())
+                    .replace("#DB#", ""); // Issue #141: resolve the DB-prefix hook.
                 let sql = template
                     .replace("{project_ids}", &project_ids_sql)
                     .replace("{point_filter}", &point_filter)
@@ -1186,7 +1189,8 @@ pub async fn transfer_strata(
             .into_iter()
             .map(|d| {
                 let template = lookup_sql(&folder, SECTION_STRATA_DOWNLOAD, &d.query_type)
-                    .unwrap_or_else(|| DATA_SQL.to_string());
+                    .unwrap_or_else(|| DATA_SQL.to_string())
+                    .replace("#DB#", ""); // Issue #141: resolve the DB-prefix hook.
                 let sql = template
                     .replace("{project_ids}", &project_ids_sql)
                     .replace("{point_filter}", &point_filter)
