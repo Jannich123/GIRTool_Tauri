@@ -142,12 +142,15 @@ export default function PointsPage({ setPage }) {
   // Build the list of currently-checked point objects (or all visible
   // points when nothing is ticked — matches the "Use all points" semantics
   // of the primary button).
+  // Select from the CONVERTED view (issue #147) so the persisted points.xlsx
+  // and the in-app selection both carry the project's target-CRS coordinates
+  // (+ origin_* source values), matching what the table shows.
   function currentSelection() {
     const anyChecked = Object.values(checked).some(Boolean)
     if (anyChecked) {
-      return points.filter(p => checked[ptKey(p)])
+      return viewPoints.filter(p => checked[ptKey(p)])
     }
-    return points
+    return viewPoints
   }
 
   // Persist the current selection (or all points when nothing ticked) to
@@ -155,11 +158,18 @@ export default function PointsPage({ setPage }) {
   // button (issue #77).
   async function savePointsXlsx(selectedRows) {
     try {
+      const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v)
       const payload = selectedRows.map(p => ({
         db_id:     p.db_id ?? '',
         ProjectId: p.ProjectId ?? '',
         PointId:   p.PointId ?? '',
         PointNo:   String(p.PointNo ?? ''),
+        // Coordinate snapshot (#147): converted X1/Y1/Z1 + target Projection1,
+        // plus the preserved source values.  null where unavailable.
+        X1: num(p.X1), Y1: num(p.Y1), Z1: num(p.Z1),
+        Projection1: p.Projection1 != null ? String(p.Projection1) : '',
+        origin_X1: num(p.origin_X1), origin_Y1: num(p.origin_Y1), origin_Z1: num(p.origin_Z1),
+        origin_Projection1: p.origin_Projection1 != null ? String(p.origin_Projection1) : '',
       }))
       await invoke('save_points_xlsx', { selected: payload })
       return { ok: true, count: payload.length }

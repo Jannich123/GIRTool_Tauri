@@ -5,17 +5,26 @@
 //
 //   {output_folder}/points.xlsx
 //
-// Sheet schema (single sheet "Points", 4 columns):
+// Sheet schema (single sheet "Points", 12 columns):
 //
-//   A  db_id      (text — e.g. "DB1", "DB2")
-//   B  ProjectId  (text — groups rows visually in Excel)
-//   C  PointId    (text — unique within {db_id, ProjectId})
-//   D  PointNo    (text — display only; re-derived from the DB on read)
+//   A  db_id              (text — e.g. "DB1", "DB2")
+//   B  ProjectId          (text — groups rows visually in Excel)
+//   C  PointId            (text — unique within {db_id, ProjectId})
+//   D  PointNo            (text — display only; re-derived from the DB on read)
+//   E  X1                 (number — easting in the project's target CRS)
+//   F  Y1                 (number — northing in the project's target CRS)
+//   G  Z1                 (number — elevation, with the per-system offset applied)
+//   H  Projection1        (text — EPSG of the X1/Y1 above, e.g. "EPSG:25832")
+//   I  origin_X1          (number — raw source easting from the DB)
+//   J  origin_Y1          (number — raw source northing from the DB)
+//   K  origin_Z1          (number — raw source elevation from the DB)
+//   L  origin_Projection1 (text — EPSG the origin_X1/Y1 are in)
 //
-// `db_id + PointId` is the source of truth.  `ProjectId` is written so users
-// can group/sort by project in Excel; `PointNo` is purely cosmetic.  Reading
-// the file back returns whatever the xlsx contains — the frontend is
-// responsible for cross-checking each row against the current points list.
+// `db_id + PointId` remains the source of truth for the SELECTION; the
+// coordinate columns (#147) are a snapshot of the converted points table so the
+// file reflects the project's coordinate system.  Reading the file back only
+// uses the ID columns for selection-restore — the coordinate columns are
+// re-derived from the DB + the active coordinate system, never trusted on read.
 //
 // Workbook styling mirrors `projects_xlsx.rs` (Verdana 9, light header fill,
 // comfortable column widths).
@@ -45,14 +54,26 @@ const FONT_SIZE: f64  = 9.0;
 /// Header fill — pale blue-grey to match the strata.xlsx body shading.
 const HEADER_FILL_RGB: u32 = 0xD6_DE_E4;
 
-const HEADERS: &[&str] = &["db_id", "ProjectId", "PointId", "PointNo"];
+const HEADERS: &[&str] = &[
+    "db_id", "ProjectId", "PointId", "PointNo",
+    "X1", "Y1", "Z1", "Projection1",
+    "origin_X1", "origin_Y1", "origin_Z1", "origin_Projection1",
+];
 
 /// Column widths (Excel character units).
-const COL_WIDTHS: [f64; 4] = [
+const COL_WIDTHS: [f64; 12] = [
     14.0, // A db_id
     38.0, // B ProjectId (GUIDs are 36 chars)
     38.0, // C PointId   (also potentially GUID-shaped)
     18.0, // D PointNo
+    14.0, // E X1
+    14.0, // F Y1
+    12.0, // G Z1
+    14.0, // H Projection1
+    14.0, // I origin_X1
+    14.0, // J origin_Y1
+    12.0, // K origin_Z1
+    16.0, // L origin_Projection1
 ];
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -63,7 +84,7 @@ fn points_xlsx_path(output_folder: &str) -> PathBuf {
 
 // ── Payload type ──────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SelectedPoint {
     pub db_id: String,
     #[serde(rename = "ProjectId", default)]
@@ -72,6 +93,24 @@ pub struct SelectedPoint {
     pub point_id: String,
     #[serde(rename = "PointNo", default)]
     pub point_no: String,
+    // Coordinate snapshot (#147).  Optional so older callers / files (and the
+    // selection-restore reader, which leaves them None) still deserialise.
+    #[serde(rename = "X1", default)]
+    pub x1: Option<f64>,
+    #[serde(rename = "Y1", default)]
+    pub y1: Option<f64>,
+    #[serde(rename = "Z1", default)]
+    pub z1: Option<f64>,
+    #[serde(rename = "Projection1", default)]
+    pub projection1: String,
+    #[serde(rename = "origin_X1", default)]
+    pub origin_x1: Option<f64>,
+    #[serde(rename = "origin_Y1", default)]
+    pub origin_y1: Option<f64>,
+    #[serde(rename = "origin_Z1", default)]
+    pub origin_z1: Option<f64>,
+    #[serde(rename = "origin_Projection1", default)]
+    pub origin_projection1: String,
 }
 
 // ── Workbook builder ──────────────────────────────────────────────────────────
@@ -111,6 +150,24 @@ fn write_workbook(path: &std::path::Path, rows: &[SelectedPoint]) -> Result<(), 
             .map_err(|e| format!("PointId write error: {e}"))?;
         ws.write_string_with_format(r, 3, &row.point_no,   &body_fmt)
             .map_err(|e| format!("PointNo write error: {e}"))?;
+
+        // Coordinate snapshot (#147) — write numbers as numbers; blank when None.
+        for (col, val) in [(4u16, row.x1), (5, row.y1), (6, row.z1)] {
+            if let Some(n) = val {
+                ws.write_number_with_format(r, col, n, &body_fmt)
+                    .map_err(|e| format!("coordinate write error: {e}"))?;
+            }
+        }
+        ws.write_string_with_format(r, 7, &row.projection1, &body_fmt)
+            .map_err(|e| format!("Projection1 write error: {e}"))?;
+        for (col, val) in [(8u16, row.origin_x1), (9, row.origin_y1), (10, row.origin_z1)] {
+            if let Some(n) = val {
+                ws.write_number_with_format(r, col, n, &body_fmt)
+                    .map_err(|e| format!("origin coordinate write error: {e}"))?;
+            }
+        }
+        ws.write_string_with_format(r, 11, &row.origin_projection1, &body_fmt)
+            .map_err(|e| format!("origin_Projection1 write error: {e}"))?;
     }
 
     // Column widths + freeze pane
@@ -164,11 +221,14 @@ fn read_rows(path: &std::path::Path) -> Vec<SelectedPoint> {
             continue;
         }
 
+        // Selection-restore only uses the ID columns; coordinate columns are
+        // re-derived from the DB + active coordinate system, so leave them None.
         out.push(SelectedPoint {
             db_id,
             project_id,
             point_id,
             point_no,
+            ..Default::default()
         });
     }
     out
