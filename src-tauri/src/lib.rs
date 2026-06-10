@@ -127,6 +127,7 @@ pub fn run() {
             commands::map::wfs_proxy,
             commands::map::os_username,
             commands::map::open_url,
+            commands::map::wms_capabilities,
             // map polygon-load (M4.3)
             commands::map_query::map_distinct_epsgs,
             commands::map_query::map_polygon_points,

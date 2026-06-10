@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
 // Issue #169 (M4.5a) — Map addons Settings subtab.
@@ -14,6 +15,23 @@ export default function MapAddonsTab() {
 
   const [form, setForm] = useState({ name: '', url: '', layer: '', project: true, selection: true })
   const [msg, setMsg] = useState(null)
+  const [layers, setLayers] = useState([])           // [{ name, title }] from GetCapabilities
+  const [connecting, setConnecting] = useState(false)
+  const [connectMsg, setConnectMsg] = useState(null)
+
+  async function connect() {
+    setConnectMsg(null); setConnecting(true)
+    try {
+      const list = await invoke('wms_capabilities', { url: form.url.trim() })
+      const arr = Array.isArray(list) ? list : []
+      setLayers(arr)
+      setConnectMsg({ ok: arr.length > 0, text: `${arr.length} layer${arr.length === 1 ? '' : 's'} found` })
+    } catch (e) {
+      setLayers([]); setConnectMsg({ ok: false, text: String(e).slice(0, 160) })
+    } finally {
+      setConnecting(false)
+    }
+  }
 
   function addAddon() {
     setMsg(null)
@@ -98,9 +116,33 @@ export default function MapAddonsTab() {
         <label>Name</label>
         <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Cadastre" />
         <label>Service URL</label>
-        <input type="text" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} placeholder="https://…/wms" />
-        <label>Layer name</label>
-        <input type="text" value={form.layer} onChange={e => setForm({ ...form, layer: e.target.value })} placeholder="WMS LAYERS value" />
+        <div style={{ display: 'flex', gap: '.4rem' }}>
+          <input
+            type="text" value={form.url}
+            onChange={e => { setForm({ ...form, url: e.target.value }); setLayers([]); setConnectMsg(null) }}
+            placeholder="https://…/wms" style={{ flex: 1 }}
+          />
+          <button className="btn-secondary" onClick={connect} disabled={!form.url.trim() || connecting}>
+            {connecting ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+        <label>Layer</label>
+        <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {layers.length > 0 && (
+            <select value={form.layer} onChange={e => setForm({ ...form, layer: e.target.value })} style={{ minWidth: 260 }}>
+              <option value="">— select a layer —</option>
+              {layers.map(l => (
+                <option key={l.name} value={l.name}>{l.title ? `${l.title} (${l.name})` : l.name}</option>
+              ))}
+            </select>
+          )}
+          <input
+            type="text" value={form.layer}
+            onChange={e => setForm({ ...form, layer: e.target.value })}
+            placeholder="layer name" style={{ minWidth: 160 }}
+          />
+          {connectMsg && <span className={`msg ${connectMsg.ok ? 'ok' : 'err'}`} style={{ margin: 0 }}>{connectMsg.text}</span>}
+        </div>
         <label>Show on</label>
         <div style={{ display: 'flex', gap: '1rem' }}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem' }}>
