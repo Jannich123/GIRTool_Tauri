@@ -76,7 +76,12 @@ SELECT
 FROM
     (#DB#[Points] A
      INNER JOIN #DB#[Projects]    B ON A.[ProjectId]  = B.[ProjectId])
-     INNER JOIN #DB#[Projections] C ON A.[Projection1] = C.[Epsg]
+     -- LEFT JOIN (not INNER): a point must never be dropped just because its
+     -- EPSG has no row in this DB's [Projections] lookup, or its Projection1 is
+     -- NULL.  An INNER join here silently drops all points from any database
+     -- whose [Projections] table is incomplete (issue #142).  CoordinateSystem
+     -- is simply NULL when unmatched; the map reprojects from Projection1.
+     LEFT JOIN #DB#[Projections] C ON A.[Projection1] = C.[Epsg]
 WHERE A.[ProjectId] IN ({ids})
 ORDER BY A.[PointNo] ASC
 "#;
@@ -152,6 +157,16 @@ pub async fn get_points(
 
     let mut errors = Vec::new();
     let rows = fan_out_query_per_db(tasks, &mut errors).await;
+
+    // Issue #142: don't swallow per-DB failures.  When at least one DB returns
+    // rows we still return the partial result (so a working DB isn't held
+    // hostage to a broken one), but log every failing DB so "missing points
+    // from one database" is diagnosable from the dev console rather than silent.
+    if !errors.is_empty() {
+        for e in &errors {
+            tracing::warn!("get_points: a database query failed: {e}");
+        }
+    }
 
     if rows.is_empty() && !errors.is_empty() {
         let first = errors.first()
