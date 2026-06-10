@@ -6,6 +6,8 @@ import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS } from '../lib/proj'
+import AddonLayers from '../components/AddonLayers'
+import AddonControl from '../components/AddonControl'
 
 const { BaseLayer } = LayersControl
 
@@ -667,54 +669,10 @@ export default function MapPage() {
           zoom={savedPos ? savedPos.zoom : 6}
           style={{ width: '100%', height: '100%' }}
         >
-          <LayersControl position="topright">
-            <BaseLayer checked name="OpenStreetMap">
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                maxZoom={19}
-              />
-            </BaseLayer>
-            <BaseLayer name="Ortophoto (ESRI)">
-              <TileLayer
-                attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                maxZoom={19}
-              />
-            </BaseLayer>
-
-            {/* ─── Dataforsyningen (Danish national geodata) — WMS ─────────
-                We tried WMTS first but Dataforsyningen's WMTS only serves
-                EPSG:25832 (Danish UTM), which doesn't align with Leaflet's
-                Web Mercator (EPSG:3857) base. The WMS endpoints below DO
-                support EPSG:3857 — Leaflet's WMSTileLayer reprojects tile
-                requests on the fly, so they layer correctly over OSM/ESRI.
-                Coverage is Denmark only; tiles outside DK return blank. */}
-            <BaseLayer name="Ortophoto (DK, GeoDanmark)">
-              <WMSTileLayer
-                url="https://api.dataforsyningen.dk/orto_foraar_DAF"
-                layers="orto_foraar"
-                format="image/jpeg"
-                transparent={false}
-                version="1.3.0"
-                attribution='&copy; <a href="https://dataforsyningen.dk">Dataforsyningen</a> / SDFE'
-                token="3fb3906a5fd463fa23e041854d827723"
-                maxZoom={21}
-              />
-            </BaseLayer>
-            <BaseLayer name="Screen map (DK)">
-              <WMSTileLayer
-                url="https://api.dataforsyningen.dk/topo_skaermkort_DAF"
-                layers="topo_skaermkort"
-                format="image/png"
-                transparent={false}
-                version="1.3.0"
-                attribution='&copy; <a href="https://dataforsyningen.dk">Dataforsyningen</a> / SDFE'
-                token="ff95a717c7d986d1bcf2f4187753a8ab"
-                maxZoom={21}
-              />
-            </BaseLayer>
-          </LayersControl>
+          {/* Background maps + WMS addons — one unified layer list (M4.5a).
+              The base maps (OSM / Esri / Dataforsyningen ortho + topo) are now
+              built-in entries in the same list, managed in the top-right panel. */}
+          <AddonLayers target="project" />
 
           {visiblePoints.map(pt => {
             const { color, symbol } = getStyle(pt)
@@ -738,6 +696,9 @@ export default function MapPage() {
           {basePoints.length > 0 && <FitBounds points={basePoints} />}
           <SavePosition projectId={projectId} mapCfgRef={mapCfgRef} />
         </MapContainer>
+
+        {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}
+        <AddonControl target="project" />
 
         {/* Status / hint overlays */}
         {status && <div className="map-status">{status}</div>}

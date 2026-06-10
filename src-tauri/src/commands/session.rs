@@ -283,3 +283,46 @@ pub async fn save_coordinate_system(
     .await
     .map_err(|e| format!("internal task error: {e}"))?
 }
+
+// ── Map addons (project-scoped, top level) ──────────────────────────────────────
+//
+// Overlay layers shown on the project / selection maps, stored top-level under
+// "map_addons" as an array (plan §A6, M4.5):
+//   [{ id, name, type, url, layer, maps:{project,selection}, visible, … }]
+
+/// Return the saved map-addons array, or `[]` when none / no output folder.
+#[tauri::command]
+pub async fn get_map_addons(state: State<'_, AppState>) -> Result<Value, String> {
+    let folder = match state.output_folder() {
+        Some(f) => f,
+        None => return Ok(json!([])),
+    };
+
+    let addons = tokio::task::spawn_blocking(move || {
+        read_settings(&folder)
+            .get("map_addons")
+            .cloned()
+            .unwrap_or(json!([]))
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
+
+    Ok(addons)
+}
+
+/// Persist the map-addons array at the top level of GIRTool_settings.json.
+#[tauri::command]
+pub async fn save_map_addons(
+    addons: Value,
+    state:  State<'_, AppState>,
+) -> Result<(), String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+
+    tokio::task::spawn_blocking(move || {
+        let mut settings = read_settings(&folder);
+        settings.insert("map_addons".to_string(), addons);
+        write_settings(&folder, &settings)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}

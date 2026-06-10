@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { invoke, listen } from '../tauri-api'
+import { mergeBuiltins } from '../lib/baseLayers'
 
 const AppContext = createContext(null)
 
@@ -261,11 +262,31 @@ export function AppProvider({ children }) {
     return () => { cancelled = true }
   }, [connected])
 
+  // Map layers (M4.5): one unified list of background maps (built-ins) + user
+  // WMS addons, loaded from GIRTool_settings.json on connect and seeded with the
+  // built-in base maps via mergeBuiltins.
+  const [mapAddons, setMapAddons] = useState([])
+  useEffect(() => {
+    if (!connected) { setMapAddons([]); return }
+    let cancelled = false
+    invoke('get_map_addons')
+      .then(a => { if (!cancelled) setMapAddons(mergeBuiltins(a)) })
+      .catch(() => { if (!cancelled) setMapAddons(mergeBuiltins([])) })
+    return () => { cancelled = true }
+  }, [connected])
+
+  // Persist + update map addons in one call (used by the Settings subtab).
+  const saveMapAddons = useCallback((next) => {
+    setMapAddons(next)
+    invoke('save_map_addons', { addons: next }).catch(() => {})
+  }, [])
+
   return (
     <AppContext.Provider value={{
       connection, saveConnection,
       connected, setConnected,
       coordinateSystem, setCoordinateSystem,
+      mapAddons, saveMapAddons,
       selectedProjects, setSelectedProjects,
       selectedPoints,  setSelectedPoints,
       refreshKey,      bumpRefresh: () => setRefreshKey(k => k + 1),

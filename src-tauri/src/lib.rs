@@ -127,6 +127,7 @@ pub fn run() {
             commands::map::wfs_proxy,
             commands::map::os_username,
             commands::map::open_url,
+            commands::map::wms_capabilities,
             // map polygon-load (M4.3)
             commands::map_query::map_distinct_epsgs,
             commands::map_query::map_polygon_points,
@@ -143,6 +144,9 @@ pub fn run() {
             // coordinate system (project-scoped target CRS + elevation offsets — #145)
             commands::session::get_coordinate_system,
             commands::session::save_coordinate_system,
+            // map addons (project-scoped overlay layers — M4.5)
+            commands::session::get_map_addons,
+            commands::session::save_map_addons,
             // windows (multi-window pop-out)
             commands::windows::open_window,
         ])
