@@ -226,3 +226,60 @@ pub async fn patch_session(
     }
     Ok(())
 }
+
+// ── Coordinate-system config (project-scoped, top level) ──────────────────────
+//
+// Stored at the TOP LEVEL of GIRTool_settings.json under "coordinate_system"
+// (same top-level pattern as save_selection — it's project-wide, not
+// per-project-id session data):
+//
+//   {
+//     "coordinate_system": {
+//       "target_epsg": "EPSG:25832",
+//       "elevation_offsets": { "<elevation system>": 0.0 }
+//     }
+//   }
+//
+// Plan §A5: stores the chosen target horizontal CRS and the per-elevation-system
+// Z offsets.  Applying the conversion to point data (origin_* columns, maps,
+// datasheets, CPT) is a separate follow-up — these commands are storage only.
+
+/// Return the saved coordinate-system config, or `{}` when none is saved / no
+/// output folder is configured.
+#[tauri::command]
+pub async fn get_coordinate_system(state: State<'_, AppState>) -> Result<Value, String> {
+    let folder = match state.output_folder() {
+        Some(f) => f,
+        None => return Ok(json!({})),
+    };
+
+    let cfg = tokio::task::spawn_blocking(move || {
+        read_settings(&folder)
+            .get("coordinate_system")
+            .cloned()
+            .unwrap_or(json!({}))
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
+
+    Ok(cfg)
+}
+
+/// Persist the coordinate-system config at the top level of
+/// GIRTool_settings.json.  Overwrites the whole `coordinate_system` object;
+/// all other top-level keys are preserved.
+#[tauri::command]
+pub async fn save_coordinate_system(
+    config: Value,
+    state:  State<'_, AppState>,
+) -> Result<(), String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+
+    tokio::task::spawn_blocking(move || {
+        let mut settings = read_settings(&folder);
+        settings.insert("coordinate_system".to_string(), config);
+        write_settings(&folder, &settings)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
