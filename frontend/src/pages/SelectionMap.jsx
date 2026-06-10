@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Popup, Tooltip, LayersControl, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Polygon, Polyline, Popup, Tooltip, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import { invoke } from '../tauri-api'
 import { useFilter } from '../context/FilterContext'
 import { reproject, toLatLng, pointToLatLng } from '../lib/proj'
@@ -61,6 +61,30 @@ function MapRef({ onMap }) {
       mapStore.view = { lat: c.lat, lng: c.lng, zoom: map.getZoom() }
     },
   })
+  return null
+}
+
+// Polygon draw (M4.3b): while active, each map click drops a vertex.  Panning
+// (drag) and scroll-zoom are unaffected — Leaflet only fires `click` on a plain
+// click, so the in-progress polygon survives zoom/pan (plan Q-B1).
+function DrawHandler({ active, onVertex }) {
+  const map = useMap()
+  useMapEvents({
+    click: (e) => { if (active) onVertex([e.latlng.lat, e.latlng.lng]) },
+  })
+  // While drawing, make existing markers/paths non-interactive (overlay pane
+  // pointer-events off) so a click only drops a vertex — never opens a popup or
+  // a Jupiter borerapport — and show a crosshair cursor.
+  useEffect(() => {
+    const pane = map.getPane('overlayPane')
+    const container = map.getContainer()
+    if (pane) pane.style.pointerEvents = active ? 'none' : ''
+    if (container) container.style.cursor = active ? 'crosshair' : ''
+    return () => {
+      if (pane) pane.style.pointerEvents = ''
+      if (container) container.style.cursor = ''
+    }
+  }, [active, map])
   return null
 }
 
@@ -154,6 +178,10 @@ export default function SelectionMap() {
   const [loadStatus, setLoadStatus] = useState(() => mapStore.loadStatus)
   const [loading, setLoading] = useState(false)
 
+  // Polygon draw (M4.3b) — transient (not persisted).
+  const [drawing, setDrawing] = useState(false)
+  const [vertices, setVertices] = useState([]) // [[lat, lng], …]
+
   // Persist across unmount so returning to Data Selection restores this state.
   useEffect(() => { mapStore.showJupiter = showJupiter }, [showJupiter])
   useEffect(() => { mapStore.loaded = loaded }, [loaded])
@@ -188,33 +216,29 @@ export default function SelectionMap() {
   }, [pts, loaded])
   const colorFor = (dbId) => dbColors[dbId] || SOURCE_PALETTE[0]
 
-  // Load available DB points inside the current view (M4.3a): distinct EPSGs per
-  // DB → reproject the view rectangle into each → spatial-intersect query.
-  async function loadInView() {
-    if (!map) return
+  // Shared loader (M4.3a pipeline): given polygon vertices as [lng, lat] in
+  // EPSG:4326, find each DB's coordinate systems, reproject the polygon into
+  // each, run the spatial-intersect query, and render the results.  `merge`
+  // adds to the loaded set (polygon "Add points"); otherwise it replaces it
+  // (quick "Load in view").
+  async function loadFromLngLat(points) {
+    if (!points || points.length < 3) { setLoadStatus('need at least 3 points'); return }
     setLoading(true); setLoadStatus('finding coordinate systems…')
     try {
       const groups = await invoke('map_distinct_epsgs') // [{ db_id, epsgs }]
-      const b = map.getBounds()
-      const corners = [
-        [b.getWest(), b.getSouth()],
-        [b.getEast(), b.getSouth()],
-        [b.getEast(), b.getNorth()],
-        [b.getWest(), b.getNorth()],
-      ]
       const requests = []
       let skipped = 0
       for (const g of (groups || [])) {
         for (const epsg of (g.epsgs || [])) {
-          const c = corners.map(([lng, lat]) => reproject(lng, lat, 'EPSG:4326', `EPSG:${epsg}`))
-          if (c.some(p => !p)) { skipped++; continue } // EPSG unknown to proj4
-          const ring = c.map(p => `${p[0]} ${p[1]}`).join(', ')
-          const wkt = `POLYGON((${ring}, ${c[0][0]} ${c[0][1]}))`
+          const proj = points.map(([lng, lat]) => reproject(lng, lat, 'EPSG:4326', `EPSG:${epsg}`))
+          if (proj.some(p => !p)) { skipped++; continue } // EPSG unknown to proj4
+          const ring = proj.map(p => `${p[0]} ${p[1]}`).join(', ')
+          const wkt = `POLYGON((${ring}, ${proj[0][0]} ${proj[0][1]}))`
           requests.push({ db_id: g.db_id, epsg, wkt })
         }
       }
       if (!requests.length) {
-        setLoaded([]); setLoadStatus('no usable coordinate systems found in the configured databases')
+        setLoadStatus('no usable coordinate systems found in the configured databases')
         return
       }
       setLoadStatus('querying databases…')
@@ -224,14 +248,45 @@ export default function SelectionMap() {
         if (!latlng) return null
         return { id: `${p.db_id ?? '?'}_${p.PointId}`, latlng, p }
       }).filter(Boolean)
-      setLoaded(feats)
+      // Always accumulate, but never add a point already on the map — neither an
+      // already-loaded available point nor a selected-project point (same
+      // db_id||PointId).  So repeated / overlapping loads don't duplicate.
+      const onMap = new Set([...loaded.map(f => f.id), ...pts.map(f => f.id)])
+      const fresh = feats.filter(f => !onMap.has(f.id))
+      setLoaded(prev => {
+        const seen = new Set([...prev.map(f => f.id), ...pts.map(f => f.id)])
+        return [...prev, ...feats.filter(f => !seen.has(f.id))]
+      })
+      const dupes = feats.length - fresh.length
+      const dup  = dupes ? ` · ${dupes} already on map` : ''
       const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
-      setLoadStatus(`${feats.length} available point${feats.length === 1 ? '' : 's'} in view${skip}`)
+      setLoadStatus(`${fresh.length} new point${fresh.length === 1 ? '' : 's'} added${dup}${skip}`)
     } catch (e) {
-      setLoaded([]); setLoadStatus(`error: ${String(e).slice(0, 140)}`)
+      setLoadStatus(`error: ${String(e).slice(0, 140)}`)
     } finally {
       setLoading(false)
     }
+  }
+
+  // Quick load: every available point inside the current view rectangle.
+  function loadInView() {
+    if (!map) return
+    const b = map.getBounds()
+    loadFromLngLat([
+      [b.getWest(), b.getSouth()],
+      [b.getEast(), b.getSouth()],
+      [b.getEast(), b.getNorth()],
+      [b.getWest(), b.getNorth()],
+    ])
+  }
+
+  // Finish the drawn polygon: load the available points inside it.
+  function finishPolygon() {
+    if (vertices.length < 3) return
+    const ring4326 = vertices.map(([lat, lng]) => [lng, lat]) // [lat,lng] → [lng,lat]
+    setDrawing(false)
+    setVertices([])
+    loadFromLngLat(ring4326)
   }
 
   return (
@@ -250,15 +305,34 @@ export default function SelectionMap() {
       </div>
 
       <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
-        <button className="btn-secondary" onClick={loadInView} disabled={!map || loading}>
-          {loading ? 'Loading…' : '⬇ Load available points in view'}
-        </button>
-        {loaded.length > 0 && (
-          <button className="btn-secondary" onClick={() => { setLoaded([]); setLoadStatus('') }} disabled={loading}>
-            Clear loaded
-          </button>
+        {!drawing ? (
+          <>
+            <button className="btn-secondary" onClick={() => { setVertices([]); setDrawing(true) }} disabled={!map || loading}>
+              ✏️ Draw polygon
+            </button>
+            <button className="btn-secondary" onClick={loadInView} disabled={!map || loading}>
+              {loading ? 'Loading…' : '⬇ Load in view'}
+            </button>
+            {loaded.length > 0 && (
+              <button className="btn-secondary" onClick={() => { setLoaded([]); setLoadStatus('') }} disabled={loading}>
+                Clear loaded
+              </button>
+            )}
+            {loadStatus && <span className="hint" style={{ margin: 0 }}>{loadStatus}</span>}
+          </>
+        ) : (
+          <>
+            <button className="btn-primary" onClick={finishPolygon} disabled={vertices.length < 3 || loading}>
+              ✔ Add points{vertices.length ? ` (${vertices.length})` : ''}
+            </button>
+            <button className="btn-secondary" onClick={() => { setDrawing(false); setVertices([]) }} disabled={loading}>
+              ✖ Cancel
+            </button>
+            <span className="hint" style={{ margin: 0 }}>
+              Click the map to drop polygon vertices (zoom/pan freely) · <strong>Add points</strong> finishes &amp; loads inside it
+            </span>
+          </>
         )}
-        {loadStatus && <span className="hint" style={{ margin: 0 }}>{loadStatus}</span>}
       </div>
 
       <div
@@ -275,6 +349,19 @@ export default function SelectionMap() {
           scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}
         >
           <MapRef onMap={setMap} />
+          <DrawHandler active={drawing} onVertex={(v) => setVertices(prev => [...prev, v])} />
+
+          {/* In-progress draw polygon (M4.3b). */}
+          {drawing && vertices.length >= 3 && (
+            <Polygon positions={vertices} pathOptions={{ color: '#dc2626', weight: 2, dashArray: '5,5', fillColor: '#dc2626', fillOpacity: 0.08 }} />
+          )}
+          {drawing && vertices.length === 2 && (
+            <Polyline positions={vertices} pathOptions={{ color: '#dc2626', weight: 2, dashArray: '5,5' }} />
+          )}
+          {drawing && vertices.map((v, i) => (
+            <CircleMarker key={`v${i}`} center={v} radius={3} pathOptions={{ color: '#dc2626', weight: 2, fillColor: '#fff', fillOpacity: 1 }} />
+          ))}
+
           <LayersControl position="topright">
             <BaseLayer checked name="OpenStreetMap">
               <TileLayer
