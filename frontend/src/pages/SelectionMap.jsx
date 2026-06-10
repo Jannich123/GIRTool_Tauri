@@ -17,11 +17,13 @@ import { pointToLatLng } from '../lib/proj'
 
 const { BaseLayer, Overlay } = LayersControl
 
-// Verified endpoint: ows/3857.jsp serves the jupiter map in EPSG:3857 (Leaflet
-// CRS); GetMap of this layer returns image/png.  HTTPS is required — the webview
-// runs in a secure context and blocks http tiles as mixed content.
+// GEUS Jupiter WMS.  Endpoint per the project spec (ows/25832.jsp) — verified
+// to honour Leaflet's web-mercator requests (a crs=EPSG:3857 GetMap returns the
+// same PNG as the 3857 endpoint; the path segment is just the server's default
+// projection, not a restriction).  HTTPS is mandatory — the webview runs in a
+// secure context and blocks http tiles as mixed content.
 // `whoami=<initials>@cowi.com` follows the COWI convention (initials = OS user).
-const JUPITER_BASE  = 'https://data.geus.dk/geusmap/ows/3857.jsp'
+const JUPITER_BASE  = 'https://data.geus.dk/geusmap/ows/25832.jsp'
 const JUPITER_LAYER = 'jupiter_lithologi_over_10m_dybe'
 
 // Fit the view to the rendered points whenever their count changes.
