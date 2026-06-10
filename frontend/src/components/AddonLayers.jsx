@@ -14,7 +14,9 @@ export default function AddonLayers({ target }) {
     .map(a => (
       <WMSTileLayer
         key={a.id}
-        url={a.url}
+        // WMS tiles load directly in the webview, which blocks http as mixed
+        // content — upgrade to https (the service must support it).
+        url={(a.url || '').replace(/^http:\/\//i, 'https://')}
         layers={a.layer || ''}
         format="image/png"
         transparent
