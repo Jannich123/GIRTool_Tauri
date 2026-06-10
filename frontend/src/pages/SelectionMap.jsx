@@ -32,7 +32,7 @@ const JUPITER_COLOR  = '#cbd5e1'
 
 // Session-scoped memory of the selection map so leaving Data Selection (or its
 // Map subtab) and returning restores the last view, loaded points, and toggles.
-const mapStore = { view: null, loaded: [], showJupiter: true, loadStatus: '' }
+const mapStore = { view: null, loaded: [], showJupiter: true, loadStatus: '', hiddenDbs: [] }
 
 // Fit the view to the rendered DB points whenever their count changes.
 function FitBounds({ pts }) {
@@ -180,6 +180,9 @@ export default function SelectionMap() {
   const [loadStatus, setLoadStatus] = useState(() => mapStore.loadStatus)
   const [loading, setLoading] = useState(false)
 
+  // Hidden data sources (M4.4b) — db_ids whose points are toggled off.
+  const [hiddenDbs, setHiddenDbs] = useState(() => new Set(mapStore.hiddenDbs))
+
   // Polygon draw (M4.3b) — transient (not persisted).
   const [drawing, setDrawing] = useState(false)
   const [vertices, setVertices] = useState([]) // [[lat, lng], …]
@@ -188,6 +191,13 @@ export default function SelectionMap() {
   useEffect(() => { mapStore.showJupiter = showJupiter }, [showJupiter])
   useEffect(() => { mapStore.loaded = loaded }, [loaded])
   useEffect(() => { mapStore.loadStatus = loadStatus }, [loadStatus])
+  useEffect(() => { mapStore.hiddenDbs = [...hiddenDbs] }, [hiddenDbs])
+
+  const toggleDb = (dbId) => setHiddenDbs(prev => {
+    const next = new Set(prev)
+    if (next.has(dbId)) next.delete(dbId); else next.add(dbId)
+    return next
+  })
 
   useEffect(() => {
     invoke('os_username').then(u => setInitials((u || '').trim())).catch(() => {})
@@ -258,8 +268,8 @@ export default function SelectionMap() {
     const byId = new Map()
     pts.forEach(f => byId.set(f.id, f))
     loaded.forEach(f => { if (!byId.has(f.id)) byId.set(f.id, f) })
-    return [...byId.values()].filter(f => selectedIds.has(f.id))
-  }, [pts, loaded, selectedIds])
+    return [...byId.values()].filter(f => selectedIds.has(f.id) && !hiddenDbs.has(f.p.db_id))
+  }, [pts, loaded, selectedIds, hiddenDbs])
 
   // Shared loader (M4.3a pipeline): given polygon vertices as [lng, lat] in
   // EPSG:4326, find each DB's coordinate systems, reproject the polygon into
@@ -339,13 +349,10 @@ export default function SelectionMap() {
       <h2 className="page-title">Selection map</h2>
 
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' }}>
-          <input type="checkbox" checked={showJupiter} onChange={e => setShowJupiter(e.target.checked)} />
-          Jupiter reference (GEUS boreholes &gt; 10 m)
-        </label>
         <span className="hint" style={{ margin: 0 }}>
           {showJupiter ? `Jupiter: ${jupiterStatus || '…'}` : 'Jupiter: off'}
           {pts.length ? ` · ${pts.length} selected-project point${pts.length === 1 ? '' : 's'}` : ''}
+          {' · toggle sources in the map legend (bottom-left)'}
         </span>
       </div>
 
@@ -426,7 +433,7 @@ export default function SelectionMap() {
           <JupiterLayer whoami={whoami} enabled={showJupiter} onStatus={setJupiterStatus} />
 
           {/* M4.3 available points loaded in view — orange (not selectable yet). */}
-          {loaded.filter(f => !ptIdSet.has(f.id)).map(({ id, latlng, p }) => (
+          {loaded.filter(f => !ptIdSet.has(f.id) && !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
             <CircleMarker
               key={`avail_${id}`}
               center={latlng}
@@ -446,7 +453,7 @@ export default function SelectionMap() {
           <FitBounds pts={pts} />
 
           {/* Selected-project points — blue, on top. */}
-          {pts.map(({ id, latlng, p }) => (
+          {pts.filter(f => !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
             <CircleMarker
               key={id}
               center={latlng}
@@ -476,33 +483,32 @@ export default function SelectionMap() {
           ))}
         </MapContainer>
 
-        {(Object.keys(dbColors).length > 0 || showJupiter) && (
-          <div
-            style={{
-              position: 'absolute', bottom: 12, left: 12, zIndex: 1000,
-              background: 'rgba(255,255,255,0.94)', borderRadius: 6,
-              padding: '.5rem .65rem', boxShadow: '0 1px 4px rgba(0,0,0,.25)',
-              fontSize: '.75rem', lineHeight: 1.7, maxWidth: 220,
-            }}
-          >
-            <div style={{ fontWeight: 700, marginBottom: '.15rem' }}>Data sources</div>
-            {Object.entries(dbColors).map(([id, c]) => (
-              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '.45rem' }}>
-                <span style={{ width: 11, height: 11, borderRadius: '50%', background: c, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #94a3b8', flex: '0 0 auto' }} />
-                {id}
-              </div>
-            ))}
-            {showJupiter && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '.45rem' }}>
-                <span style={{ width: 11, height: 11, borderRadius: '50%', background: JUPITER_COLOR, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #475569', flex: '0 0 auto' }} />
-                Jupiter (GEUS)
-              </div>
-            )}
-            {(pts.length > 0 || loaded.length > 0) && (
-              <div className="hint" style={{ marginTop: '.3rem' }}>● in project · ○ available · ⭕ selected</div>
-            )}
-          </div>
-        )}
+        {/* Source panel (M4.4b): a checkbox per data source toggles its points. */}
+        <div
+          style={{
+            position: 'absolute', bottom: 12, left: 12, zIndex: 1000,
+            background: 'rgba(255,255,255,0.94)', borderRadius: 6,
+            padding: '.5rem .65rem', boxShadow: '0 1px 4px rgba(0,0,0,.25)',
+            fontSize: '.75rem', lineHeight: 1.7, maxWidth: 240,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: '.15rem' }}>Data sources</div>
+          {Object.entries(dbColors).map(([id, c]) => (
+            <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!hiddenDbs.has(id)} onChange={() => toggleDb(id)} />
+              <span style={{ width: 11, height: 11, borderRadius: '50%', background: c, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #94a3b8', flex: '0 0 auto' }} />
+              {id}
+            </label>
+          ))}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showJupiter} onChange={e => setShowJupiter(e.target.checked)} />
+            <span style={{ width: 11, height: 11, borderRadius: '50%', background: JUPITER_COLOR, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #475569', flex: '0 0 auto' }} />
+            Jupiter (GEUS)
+          </label>
+          {(pts.length > 0 || loaded.length > 0) && (
+            <div className="hint" style={{ marginTop: '.3rem' }}>● in project · ○ available · ⭕ selected</div>
+          )}
+        </div>
       </div>
     </div>
   )
