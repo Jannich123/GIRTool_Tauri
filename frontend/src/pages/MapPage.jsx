@@ -5,33 +5,14 @@ import proj4 from 'proj4'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
+import { PROJ_DEFS } from '../lib/proj'
 
 const { BaseLayer } = LayersControl
 
 // ── Projection definitions ────────────────────────────────────────────────────
-
-const PROJ_DEFS = {
-  // ETRS89 / UTM (modern Danish standard)
-  'EPSG:25832': '+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  'EPSG:25833': '+proj=utm +zone=33 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  // WGS84 / UTM (often interchangeable with the ETRS89 set above for plotting)
-  'EPSG:32632': '+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs',
-  'EPSG:32633': '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs',
-  // KP2000 (older Danish national; #126 — common in legacy GeoGIS datasets)
-  'EPSG:4093':  '+proj=tmerc +lat_0=0 +lon_0=9 +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  'EPSG:4094':  '+proj=tmerc +lat_0=0 +lon_0=10 +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  // ED50 / UTM (very old European datum; #126 — still surfaces in some Danish DBs)
-  'EPSG:23032': '+proj=utm +zone=32 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs',
-  'EPSG:23033': '+proj=utm +zone=33 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs',
-  'EPSG:4230':  '+proj=longlat +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +no_defs',
-  // Generic / web
-  'EPSG:3857':  '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs',
-  'EPSG:4326':  '+proj=longlat +datum=WGS84 +no_defs',
-  'EPSG:4258':  '+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs',
-  'EPSG:2157':  '+proj=tmerc +lat_0=53.5 +lon_0=-8 +k=0.99982 +x_0=600000 +y_0=750000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  'EPSG:27700': '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.1502,0.247,0.8421,-20.4894 +units=m +no_defs',
-}
-Object.entries(PROJ_DEFS).forEach(([name, def]) => proj4.defs(name, def))
+// PROJ_DEFS + proj4 registration now live in the shared module `lib/proj.js`
+// (issue #147) so the map and the coordinate-system conversion use one source
+// of truth.  Importing it (above) registers every def with proj4.
 
 function toWGS84(x, y, epsg) {
   if (!epsg || epsg === 'EPSG:4326') return [y, x]

@@ -28,7 +28,7 @@ const TARGET_CRS_OPTIONS = [
 const DEFAULT_EPSG = 'EPSG:25832'
 
 export default function CoordinateSystemTab() {
-  const { selectedPoints, connection } = useApp()
+  const { selectedPoints, connection, setCoordinateSystem } = useApp()
   const hasFolder = !!connection?.output_folder // need a project folder to persist
 
   const [targetEpsg, setTargetEpsg] = useState(DEFAULT_EPSG)
@@ -93,11 +93,12 @@ export default function CoordinateSystemTab() {
       const n = parseFloat(v)
       cleanOffsets[k] = Number.isFinite(n) ? n : 0
     }
+    const config = { target_epsg: effectiveEpsg, elevation_offsets: cleanOffsets }
     setSaving(true)
     try {
-      await invoke('save_coordinate_system', {
-        config: { target_epsg: effectiveEpsg, elevation_offsets: cleanOffsets },
-      })
+      await invoke('save_coordinate_system', { config })
+      // Push into context so points re-convert live (no project reload).
+      setCoordinateSystem?.(config)
       setMsg({ ok: true, text: 'Saved.' })
     } catch (err) {
       setMsg({ ok: false, text: String(err || 'Could not save') })
