@@ -36,7 +36,7 @@ export default function AddonLayers({ target }) {
   const { mapAddons } = useApp()
   return (mapAddons || [])
     .filter(a => a && a.visible !== false && a.type === 'wms' && a.maps?.[target])
-    .map(a => (
+    .map((a, i) => (
       <WMSTileLayer
         key={a.id}
         url={wmsBaseUrl(a.url)}
@@ -44,6 +44,8 @@ export default function AddonLayers({ target }) {
         format="image/png"
         transparent
         version={a.version || '1.3.0'}
+        opacity={typeof a.opacity === 'number' ? a.opacity : 1}
+        zIndex={200 + i}
         attribution={a.name}
       />
     ))

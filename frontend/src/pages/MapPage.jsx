@@ -7,6 +7,7 @@ import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS } from '../lib/proj'
 import AddonLayers from '../components/AddonLayers'
+import AddonControl from '../components/AddonControl'
 
 const { BaseLayer } = LayersControl
 
@@ -742,6 +743,9 @@ export default function MapPage() {
           {basePoints.length > 0 && <FitBounds points={basePoints} />}
           <SavePosition projectId={projectId} mapCfgRef={mapCfgRef} />
         </MapContainer>
+
+        {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}
+        <AddonControl target="project" />
 
         {/* Status / hint overlays */}
         {status && <div className="map-status">{status}</div>}

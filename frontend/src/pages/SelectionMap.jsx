@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { reproject, toLatLng, pointToLatLng } from '../lib/proj'
 import AddonLayers from '../components/AddonLayers'
+import AddonControl from '../components/AddonControl'
 
 // Issue #153 (M4.1) + #155 (M4.2) + #159 (M4.3) — selection map.
 //
@@ -547,6 +548,9 @@ export default function SelectionMap() {
             />
           ))}
         </MapContainer>
+
+        {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}
+        <AddonControl target="selection" />
 
         {/* Source panel (M4.4b): a checkbox per data source toggles its points. */}
         <div
