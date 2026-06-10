@@ -508,22 +508,22 @@ Implications across the I/O paths:
   evaluated value), not the formula text. `merge_formula_columns` already pulls user-added
   columns from the datasheet xlsx — extend it to be formula-aware.
 
-The hard part is **freshness**: a formula cell the tool *generates or modifies* (e.g. new
-appended rows, or a formula referencing a column we just added) has **no cached value yet**
-until something recalculates it. Options:
-- **(a) LibreOffice headless recalc** — run a recalc pass on the xlsx after writing (the
-  approach the xlsx tooling uses). Adds a LibreOffice dependency / subprocess.
-- **(b) Embedded formula engine** (e.g. `formualizer`) — evaluate formulas in Rust to refresh
-  cached values. This is the engine from the earlier "formulas across tables" discussion.
-- **(c) Trust Excel** — only preserve formulas the user authored (which already have cached
-  values from when *they* saved); don't generate new formula cells ourselves.
-
-❓ **Q-F3**: Which freshness strategy — (a) LibreOffice recalc, (b) `formualizer` engine, or
-(c) preserve-only (no tool-generated formulas)? (c) is the smallest Phase-1 scope and still
-satisfies "read/keep formulas + charts show results" for **user-authored** formulas that
-already carry cached values; (a)/(b) are needed only if the tool itself must compute formula
-results for freshly generated/edited rows. **Lean: (c) for Phase 1**, revisit (a)/(b) with
-the broader cross-table formula feature.
+✅ **Decided (Q-F3) — option (c): preserve user-authored formulas only.**
+- The tool **never generates or evaluates formulas itself.** It preserves formulas the
+  **user authored in Excel** (which already carry a cached value from when the user saved).
+- Round-trip rules:
+  - **Read**: capture each cell's formula string (`worksheet_formula`) + cached value
+    (`worksheet_range`); keep both.
+  - **Write**: re-emit user formula cells as formulas (`write_formula`) with their existing
+    cached result, so they stay live in Excel through Append / Re-add / re-save.
+  - **Charts**: plot the **cached value** (the result), never the formula text.
+  - **Sidecar** (#128): store `{ value, formula? }` per cell.
+- **No LibreOffice dependency, no embedded formula engine.** A formula referencing a row the
+  tool just appended will show **blank/stale until the user opens the file in Excel and
+  saves** (Excel recalculates on open). That's an accepted Phase-1 limitation.
+- The heavier options — (a) LibreOffice headless recalc, (b) `formualizer` engine — are
+  **explicitly out of scope** for Phase 1; revisit only with the broader cross-table formula
+  feature (currently shelved).
 
 ---
 
@@ -584,11 +584,11 @@ M1–M3 are low-risk (reuse existing pieces). M4 and M8 are the real new enginee
 - **Q-DB-placeholder**: ALL Query Config sections use `#DB#` so they run against any shown DB.
 
 - **Q-E6**: Calc engine = **Rust port + Python oracle** (option 3). App ships pure Rust.
+- **Q-F3**: Excel formulas = **option (c) preserve user-authored only** — no LibreOffice, no
+  formula engine; tool-generated formula cells stay stale until the user opens+saves in Excel.
 
 ### ❓ Still open (deferred by you — not blocking M1–M7)
 - **Q-A4**: HoleBase type + the **preset databases and their fixed IDs**.
-- **Q-F3**: Excel-formula freshness strategy — (a) LibreOffice recalc, (b) `formualizer`
-  engine, or (c) preserve user-authored formulas only (lean for Phase 1). See §F3.
 
 - **Q-D4**: window on **`Depth`**.
 - **Q-E4**: CPT-calc config persisted per-project under `cpt_calc` in settings.json
