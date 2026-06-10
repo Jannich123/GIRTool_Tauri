@@ -4,24 +4,21 @@ import { invoke } from '../tauri-api'
 import { useFilter } from '../context/FilterContext'
 import { reproject, toLatLng, pointToLatLng } from '../lib/proj'
 
-// Issue #153 (M4.1) + #155 (M4.2) — selection map.
+// Issue #153 (M4.1) + #155 (M4.2) + #159 (M4.3) — selection map.
 //
-// Renders the selected projects' available points (FilterContext `allPoints`)
-// over the live **Jupiter** reference layer.  Jupiter is fetched as a **WFS**
-// (vector features with attributes, not a WMS image) so each borehole carries
-// its data — hover shows DGU nr + depth, click opens its `borerapport` (plan
-// §F1; per the user it's the same feature type QGIS consumes).  DB points draw
-// on top of the (non-selectable) Jupiter reference.
+// Renders the selected projects' available points over the live Jupiter WFS
+// reference layer, and (M4.3) loads *available* DB points inside the current
+// view via a multi-EPSG spatial query — the first step of the polygon-driven
+// loading (the polygon draw UI is M4.3b).
 //
-// Later M4 slices: M4.3 polygon multi-EPSG load; M4.4 red-ring selection +
-// source toggles.
+// Later: M4.3b polygon draw; M4.4 red-ring selection (click a loaded point →
+// add it + its parent project to the Projects/Points subtabs).
 
 const { BaseLayer } = LayersControl
 
 // GEUS Jupiter WFS — feature type jupiter_lithologi_over_10m_dybe (WFS 1.0.0,
-// geojson output, EPSG:25832).  Fetched via wfs_proxy (server-side, so http vs
-// https / CORS don't matter; we use https).  BBOX-bounded + capped so we never
-// pull all of Denmark; only loaded once zoomed in past JUPITER_MIN_ZOOM.
+// geojson, EPSG:25832).  Fetched via wfs_proxy; bbox-bounded + capped; only at
+// zoom ≥ JUPITER_MIN_ZOOM so it never pulls all of Denmark.
 const JUPITER_WFS      = 'https://data.geus.dk/geusmap/ows/25832.jsp'
 const JUPITER_TYPENAME = 'jupiter_lithologi_over_10m_dybe'
 const JUPITER_MAX      = 2000
@@ -42,6 +39,14 @@ function FitBounds({ pts }) {
   return null
 }
 
+// Capture the Leaflet map instance so the toolbar (outside MapContainer) can
+// read the current bounds for the "load in view" query.
+function MapRef({ onMap }) {
+  const map = useMap()
+  useEffect(() => { onMap(map) }, [map]) // eslint-disable-line react-hooks/exhaustive-deps
+  return null
+}
+
 // Live Jupiter WFS reference layer: refetches the current view's boreholes on
 // pan/zoom (debounced), renders them as small grey markers under the DB points.
 function JupiterLayer({ whoami, enabled, onStatus }) {
@@ -57,7 +62,6 @@ function JupiterLayer({ whoami, enabled, onStatus }) {
       return
     }
     const b = map.getBounds()
-    // Reproject the view corners (lng/lat) → EPSG:25832 for the WFS bbox.
     const sw = reproject(b.getWest(), b.getSouth(), 'EPSG:4326', 'EPSG:25832')
     const ne = reproject(b.getEast(), b.getNorth(), 'EPSG:4326', 'EPSG:25832')
     if (!sw || !ne) return
@@ -74,7 +78,7 @@ function JupiterLayer({ whoami, enabled, onStatus }) {
     onStatus?.('loading…')
     invoke('wfs_proxy', { url })
       .then(gj => {
-        if (myReq !== reqId.current) return // a newer request superseded this one
+        if (myReq !== reqId.current) return
         const feats = (gj?.features || []).map(f => {
           const c = f.geometry?.coordinates
           if (!Array.isArray(c)) return null
@@ -127,14 +131,17 @@ export default function SelectionMap() {
   const [showJupiter, setShowJupiter] = useState(true)
   const [jupiterStatus, setJupiterStatus] = useState('')
 
-  // COWI initials for Jupiter's whoami param (OS username).
+  // M4.3 — available points loaded inside the current view via the spatial query.
+  const [map, setMap] = useState(null)
+  const [loaded, setLoaded] = useState([])
+  const [loadStatus, setLoadStatus] = useState('')
+  const [loading, setLoading] = useState(false)
+
   useEffect(() => {
     invoke('os_username').then(u => setInitials((u || '').trim())).catch(() => {})
   }, [])
   const whoami = initials ? `${initials}@cowi.com` : ''
 
-  // Project each selected-project point from its own Projection1 to lat/lng,
-  // mirroring the Project map (per-point CRS + Danish fallback).
   const pts = useMemo(() => {
     if (!allPoints?.length) return []
     return allPoints
@@ -146,6 +153,52 @@ export default function SelectionMap() {
       })
       .filter(Boolean)
   }, [allPoints])
+
+  // Load available DB points inside the current view (M4.3a): distinct EPSGs per
+  // DB → reproject the view rectangle into each → spatial-intersect query.
+  async function loadInView() {
+    if (!map) return
+    setLoading(true); setLoadStatus('finding coordinate systems…')
+    try {
+      const groups = await invoke('map_distinct_epsgs') // [{ db_id, epsgs }]
+      const b = map.getBounds()
+      const corners = [
+        [b.getWest(), b.getSouth()],
+        [b.getEast(), b.getSouth()],
+        [b.getEast(), b.getNorth()],
+        [b.getWest(), b.getNorth()],
+      ]
+      const requests = []
+      let skipped = 0
+      for (const g of (groups || [])) {
+        for (const epsg of (g.epsgs || [])) {
+          const c = corners.map(([lng, lat]) => reproject(lng, lat, 'EPSG:4326', `EPSG:${epsg}`))
+          if (c.some(p => !p)) { skipped++; continue } // EPSG unknown to proj4
+          const ring = c.map(p => `${p[0]} ${p[1]}`).join(', ')
+          const wkt = `POLYGON((${ring}, ${c[0][0]} ${c[0][1]}))`
+          requests.push({ db_id: g.db_id, epsg, wkt })
+        }
+      }
+      if (!requests.length) {
+        setLoaded([]); setLoadStatus('no usable coordinate systems found in the configured databases')
+        return
+      }
+      setLoadStatus('querying databases…')
+      const rows = await invoke('map_polygon_points', { requests })
+      const feats = (rows || []).map(p => {
+        const latlng = toLatLng(Number(p.X1), Number(p.Y1), p.Projection1)
+        if (!latlng) return null
+        return { id: `${p.db_id ?? '?'}_${p.PointId}`, latlng, p }
+      }).filter(Boolean)
+      setLoaded(feats)
+      const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
+      setLoadStatus(`${feats.length} available point${feats.length === 1 ? '' : 's'} in view${skip}`)
+    } catch (e) {
+      setLoaded([]); setLoadStatus(`error: ${String(e).slice(0, 140)}`)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div className="page page-wide" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -162,14 +215,27 @@ export default function SelectionMap() {
         </span>
       </div>
 
+      <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
+        <button className="btn-secondary" onClick={loadInView} disabled={!map || loading}>
+          {loading ? 'Loading…' : '⬇ Load available points in view'}
+        </button>
+        {loaded.length > 0 && (
+          <button className="btn-secondary" onClick={() => { setLoaded([]); setLoadStatus('') }} disabled={loading}>
+            Clear loaded
+          </button>
+        )}
+        {loadStatus && <span className="hint" style={{ margin: 0 }}>{loadStatus}</span>}
+      </div>
+
       <div
         style={{
-          height: '72vh', minHeight: 400, width: '100%',
+          height: '70vh', minHeight: 400, width: '100%',
           borderRadius: 8, overflow: 'hidden',
           border: '1px solid var(--border, #e2e8f0)',
         }}
       >
         <MapContainer center={[56, 10]} zoom={7} scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}>
+          <MapRef onMap={setMap} />
           <LayersControl position="topright">
             <BaseLayer checked name="OpenStreetMap">
               <TileLayer
@@ -185,11 +251,30 @@ export default function SelectionMap() {
             </BaseLayer>
           </LayersControl>
 
-          {/* Jupiter reference — rendered first so the DB points draw on top. */}
+          {/* Jupiter reference — drawn first (under everything). */}
           <JupiterLayer whoami={whoami} enabled={showJupiter} onStatus={setJupiterStatus} />
+
+          {/* M4.3 available points loaded in view — orange (not selectable yet). */}
+          {loaded.map(({ id, latlng, p }) => (
+            <CircleMarker
+              key={`avail_${id}`}
+              center={latlng}
+              radius={5}
+              pathOptions={{ color: '#fff', weight: 1.5, fillColor: '#f59e0b', fillOpacity: 0.9 }}
+            >
+              <Popup>
+                <div style={{ fontSize: '.8rem', lineHeight: 1.5 }}>
+                  <strong>{p.PointNo ?? p.PointId}</strong> <span className="hint">(available)</span><br />
+                  {p.PointType ? <>Type: {p.PointType}<br /></> : null}
+                  DB: {p.db_id ?? '?'} · EPSG {p.Projection1}
+                </div>
+              </Popup>
+            </CircleMarker>
+          ))}
 
           <FitBounds pts={pts} />
 
+          {/* Selected-project points — blue, on top. */}
           {pts.map(({ id, latlng, p }) => (
             <CircleMarker
               key={id}

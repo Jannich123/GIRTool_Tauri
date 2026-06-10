@@ -58,6 +58,9 @@ pub const SECTION_POINTS_LIST:       &str = "points_list";
 pub const SECTION_STRATA_SERIES:     &str = "strata_series";
 pub const SECTION_STRATA_DOWNLOAD:   &str = "strata_download";
 pub const SECTION_DATASHEET_QUERIES: &str = "datasheet_queries";
+// Map polygon-load sections (M4.3, plan §B1a).
+pub const SECTION_MAP_DISTINCT_EPSG:  &str = "map_distinct_epsg";
+pub const SECTION_MAP_POLYGON_POINTS: &str = "map_polygon_points";
 
 // Issue #52: this used to be `"default"`; the migration in
 // `load_query_configs_with_migration` rewrites old saved values transparently.
@@ -378,10 +381,12 @@ pub async fn reset_query_config(
 #[tauri::command]
 pub fn get_builtin_sql_templates() -> serde_json::Value {
     serde_json::json!({
-        "project_list":    crate::commands::projects::PROJECTS_SQL,
-        "points_list":     crate::commands::points::POINTS_SQL,
-        "strata_series":   crate::commands::strata::TYPES_SQL,
-        "strata_download": crate::commands::strata::DATA_SQL,
+        "project_list":      crate::commands::projects::PROJECTS_SQL,
+        "points_list":       crate::commands::points::POINTS_SQL,
+        "strata_series":     crate::commands::strata::TYPES_SQL,
+        "strata_download":   crate::commands::strata::DATA_SQL,
+        "map_distinct_epsg": crate::commands::map_query::MAP_DISTINCT_EPSG_SQL,
+        "map_polygon_points": crate::commands::map_query::MAP_POLYGON_POINTS_SQL,
     })
 }
 
