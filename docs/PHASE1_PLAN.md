@@ -120,31 +120,33 @@ Selection.
 
 ### A5. Coordinate system 🆕
 A Settings subtab where the user chooses the **target coordinate system** for the project:
-- **Horizontal CRS** — e.g. EPSG:25832 (ETRS89 / UTM 32N), EPSG:25833, etc.
-- **Elevation (vertical) system** — e.g. DVR90, mean sea level, local datum.
+- **Horizontal CRS** — e.g. EPSG:25832 (ETRS89 / UTM 32N), EPSG:25833, etc. Reprojected
+  via proj4 from each point's `Projection1` (#122). Horizontal reprojection is exact.
+- **Elevation (vertical) system** — handled via a **per-elevation-system offset table**
+  (Q-A5a), not a geoid model.
 
 On apply, the tool **converts every point's `X1`, `Y1`, `Z1` into the chosen system,
-overwriting those columns** so the whole app (tables, map, exports, CPT calcs) works in one
-consistent system.  The **original values are preserved** alongside as
-**`origin_X1`, `origin_Y1`, `origin_Z1`** (and the original EPSG, e.g. `origin_Projection1`),
-so a re-projection is always reversible / re-derivable from source.
+overwriting those columns** so the whole app works in one consistent system. The
+**original values are preserved** alongside as **`origin_X1`, `origin_Y1`, `origin_Z1`**
+(+ `origin_Projection1`), so a conversion is always reversible / re-derivable from source.
 
 Behaviour:
-- Source CRS per point comes from `Projection1` (the per-point projection already used by
-  the map, #122).  Horizontal reprojection reuses the existing proj4 machinery.
-- `X1`/`Y1` → target horizontal CRS; `Z1` → target elevation system.
 - First conversion creates the `origin_*` columns from the raw DB values; subsequent
   conversions re-project **from `origin_*`** (never chain-convert already-converted values).
-- The chosen system is **persisted in `GIRTool_settings.json`** (project-scoped) and applied
-  to points as they load.
+- Persisted **project-scoped** in `GIRTool_settings.json`, applied to points as they load.
 
-❓ **Q-A5a**: Elevation/datum transforms (e.g. ellipsoidal→DVR90) need a geoid model or an
-offset table — proj4 alone won't do DVR90 accurately. For Phase 1, is a **simple constant
-offset** (or "no vertical transform, keep Z1 as-is") acceptable, with proper geoid support
-later?  Horizontal reprojection is exact today; vertical is the open part.
+✅ **Decided (Q-A5a)** — elevation correction by per-system offset:
+- After points are selected, the subtab **retrieves all distinct elevation systems** present
+  in the selection (from the `LevelReference` / `VerticalRefId1` column).
+- The user gets a small table — one row per elevation system — where they enter a value to
+  **add or subtract** to correct that system's `Z1` to the wanted elevation system.
+- `Z1_corrected = origin_Z1 + offset[elevation_system]`. (Same manual-offset pattern as the
+  CPT layer-data table.) No geoid model needed for Phase 1.
+- The offset table is persisted (project-scoped) and travels with the project.
 
-❓ **Q-A5b**: Apply the conversion **everywhere** (project map, selection map, downloaded
-datasheets, CPT calcs) or only to the points tables + maps?  (Datasheets store coords too.)
+✅ **Decided (Q-A5b)** — apply the conversion **everywhere**: project map, selection map,
+points tables, **downloaded datasheets, and CPT calculations** all use the converted
+`X1/Y1/Z1`. Datasheets store coords too, so they get the conversion as well.
 
 ### A6. Map addons 🆕
 A list of overlay layers.  The subtab UI:
@@ -237,14 +239,18 @@ SELECT p.PointID, p.PointNo, p.PublicNo,
        geometry::Point(p.X1, p.Y1, p.Projection1).STAsText() AS CoordinateText
 FROM #DB#[Points] p
 WHERE p.X1 IS NOT NULL AND p.Y1 IS NOT NULL AND p.Projection1 IS NOT NULL
+  AND p.Projection1 = @EPSG                            -- ✅ Q-B1a: same-SRID only
   AND geometry::Point(p.X1, p.Y1, p.Projection1).STIntersects(@Polygon) = 1;
 ```
 
-- ❓ **Q-B1a**: `STIntersects` needs both geometries on the **same SRID**. Since the loop
-  already runs per-EPSG with the polygon converted to that EPSG, should the query also add
-  `AND p.Projection1 = @EPSG` so it only compares same-SRID points (avoids cross-SRID
-  intersect returning nothing / erroring)? Recommended — otherwise a DB with mixed EPSGs
-  may silently drop rows.
+✅ **Decided (Q-B1a)**: filter `AND p.Projection1 = @EPSG` so `STIntersects` only compares
+same-SRID points. The per-EPSG loop already converts the polygon to each EPSG, so each pass
+returns exactly that EPSG's points inside the polygon — no cross-SRID drops.
+
+✅ **Decided (load timing)**: DB points are **only loaded when the user draws a polygon** —
+not on connect, not automatically. Until then the selection map shows just the Jupiter WFS
+(+ any addons). This keeps the map light and avoids pulling whole databases.
+
 - **Hover**: show **all non-ID, non-coordinate columns** the point query returns.
 - **Selecting** these polygon-loaded points still adds points + parent projects (Q-B2).
 
@@ -447,58 +453,77 @@ columns: `Unit weight [kN/m^3]` · `Nkt [-]`.
 
 ## F. Cross-cutting
 
-### F1. Source matching — "rich" vs. "reference" sources 🆕❓ (design needed)
-> Clarified: this is **NOT** duplicated data. A physical borehole can appear in a **rich**
-> source (GeoGIS — has the actual test data) *and* in a **reference** source (Jupiter — the
-> GEUS national database, which only carries the point + minimal metadata, no real data
-> behind it). And Jupiter may show points that **don't exist in GeoGIS at all**.
+### F1. Jupiter (reference) vs. GeoGIS (rich) — z-order, no matching ✅ (simplified)
+> A physical borehole can appear in **GeoGIS** (rich — real test data) *and* in **Jupiter**
+> (the GEUS national WFS — point + metadata only). Jupiter also shows points that aren't in
+> GeoGIS at all.
 
-So the map has two kinds of points:
-1. **Rich points** — from GeoGIS / HoleBase: real data, downloadable, the working set.
-2. **Reference-only points** — from Jupiter: location + metadata only, no test data.
+✅ **Decided (Q-F1b)** — **no spatial matching algorithm.** Just **z-order**: GeoGIS (and
+other DB) points are drawn **on top of** the Jupiter WFS layer, so where they overlap the
+rich point takes visual priority. No distance threshold, no DGU-number join, no dedup pass.
 
-Goals:
-- When a borehole is present in **both** a rich source and Jupiter, show it **once**,
-  attributed to the rich source (so the user works with the one that has data) — don't
-  draw two overlapping markers for the same physical hole.
-- Still surface **Jupiter-only** points (visible, flagged as "reference / no data"), so the
-  user can see what exists in the area that GeoGIS doesn't have.
-
-This is **spatial matching with source precedence**, not row deduplication:
-- Match a Jupiter point to a rich point when they're within a small distance (and ideally a
-  matching bore-name/DGU-number heuristic).
-- Matched → render as the rich point (Jupiter is suppressed but linked).
-- Unmatched Jupiter point → render as reference-only (distinct marker / greyed), not
-  selectable for data download.
-
-✅ **Decided (Q-F1a, revised)**: **Jupiter is a live WFS layer** (not a daily shapefile
-download anymore). It's just another **data source** the user can toggle on the selection
-map.
+✅ **Decided (Q-F1a, revised)** — **Jupiter is a live WFS layer**:
 - Endpoint:
   `http://data.geus.dk/geusmap/ows/25832.jsp?mapname=jupiter&whoami={initials}@cowi.com&LAYERS=jupiter_lithologi_over_10m_dybe`
-- **`{initials}`** is substituted with the **current PC user's initials** (derive from the
-  OS username; the COWI convention is `<initials>@cowi.com`).
-- **Hover** over a Jupiter point → show the info fields the WFS feature carries.
-- **Click** a Jupiter point → **open the borehole report ("borerapport") website** for that
-  point in the browser (the WFS feature should carry the borehole id / a link to build the
-  URL).
-- It coexists with rich DB points on the map (reference points the user can see but that
-  carry no GeoGIS test data).
-- 🆕 Backend/Frontend: fetch the WFS layer (likely via the existing `wfs_proxy`), render its
-  features, wire hover + click-to-open.
+- **`{initials}`** = the **current PC user's initials** (derive from the OS username;
+  COWI convention `<initials>@cowi.com`).
+- Rendered as the **base reference layer** on the selection map.
 
-❓ **Q-F1a-i**: How is the **borerapport URL** built from a Jupiter feature — is there a
-borehole id / DGU number field in the WFS response we template into a known GEUS report URL?
-(Need the URL pattern + the field name.)
+✅ **Decided (Q-F1c)** — Jupiter points are **not selectable**:
+- **Hover** → show the feature's other attributes.
+- **Click** → **open the borerapport URL** in the browser. ✅ **(Q-F1a-i)** the URL is a
+  field in the WFS feature itself, under the attribute **`borerapport`** — open that value
+  directly (no URL templating needed).
 
-❓ **Q-F1b** (deferred): match key Jupiter↔GeoGIS — spatial only or shared DGU/boring-no.
-❓ **Q-F1c** (deferred): are Jupiter reference-only points selectable, or map-only.
+✅ **Decided (load order)**: only **Jupiter (+ addons)** show by default; **DB points load
+only when the user draws a polygon** (§B1a), then render on top of Jupiter.
+
+- 🆕 Frontend: fetch the WFS layer (via the existing `wfs_proxy`), render features as the
+  base layer, wire hover (attributes) + click (open `borerapport`); draw DB points above.
 
 ### F2. Data-source model
 Today: `databases[]` (DB1, DB2 …) + map addons + Jupiter WFS. The Map subtab's "toggle
 sources" needs a single unified concept of a **data source** spanning DB connections,
 file/WxS addons, and the Jupiter WFS layer. 🔧 Define a `DataSource` abstraction the map +
 selection consume.
+
+### F3. Excel formula preservation & evaluation 🆕❓ (cross-cutting)
+> Requirement: when the tool **reads or writes** an xlsx, it must **keep formulas intact**
+> (round-trip-safe), and **charts must plot the formulas' results**.
+
+Today the I/O is value-only: `write_datasheet` / `rebuild_workbook` write plain values, and
+`read_existing_datasheet` reads calamine's **cached values** (`worksheet_range`). A formula
+the user added in Excel would be **flattened to a value** on the next Append / Re-add /
+re-save. This requirement changes that.
+
+Implications across the I/O paths:
+- **Read** (`read_existing_datasheet`): capture **both** the formula string
+  (`worksheet_formula`) **and** the cached value (`worksheet_range`) per cell. Keep both.
+- **Write** (`write_datasheet`, `add_data_sheets`, `rebuild_workbook`, projects/points/cpt
+  xlsx): if a cell originated as a formula, **re-emit it as a formula**
+  (`rust_xlsxwriter::write_formula`) with its cached result, so it stays live in Excel.
+- **JSON sidecar cache** (#128): store `{ value, formula? }` per cell (or parallel arrays)
+  so the fast path preserves formulas too.
+- **Charts** (`run_chart_query`, `merge_formula_columns`): plot the **cached result** (the
+  evaluated value), not the formula text. `merge_formula_columns` already pulls user-added
+  columns from the datasheet xlsx — extend it to be formula-aware.
+
+The hard part is **freshness**: a formula cell the tool *generates or modifies* (e.g. new
+appended rows, or a formula referencing a column we just added) has **no cached value yet**
+until something recalculates it. Options:
+- **(a) LibreOffice headless recalc** — run a recalc pass on the xlsx after writing (the
+  approach the xlsx tooling uses). Adds a LibreOffice dependency / subprocess.
+- **(b) Embedded formula engine** (e.g. `formualizer`) — evaluate formulas in Rust to refresh
+  cached values. This is the engine from the earlier "formulas across tables" discussion.
+- **(c) Trust Excel** — only preserve formulas the user authored (which already have cached
+  values from when *they* saved); don't generate new formula cells ourselves.
+
+❓ **Q-F3**: Which freshness strategy — (a) LibreOffice recalc, (b) `formualizer` engine, or
+(c) preserve-only (no tool-generated formulas)? (c) is the smallest Phase-1 scope and still
+satisfies "read/keep formulas + charts show results" for **user-authored** formulas that
+already carry cached values; (a)/(b) are needed only if the tool itself must compute formula
+results for freshly generated/edited rows. **Lean: (c) for Phase 1**, revisit (a)/(b) with
+the broader cross-table formula feature.
 
 ---
 
@@ -512,12 +537,14 @@ selection consume.
    (mostly relocation of existing pages).
 4. **M4 — Map selection UX**: source toggles, **polygon-driven multi-EPSG DB loading
    (§B1a)**, red-ring selection, richer hover, **Jupiter WFS layer (hover + click→borerapport)**.
-5. **M5 — Source matching**: Jupiter↔rich-source matching per §F1 (after Q-F1b/c).
+   (Jupiter z-orders under DB points — no matching algorithm, §F1.)
+5. **M5 — Excel formula round-trip (§F3)**: make read/write formula-aware so user formulas
+   survive Append / Re-add / re-save and charts plot their results. Phase-1 scope per Q-F3.
 6. **M6 — Strata cluster view**: per-borehole error/warning clustering.
 7. **M7 — CPT reduction subtab**: moving average / median (wavelet later).
 8. **M8 — CPT calculations tab**: the 3 subtabs; verify against old GIRTool.
 
-M1–M3 are low-risk (reuse existing pieces). M4, M5 and M8 are the real new engineering.
+M1–M3 are low-risk (reuse existing pieces). M4 and M8 are the real new engineering.
 
 ---
 
@@ -539,32 +566,29 @@ M1–M3 are low-risk (reuse existing pieces). M4, M5 and M8 are the real new eng
   incl. depth**, empty window → no row, **re-apply strata after**.
 - **Q-E1/E2/E3**: Source = `cpt_calc.py` + Robertson CSVs (✅ vendored to
   `docs/cpt_reference/`); inputs **manual** for now; output **into the same CPTData sheet**.
-- **Q-F1 (reframed)**: Rich (GeoGIS/HoleBase) vs. reference (Jupiter) source matching.
-- **Q-F1a (revised)**: Jupiter is a **live WFS layer** (`{initials}@cowi.com` substituted),
-  hover shows feature info, **click opens the borerapport website**. (No more daily shapefile.)
+- **Q-F1b**: **no matching algorithm** — GeoGIS/DB points are z-ordered **on top of** the
+  Jupiter WFS layer; rich points win visually where they overlap.
+- **Q-F1a (revised)**: Jupiter is a **live WFS layer** (`{initials}@cowi.com` from the PC
+  user), rendered as the base reference layer.
+- **Q-F1a-i**: the borerapport URL is a WFS feature attribute named **`borerapport`** — open
+  it directly (no templating).
+- **Q-F1c**: Jupiter points **not selectable** — hover shows attributes, click opens
+  `borerapport`.
+- **Q-A5a**: elevation correction = **per-elevation-system manual offset table** (retrieve
+  distinct systems from the selection, user enters +/− per system). No geoid model.
+- **Q-A5b**: apply the coordinate conversion **everywhere** (maps, points, datasheets, CPT calcs).
+- **Q-B1a**: polygon query filters `AND p.Projection1 = @EPSG` (same-SRID only).
+- **Load timing**: DB points load **only on polygon draw**; Jupiter/addons show by default.
 - **Q-B1a-flow**: polygon → per-DB distinct EPSG → reproject polygon per EPSG → spatial
   intersect query → concat + convert + show. The two SQL queries live in Query Config.
 - **Q-DB-placeholder**: ALL Query Config sections use `#DB#` so they run against any shown DB.
 
-- **Q-E6**: Calc engine = **Rust port + Python oracle** (option 3). App ships pure Rust;
-  Python only generates committed test fixtures during development.
-
-### 🆕 Added — Coordinate system subtab (§A5)
-- New Settings subtab: pick target **horizontal CRS** + **elevation system**; convert
-  `X1/Y1/Z1` in place, preserving originals as `origin_X1/Y1/Z1` (+ `origin_Projection1`).
-- **Q-A5a** (open): vertical/datum transform fidelity for Phase 1 — constant offset / keep
-  Z1 as-is now, proper geoid (DVR90) later?
-- **Q-A5b** (open): apply conversion to datasheets + CPT calcs too, or only points/maps?
+- **Q-E6**: Calc engine = **Rust port + Python oracle** (option 3). App ships pure Rust.
 
 ### ❓ Still open (deferred by you — not blocking M1–M7)
 - **Q-A4**: HoleBase type + the **preset databases and their fixed IDs**.
-- **Q-A5a/b**: coordinate-system vertical-transform fidelity + scope (see §A5).
-- **Q-B1a**: add `AND p.Projection1 = @EPSG` to the polygon query so it only compares
-  same-SRID points (recommended; avoids mixed-EPSG rows being dropped by STIntersects).
-- **Q-F1a-i**: how the **borerapport URL** is built from a Jupiter WFS feature (id field +
-  URL pattern).
-- **Q-F1b**: Jupiter↔GeoGIS match key (spatial vs DGU number).
-- **Q-F1c**: Jupiter reference points selectable vs. map-only.
+- **Q-F3**: Excel-formula freshness strategy — (a) LibreOffice recalc, (b) `formualizer`
+  engine, or (c) preserve user-authored formulas only (lean for Phase 1). See §F3.
 
 - **Q-D4**: window on **`Depth`**.
 - **Q-E4**: CPT-calc config persisted per-project under `cpt_calc` in settings.json
