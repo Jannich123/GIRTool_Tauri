@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::state::{AppState, DbConfig};
 
@@ -388,6 +389,23 @@ pub async fn test_folder(path: String) -> Result<FolderResult, String> {
         valid:   true,
         message: format!("Folder is accessible: {path}"),
     })
+}
+
+/// Issue #137: reveal the current project (output) folder in the OS file
+/// explorer.  Triggered by the sidebar project-name click and the
+/// Project selection subtab's "Open in Explorer" button.
+#[tauri::command]
+pub async fn open_project_folder(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let folder = state.output_folder().ok_or("No project folder configured.")?;
+    if folder.is_empty() {
+        return Err("No project folder configured.".into());
+    }
+    app.opener()
+        .open_path(folder.as_str(), None::<&str>)
+        .map_err(|e| format!("Failed to open project folder: {e}"))
 }
 
 /// Called by the Sidebar "Refresh data" button.

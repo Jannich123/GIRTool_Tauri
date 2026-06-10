@@ -484,7 +484,7 @@ export default function SettingsPage({ setPage }) {
           className={`settings-tab ${tab === 'folder' ? 'active' : ''}`}
           onClick={() => setTab('folder')}
         >
-          📁 Project folder
+          📁 Project selection
         </button>
         <button
           className={`settings-tab ${tab === 'database' ? 'active' : ''}`}
@@ -515,7 +515,7 @@ export default function SettingsPage({ setPage }) {
         </p>
         {!form.output_folder && (
           <p className="hint" style={{ color: '#b45309', marginBottom: '0.75rem' }}>
-            ⚠ Pick a project folder first on the <strong>Project folder</strong> tab —
+            ⚠ Pick a project folder first on the <strong>Project selection</strong> tab —
             credentials are stored there, not in the registry.
           </p>
         )}
@@ -742,11 +742,11 @@ export default function SettingsPage({ setPage }) {
       </div>
       )}
 
-      {/* ── Project folder subtab ── */}
+      {/* ── Project selection subtab (issue #137) ── */}
       {tab === 'folder' && (
       <>
       <div className="card" style={{ maxWidth: 520 }}>
-        <h3 className="section-title">Project folder</h3>
+        <h3 className="section-title">Project selection</h3>
         <p className="hint" style={{ marginBottom: '0.75rem' }}>
           Downloaded Excel files and session data will be saved here automatically.
           When you connect the project folder, the app looks for any existing
@@ -783,6 +783,16 @@ export default function SettingsPage({ setPage }) {
             className="btn-secondary"
           >
             {folderStatus === 'testing' ? 'Connecting…' : 'Connect project folder'}
+          </button>
+          {/* Issue #137: reveal the project folder in the OS file explorer. */}
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => invoke('open_project_folder').catch(err => console.warn('open_project_folder failed:', err))}
+            disabled={!form.output_folder}
+            title={form.output_folder ? 'Open the project folder in Explorer' : 'Pick a folder first'}
+          >
+            📂 Open in Explorer
           </button>
         </div>
 
