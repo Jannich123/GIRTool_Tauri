@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { invoke, listen } from '../tauri-api'
+import { mergeBuiltins } from '../lib/baseLayers'
 
 const AppContext = createContext(null)
 
@@ -261,15 +262,16 @@ export function AppProvider({ children }) {
     return () => { cancelled = true }
   }, [connected])
 
-  // Map addons (M4.5): overlay layers for the project / selection maps, loaded
-  // from GIRTool_settings.json on connect.
+  // Map layers (M4.5): one unified list of background maps (built-ins) + user
+  // WMS addons, loaded from GIRTool_settings.json on connect and seeded with the
+  // built-in base maps via mergeBuiltins.
   const [mapAddons, setMapAddons] = useState([])
   useEffect(() => {
     if (!connected) { setMapAddons([]); return }
     let cancelled = false
     invoke('get_map_addons')
-      .then(a => { if (!cancelled) setMapAddons(Array.isArray(a) ? a : []) })
-      .catch(() => { if (!cancelled) setMapAddons([]) })
+      .then(a => { if (!cancelled) setMapAddons(mergeBuiltins(a)) })
+      .catch(() => { if (!cancelled) setMapAddons(mergeBuiltins([])) })
     return () => { cancelled = true }
   }, [connected])
 

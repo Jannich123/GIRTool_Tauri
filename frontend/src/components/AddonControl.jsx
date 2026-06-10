@@ -8,14 +8,14 @@ import { useApp } from '../context/AppContext'
 export default function AddonControl({ target }) {
   const { mapAddons, saveMapAddons } = useApp()
   const addons = Array.isArray(mapAddons) ? mapAddons : []
-  const list = addons.filter(a => a && a.type === 'wms' && a.maps?.[target])
+  const list = addons.filter(a => a && a.maps?.[target])
   if (list.length === 0) return null
 
   const update = (id, patch) => saveMapAddons(addons.map(a => (a.id === id ? { ...a, ...patch } : a)))
 
-  // Move an addon up/down among the same-target addons, keeping others in place.
+  // Move a layer up/down among the same-target layers, keeping others in place.
   function move(id, dir) {
-    const idxs = addons.map((a, i) => (a && a.type === 'wms' && a.maps?.[target] ? i : -1)).filter(i => i >= 0)
+    const idxs = addons.map((a, i) => (a && a.maps?.[target] ? i : -1)).filter(i => i >= 0)
     const subset = idxs.map(i => addons[i])
     const pos = subset.findIndex(a => a.id === id)
     const swap = pos + dir
@@ -41,7 +41,7 @@ export default function AddonControl({ target }) {
         fontSize: '.75rem', width: 220,
       }}
     >
-      <div style={{ fontWeight: 700, marginBottom: '.3rem' }}>Overlays</div>
+      <div style={{ fontWeight: 700, marginBottom: '.3rem' }}>Map layers</div>
       {list.map((a, i) => (
         <div key={a.id} style={{ marginBottom: '.45rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem' }}>

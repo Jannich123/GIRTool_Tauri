@@ -12,6 +12,7 @@ export default function MapAddonsTab() {
   const { mapAddons, saveMapAddons, connection } = useApp()
   const hasFolder = !!connection?.output_folder
   const addons = Array.isArray(mapAddons) ? mapAddons : []
+  const userAddons = addons.filter(a => !a.builtin) // built-ins managed in the on-map panel
 
   const [form, setForm] = useState({ name: '', url: '', layer: '', project: true, selection: true })
   const [msg, setMsg] = useState(null)
@@ -73,8 +74,8 @@ export default function MapAddonsTab() {
       </p>
 
       {/* Existing addons */}
-      {addons.length === 0 ? (
-        <p className="hint">No addons yet.</p>
+      {userAddons.length === 0 ? (
+        <p className="hint">No WMS addons yet. (Background maps live in the map's top-right layer panel.)</p>
       ) : (
         <table className="data-table" style={{ maxWidth: 900, marginBottom: '1rem' }}>
           <thead>
@@ -87,7 +88,7 @@ export default function MapAddonsTab() {
             </tr>
           </thead>
           <tbody>
-            {addons.map(a => (
+            {userAddons.map(a => (
               <tr key={a.id}>
                 <td title={a.url}>{a.name}</td>
                 <td>{(a.type || 'wms').toUpperCase()}</td>

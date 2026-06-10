@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Polygon, Polyline, Tooltip, LayersControl, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, CircleMarker, Polygon, Polyline, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
@@ -16,8 +16,6 @@ import AddonControl from '../components/AddonControl'
 //
 // Later: M4.3b polygon draw; M4.4 red-ring selection (click a loaded point →
 // add it + its parent project to the Projects/Points subtabs).
-
-const { BaseLayer } = LayersControl
 
 // GEUS Jupiter WFS — feature type jupiter_lithologi_over_10m_dybe (WFS 1.0.0,
 // geojson, EPSG:25832).  Fetched via wfs_proxy; bbox-bounded + capped; only at
@@ -477,22 +475,7 @@ export default function SelectionMap() {
             <CircleMarker key={`v${i}`} center={v} radius={3} pathOptions={{ color: '#dc2626', weight: 2, fillColor: '#fff', fillOpacity: 1 }} />
           ))}
 
-          <LayersControl position="topright">
-            <BaseLayer checked name="OpenStreetMap">
-              <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution="&copy; OpenStreetMap contributors"
-              />
-            </BaseLayer>
-            <BaseLayer name="Esri World Imagery">
-              <TileLayer
-                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                attribution="Tiles &copy; Esri"
-              />
-            </BaseLayer>
-          </LayersControl>
-
-          {/* Map addons (M4.5a) targeted at the selection map. */}
+          {/* Background maps + WMS addons — one unified layer list (M4.5a). */}
           <AddonLayers target="selection" />
 
           {/* Jupiter reference — drawn first (under everything). */}

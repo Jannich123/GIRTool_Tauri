@@ -1,4 +1,4 @@
-import { WMSTileLayer } from 'react-leaflet'
+import { TileLayer, WMSTileLayer } from 'react-leaflet'
 import { useApp } from '../context/AppContext'
 
 // Standard WMS operation params that Leaflet's WMSTileLayer adds itself.  If the
@@ -35,18 +35,43 @@ function wmsBaseUrl(raw) {
 export default function AddonLayers({ target }) {
   const { mapAddons } = useApp()
   return (mapAddons || [])
-    .filter(a => a && a.visible !== false && a.type === 'wms' && a.maps?.[target])
-    .map((a, i) => (
-      <WMSTileLayer
-        key={a.id}
-        url={wmsBaseUrl(a.url)}
-        layers={a.layer || ''}
-        format="image/png"
-        transparent
-        version={a.version || '1.3.0'}
-        opacity={typeof a.opacity === 'number' ? a.opacity : 1}
-        zIndex={200 + i}
-        attribution={a.name}
-      />
-    ))
+    .filter(a => a && a.visible !== false && a.maps?.[target])
+    .map((a, i) => {
+      const opacity = typeof a.opacity === 'number' ? a.opacity : 1
+      const zIndex = 200 + i // later in the list draws on top (still under markers)
+      const httpsUrl = (a.url || '').replace(/^http:\/\//i, 'https://')
+
+      if (a.type === 'xyz') {
+        return (
+          <TileLayer
+            key={a.id}
+            url={httpsUrl}
+            opacity={opacity}
+            zIndex={zIndex}
+            attribution={a.name}
+            {...(a.maxZoom ? { maxZoom: a.maxZoom } : {})}
+          />
+        )
+      }
+
+      // WMS (user addons + Danish base maps).  Extra vendor props (token,
+      // maxZoom) are only passed when present.
+      const extra = {}
+      if (a.token) extra.token = a.token
+      if (a.maxZoom) extra.maxZoom = a.maxZoom
+      return (
+        <WMSTileLayer
+          key={a.id}
+          url={wmsBaseUrl(a.url)}
+          layers={a.layer || ''}
+          format={a.format || 'image/png'}
+          transparent={a.transparent !== false}
+          version={a.version || '1.3.0'}
+          opacity={opacity}
+          zIndex={zIndex}
+          attribution={a.name}
+          {...extra}
+        />
+      )
+    })
 }
