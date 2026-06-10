@@ -57,9 +57,14 @@ export default function Sidebar({ page, setPage }) {
 
       <div
         className="sidebar-status"
+        // Issue #137: clicking the project name opens the folder in Explorer.
+        onClick={folderActive
+          ? () => invoke('open_project_folder').catch(err => console.warn('open_project_folder failed:', err))
+          : undefined}
         title={folderActive
-          ? `Project folder: ${connection.output_folder}`
-          : 'Pick a project folder in Settings → Project folder'}
+          ? `Open project folder in Explorer: ${connection.output_folder}`
+          : 'Pick a project folder in Settings → Project selection'}
+        style={{ cursor: folderActive ? 'pointer' : 'default' }}
       >
         <span className={`dot ${folderActive ? 'green' : 'red'}`} />
         {folderActive ? folderName : 'No project folder'}
