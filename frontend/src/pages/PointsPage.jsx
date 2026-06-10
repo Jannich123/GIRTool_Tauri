@@ -239,9 +239,9 @@ export default function PointsPage({ setPage }) {
     // Cross-restart restoration flows through load_points_xlsx on Points
     // page mount (#78).
     savePointsXlsx(selected).catch(() => {})
-    // Strata tab is the natural next step — user picks interpretation/series
-    // before downloading. Data tab is reachable from the sidebar afterwards.
-    setPage('strata')
+    // After picking points, go to the map to see the selection.  In Data
+    // Selection this switches to the Map subtab; standalone it opens the map.
+    setPage('map')
   }
 
   function handleSort(col) {
