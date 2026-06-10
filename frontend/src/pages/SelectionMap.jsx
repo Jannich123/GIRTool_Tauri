@@ -29,11 +29,16 @@ const JUPITER_MIN_ZOOM = 11
 const SOURCE_PALETTE = ['#2563eb', '#16a34a', '#db2777', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#dc2626']
 const JUPITER_COLOR  = '#cbd5e1'
 
+// Session-scoped memory of the selection map so leaving Data Selection (or its
+// Map subtab) and returning restores the last view, loaded points, and toggles.
+const mapStore = { view: null, loaded: [], showJupiter: true, loadStatus: '' }
+
 // Fit the view to the rendered DB points whenever their count changes.
 function FitBounds({ pts }) {
   const map = useMap()
   useEffect(() => {
-    if (!pts.length) return
+    // Skip auto-fit once we have a remembered view — restore it instead.
+    if (!pts.length || mapStore.view) return
     const lats = pts.map(p => p.latlng[0])
     const lngs = pts.map(p => p.latlng[1])
     map.fitBounds(
@@ -49,6 +54,13 @@ function FitBounds({ pts }) {
 function MapRef({ onMap }) {
   const map = useMap()
   useEffect(() => { onMap(map) }, [map]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Remember the view so returning to the map restores the last zoom/centre.
+  useMapEvents({
+    moveend: () => {
+      const c = map.getCenter()
+      mapStore.view = { lat: c.lat, lng: c.lng, zoom: map.getZoom() }
+    },
+  })
   return null
 }
 
@@ -133,14 +145,19 @@ function JupiterLayer({ whoami, enabled, onStatus }) {
 export default function SelectionMap() {
   const { allPoints } = useFilter()
   const [initials, setInitials] = useState('')
-  const [showJupiter, setShowJupiter] = useState(true)
+  const [showJupiter, setShowJupiter] = useState(() => mapStore.showJupiter)
   const [jupiterStatus, setJupiterStatus] = useState('')
 
   // M4.3 — available points loaded inside the current view via the spatial query.
   const [map, setMap] = useState(null)
-  const [loaded, setLoaded] = useState([])
-  const [loadStatus, setLoadStatus] = useState('')
+  const [loaded, setLoaded] = useState(() => mapStore.loaded)
+  const [loadStatus, setLoadStatus] = useState(() => mapStore.loadStatus)
   const [loading, setLoading] = useState(false)
+
+  // Persist across unmount so returning to Data Selection restores this state.
+  useEffect(() => { mapStore.showJupiter = showJupiter }, [showJupiter])
+  useEffect(() => { mapStore.loaded = loaded }, [loaded])
+  useEffect(() => { mapStore.loadStatus = loadStatus }, [loadStatus])
 
   useEffect(() => {
     invoke('os_username').then(u => setInitials((u || '').trim())).catch(() => {})
@@ -252,7 +269,11 @@ export default function SelectionMap() {
           border: '1px solid var(--border, #e2e8f0)',
         }}
       >
-        <MapContainer center={[56, 10]} zoom={7} scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}>
+        <MapContainer
+          center={mapStore.view ? [mapStore.view.lat, mapStore.view.lng] : [56, 10]}
+          zoom={mapStore.view ? mapStore.view.zoom : 7}
+          scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}
+        >
           <MapRef onMap={setMap} />
           <LayersControl position="topright">
             <BaseLayer checked name="OpenStreetMap">
