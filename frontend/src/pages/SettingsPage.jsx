@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import QueryConfigTab from './QueryConfigTab'
+import CoordinateSystemTab from './CoordinateSystemTab'
 
 // ── Multi-database tab (issue #46) ───────────────────────────────────────────
 // Defaults for a brand-new row.
@@ -493,12 +494,21 @@ export default function SettingsPage({ setPage }) {
           🗄 Database
         </button>
         <button
+          className={`settings-tab ${tab === 'coords' ? 'active' : ''}`}
+          onClick={() => setTab('coords')}
+        >
+          📐 Coordinate system
+        </button>
+        <button
           className={`settings-tab ${tab === 'queryConfig' ? 'active' : ''}`}
           onClick={() => setTab('queryConfig')}
         >
           📝 Query Config
         </button>
       </div>
+
+      {/* ── Coordinate system subtab (issue #145) ── */}
+      {tab === 'coords' && <CoordinateSystemTab />}
 
       {/* ── Query Config subtab (issue #47) ── */}
       {tab === 'queryConfig' && <QueryConfigTab />}

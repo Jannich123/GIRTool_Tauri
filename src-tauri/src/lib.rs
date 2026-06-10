@@ -135,6 +135,9 @@ pub fn run() {
             commands::session::patch_session,
             commands::session::save_selection,
             commands::session::load_selection,
+            // coordinate system (project-scoped target CRS + elevation offsets — #145)
+            commands::session::get_coordinate_system,
+            commands::session::save_coordinate_system,
             // windows (multi-window pop-out)
             commands::windows::open_window,
         ])
