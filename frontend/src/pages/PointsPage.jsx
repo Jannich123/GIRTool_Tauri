@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import { applyCoordinateSystem, normaliseEpsg, CRS_LABELS } from '../lib/proj'
 
 
 import { useDragSelect } from '../hooks/useDragSelect'
@@ -47,7 +48,7 @@ const PAGE_STEP = 50
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function PointsPage({ setPage }) {
-  const { selectedProjects, selectedPoints, setSelectedPoints, typeStyles } = useApp()
+  const { selectedProjects, selectedPoints, setSelectedPoints, typeStyles, coordinateSystem } = useApp()
   const typeColor = t => (typeStyles[(t || '').toUpperCase()] ?? typeStyles.Other)?.color ?? '#7f8c8d'
   const [points,  setPoints]  = useState([])
   const [loading, setLoading] = useState(false)
@@ -238,9 +239,18 @@ export default function PointsPage({ setPage }) {
     else { setSortCol(col); setSortDir('asc') }
   }
 
+  // Issue #147: convert raw DB points into the project's target coordinate
+  // system (origin_* preserved, X/Y reprojected, Z offset applied).  Pure no-op
+  // when no coordinate system is configured.  Kept separate from `points` so the
+  // table re-derives instantly when the target CRS changes — without refetching.
+  const viewPoints = useMemo(
+    () => applyCoordinateSystem(points, coordinateSystem),
+    [points, coordinateSystem],
+  )
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
-    const rows = !q ? points : points.filter(p =>
+    const rows = !q ? viewPoints : viewPoints.filter(p =>
       p.PointNo?.toLowerCase().includes(q)   ||
       p.PointType?.toLowerCase().includes(q) ||
       p.ProjectNo?.toLowerCase().includes(q) ||
@@ -254,7 +264,7 @@ export default function PointsPage({ setPage }) {
         : String(av).localeCompare(String(bv))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [points, search, sortCol, sortDir])
+  }, [viewPoints, search, sortCol, sortDir])
 
   // Issue #89: only render the first N rows of the (sorted, search-filtered)
   // points list.  Reset to PAGE_STEP whenever the filter / sort changes so
@@ -352,6 +362,12 @@ export default function PointsPage({ setPage }) {
           <p className="hint" style={{ margin: '0 0 .35rem 0', fontSize: '.78rem' }}>
             Showing {visibleSlice.length} of {filtered.length} row{filtered.length === 1 ? '' : 's'}
             {hasMore && ' · scroll for more'}
+            {(() => {
+              const t = normaliseEpsg(coordinateSystem?.target_epsg)
+              if (!t) return null
+              const label = CRS_LABELS[t] ? ` (${CRS_LABELS[t]})` : ''
+              return <> · Coordinates in <strong>{t}{label}</strong> · original values kept as origin_*</>
+            })()}
           </p>
         <div
           className="table-wrap"

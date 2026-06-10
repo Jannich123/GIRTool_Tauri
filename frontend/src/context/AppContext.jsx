@@ -247,10 +247,25 @@ export function AppProvider({ children }) {
     })
   }
 
+  // Coordinate-system config (issue #147, follow-up to #145): the project's
+  // target CRS + per-elevation-system Z offsets, loaded from GIRTool_settings.json
+  // whenever a project connects.  Point coordinates are converted to this system
+  // for display/export.  `null` means "no conversion" (raw DB coordinates).
+  const [coordinateSystem, setCoordinateSystem] = useState(null)
+  useEffect(() => {
+    if (!connected) { setCoordinateSystem(null); return }
+    let cancelled = false
+    invoke('get_coordinate_system')
+      .then(cfg => { if (!cancelled) setCoordinateSystem(cfg && cfg.target_epsg ? cfg : null) })
+      .catch(() => { if (!cancelled) setCoordinateSystem(null) })
+    return () => { cancelled = true }
+  }, [connected])
+
   return (
     <AppContext.Provider value={{
       connection, saveConnection,
       connected, setConnected,
+      coordinateSystem, setCoordinateSystem,
       selectedProjects, setSelectedProjects,
       selectedPoints,  setSelectedPoints,
       refreshKey,      bumpRefresh: () => setRefreshKey(k => k + 1),
