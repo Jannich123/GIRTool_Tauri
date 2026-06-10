@@ -4,6 +4,7 @@ import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { reproject, toLatLng, pointToLatLng } from '../lib/proj'
+import AddonLayers from '../components/AddonLayers'
 
 // Issue #153 (M4.1) + #155 (M4.2) + #159 (M4.3) — selection map.
 //
@@ -489,6 +490,9 @@ export default function SelectionMap() {
               />
             </BaseLayer>
           </LayersControl>
+
+          {/* Map addons (M4.5a) targeted at the selection map. */}
+          <AddonLayers target="selection" />
 
           {/* Jupiter reference — drawn first (under everything). */}
           <JupiterLayer whoami={whoami} enabled={showJupiter} onStatus={setJupiterStatus} />

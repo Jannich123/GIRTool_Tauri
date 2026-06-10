@@ -261,11 +261,30 @@ export function AppProvider({ children }) {
     return () => { cancelled = true }
   }, [connected])
 
+  // Map addons (M4.5): overlay layers for the project / selection maps, loaded
+  // from GIRTool_settings.json on connect.
+  const [mapAddons, setMapAddons] = useState([])
+  useEffect(() => {
+    if (!connected) { setMapAddons([]); return }
+    let cancelled = false
+    invoke('get_map_addons')
+      .then(a => { if (!cancelled) setMapAddons(Array.isArray(a) ? a : []) })
+      .catch(() => { if (!cancelled) setMapAddons([]) })
+    return () => { cancelled = true }
+  }, [connected])
+
+  // Persist + update map addons in one call (used by the Settings subtab).
+  const saveMapAddons = useCallback((next) => {
+    setMapAddons(next)
+    invoke('save_map_addons', { addons: next }).catch(() => {})
+  }, [])
+
   return (
     <AppContext.Provider value={{
       connection, saveConnection,
       connected, setConnected,
       coordinateSystem, setCoordinateSystem,
+      mapAddons, saveMapAddons,
       selectedProjects, setSelectedProjects,
       selectedPoints,  setSelectedPoints,
       refreshKey,      bumpRefresh: () => setRefreshKey(k => k + 1),

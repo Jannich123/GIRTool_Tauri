@@ -3,6 +3,7 @@ import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import QueryConfigTab from './QueryConfigTab'
 import CoordinateSystemTab from './CoordinateSystemTab'
+import MapAddonsTab from './MapAddonsTab'
 
 // ── Multi-database tab (issue #46) ───────────────────────────────────────────
 // Defaults for a brand-new row.
@@ -500,6 +501,12 @@ export default function SettingsPage({ setPage }) {
           📐 Coordinate system
         </button>
         <button
+          className={`settings-tab ${tab === 'mapAddons' ? 'active' : ''}`}
+          onClick={() => setTab('mapAddons')}
+        >
+          🗺️ Map addons
+        </button>
+        <button
           className={`settings-tab ${tab === 'queryConfig' ? 'active' : ''}`}
           onClick={() => setTab('queryConfig')}
         >
@@ -509,6 +516,9 @@ export default function SettingsPage({ setPage }) {
 
       {/* ── Coordinate system subtab (issue #145) ── */}
       {tab === 'coords' && <CoordinateSystemTab />}
+
+      {/* ── Map addons subtab (issue #169) ── */}
+      {tab === 'mapAddons' && <MapAddonsTab />}
 
       {/* ── Query Config subtab (issue #47) ── */}
       {tab === 'queryConfig' && <QueryConfigTab />}

@@ -6,6 +6,7 @@ import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS } from '../lib/proj'
+import AddonLayers from '../components/AddonLayers'
 
 const { BaseLayer } = LayersControl
 
@@ -715,6 +716,9 @@ export default function MapPage() {
               />
             </BaseLayer>
           </LayersControl>
+
+          {/* Map addons (M4.5a) targeted at the project map. */}
+          <AddonLayers target="project" />
 
           {visiblePoints.map(pt => {
             const { color, symbol } = getStyle(pt)
