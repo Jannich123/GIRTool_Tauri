@@ -97,6 +97,20 @@ export function toLatLng(x, y, epsg) {
   return out ? [out[1], out[0]] : null
 }
 
+// Project one point object to Leaflet [lat, lng], mirroring MapPage's proven
+// logic (issue #155 follow-up): prefer the point's own Projection1 when proj4
+// knows it; otherwise fall back to `fallbackEpsg` (the Danish default) and still
+// plot it — rather than dropping points that lack a recognised CRS.  Returns
+// null only when X1/Y1 are missing/non-numeric.
+export function pointToLatLng(p, fallbackEpsg = 'EPSG:25832') {
+  const x = Number(p?.X1 ?? p?.x1)
+  const y = Number(p?.Y1 ?? p?.y1)
+  if (!isFinite(x) || !isFinite(y)) return null
+  const own = normaliseEpsg(p?.Projection1 ?? p?.projection1)
+  const src = own && isKnownCrs(own) ? own : fallbackEpsg
+  return toLatLng(x, y, src)
+}
+
 const round2 = (n) =>
   (n == null || !isFinite(Number(n))) ? n : Math.round(Number(n) * 100) / 100
 
