@@ -546,6 +546,17 @@ Implications across the I/O paths:
 
 M1–M3 are low-risk (reuse existing pieces). M4 and M8 are the real new engineering.
 
+> **Sequencing update (agreed — 2026-06).** M1's remaining items can't be *verified* without a
+> map that consumes them, so they move to be built **alongside M4**:
+> - `map_distinct_epsg` / `map_polygon_points` (§A3) are direct inputs to the polygon load → build them **with M4**.
+> - **Map addons** (§A6) need a rendering map → build them once the selection map exists (M4).
+>
+> Revised order from here: **M3 → M4 (incl. the leftover M1 map pieces) → M5 → M6 → M7 → M8.**
+>
+> **Done so far:** ✅ M2 startup flow; ✅ M1 Project selection subtab; ✅ M1 Coordinate system
+> subtab + apply to Points table / `points.xlsx` / datasheets; ✅ M1 universal `#DB#` (4 existing
+> sections). Remaining M1 (Map addons, 2 map SQL sections, HoleBase Q-A4) folded into M4 / deferred.
+
 ---
 
 ## H. Open questions (consolidated)
