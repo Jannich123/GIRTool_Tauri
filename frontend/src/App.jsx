@@ -7,6 +7,7 @@ import FilterPanel    from './components/FilterPanel'
 import ErrorBoundary  from './components/ErrorBoundary'
 import StartupScreen  from './components/StartupScreen'
 import SettingsPage   from './pages/SettingsPage'
+import DataSelectionPage from './pages/DataSelectionPage'
 import ProjectsPage   from './pages/ProjectsPage'
 import PointsPage     from './pages/PointsPage'
 import StrataPage     from './pages/StrataPage'
@@ -44,7 +45,7 @@ function Shell() {
     try {
       const p = new URLSearchParams(window.location.search).get('page')
       if (p && p.length > 0) return p
-      return localStorage.getItem('db_settings') ? 'projects' : 'settings'
+      return localStorage.getItem('db_settings') ? 'dataSelection' : 'settings'
     } catch { return 'settings' }
   })()
   const [page, setPage] = useState(initialPage)
@@ -130,13 +131,15 @@ function Shell() {
       } catch (err) { console.warn('selection restore failed:', err) }
     }
 
-    setPage('projects')
+    setPage('dataSelection')
     setProjectOpen(true)
   }
 
   function renderPage() {
     switch (page) {
       case 'settings': return <SettingsPage setPage={setPage} />
+      case 'dataSelection': return <DataSelectionPage setPage={setPage} />
+      // Projects/Points kept routable for pop-out windows (open_window page=…).
       case 'projects': return <ProjectsPage setPage={setPage} />
       case 'points':   return <PointsPage   setPage={setPage} />
       case 'strata':   return <StrataPage />
