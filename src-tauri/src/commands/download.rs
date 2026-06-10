@@ -64,6 +64,29 @@ pub struct DownloadRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub points_meta: Vec<Value>,
+    /// Issue #149: per-point coordinate-system overrides, keyed by
+    /// `db_id||PointId`.  Present only when the project has a coordinate system
+    /// configured (the frontend computes the converted values via proj4js).
+    /// Applied to each datasheet's coordinate / Level columns before writing.
+    #[serde(default)]
+    pub coord_overrides: std::collections::HashMap<String, CoordOverride>,
+}
+
+/// One point's coordinate-system conversion (issue #149).  X1/Y1/Z1 are the
+/// already-converted target-CRS values; `zoffset` is the elevation offset to add
+/// to derived `Level` columns in data datasheets.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordOverride {
+    #[serde(rename = "X1", default)]
+    pub x1: Option<f64>,
+    #[serde(rename = "Y1", default)]
+    pub y1: Option<f64>,
+    #[serde(rename = "Z1", default)]
+    pub z1: Option<f64>,
+    #[serde(rename = "Projection1", default)]
+    pub projection1: String,
+    #[serde(rename = "Zoffset", default)]
+    pub zoffset: f64,
 }
 
 /// Either a flat list of project IDs (legacy single-DB form) or a list of
@@ -501,6 +524,80 @@ fn upsert_strata_columns(
         }
         row[pri_idx] = Value::String(primary);
         row[sec_idx] = Value::String(secondary);
+    }
+}
+
+// ── Coordinate-system conversion (issue #149) ──────────────────────────────────
+
+/// Apply the project's coordinate-system conversion to a datasheet's columnar
+/// data, in place.  Matches each row to a point by `db_id||PointId`, then:
+///   • overwrites X1/Y1/Z1/Projection1 columns (the Points datasheet) with the
+///     converted target-CRS values, and
+///   • shifts every exact `Level` column (data datasheets) by the point's
+///     elevation offset.
+/// No-op when `overrides` is empty, the key columns are missing, or the
+/// datasheet has no convertible columns.  `Level Reference` is NOT treated as a
+/// `Level` column (exact, case-insensitive match only).
+fn apply_coord_conversion(
+    columns: &[String],
+    rows: &mut [Vec<Value>],
+    overrides: &std::collections::HashMap<String, CoordOverride>,
+) {
+    if overrides.is_empty() {
+        return;
+    }
+
+    let find = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (Some(db_idx), Some(pid_idx)) = (find("db_id"), find("PointId")) else {
+        return;
+    };
+
+    let x_idx = find("X1");
+    let y_idx = find("Y1");
+    let z_idx = find("Z1");
+    let proj_idx = find("Projection1");
+    let level_idxs: Vec<usize> = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.eq_ignore_ascii_case("Level"))
+        .map(|(i, _)| i)
+        .collect();
+
+    // Nothing in this datasheet to convert.
+    if x_idx.is_none() && y_idx.is_none() && z_idx.is_none() && level_idxs.is_empty() {
+        return;
+    }
+
+    let round3 = |n: f64| (n * 1000.0).round() / 1000.0;
+
+    for row in rows.iter_mut() {
+        let db = row.get(db_idx).and_then(|v| v.as_str()).unwrap_or("");
+        let pid = match row.get(pid_idx) {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => String::new(),
+        };
+        if pid.is_empty() {
+            continue;
+        }
+        let key = format!("{db}||{pid}");
+        let Some(ov) = overrides.get(&key) else { continue };
+
+        if let (Some(i), Some(x)) = (x_idx, ov.x1) { row[i] = json!(x); }
+        if let (Some(i), Some(y)) = (y_idx, ov.y1) { row[i] = json!(y); }
+        if let (Some(i), Some(z)) = (z_idx, ov.z1) { row[i] = json!(z); }
+        if let Some(i) = proj_idx {
+            if !ov.projection1.is_empty() {
+                row[i] = json!(ov.projection1.clone());
+            }
+        }
+        if ov.zoffset != 0.0 {
+            for &li in &level_idxs {
+                if let Some(n) = row.get(li).and_then(|v| v.as_f64()) {
+                    row[li] = json!(round3(n + ov.zoffset));
+                }
+            }
+        }
     }
 }
 
@@ -2040,6 +2137,10 @@ pub async fn download_data(
         let row_count = raw_rows.len();
         let (mut columns, mut rows) = objects_to_columnar(raw_rows);
 
+        // Issue #149: convert coordinate / Level columns into the project's
+        // target system before strata injection + writing.
+        apply_coord_conversion(&columns, &mut rows, &query.coord_overrides);
+
         // Inject strata columns when the query definition requests it.
         if q.apply_strata.eq_ignore_ascii_case("yes") {
             apply_strata_columns(&mut columns, &mut rows, &strata_lookup);
@@ -2218,6 +2319,10 @@ pub async fn append_data(
         }
 
         let (mut columns, mut new_rows) = objects_to_columnar(raw_rows);
+
+        // Issue #149: convert the newly-fetched rows before merge so appended
+        // rows carry the project's target-CRS coordinates / shifted Level.
+        apply_coord_conversion(&columns, &mut new_rows, &query.coord_overrides);
 
         if q.apply_strata.eq_ignore_ascii_case("yes") {
             apply_strata_columns(&mut columns, &mut new_rows, &strata_lookup);

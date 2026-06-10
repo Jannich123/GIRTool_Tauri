@@ -2,9 +2,14 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
+import { applyCoordinateSystem, normaliseEpsg } from '../lib/proj'
 
 export default function DataPage() {
-  const { selectedProjects, selectedPoints, connection } = useApp()
+  const { selectedProjects, selectedPoints, connection, coordinateSystem } = useApp()
+  // allPoints = every point in the selected projects (issue #149).  Used to
+  // build the per-point coordinate overrides so datasheets convert even when no
+  // specific points are ticked (download = all project points).
+  const { allPoints } = useFilter()
 
   // ── Query list (read-only — editing moved to Settings → Query Config in #47) ─
   const [queries, setQueries]   = useState([])
@@ -149,7 +154,32 @@ export default function DataPage() {
     // the upstream rows don't have db_id (shouldn't happen post-#51).
     const hasProjDb = selectedProjects.some(p => p?.db_id)
     const hasPtDb   = selectedPoints.some(p => p?.db_id)
+
+    // Issue #149: per-point coordinate overrides keyed by `db_id||PointId`.
+    // Built from the converted project points so the backend can rewrite each
+    // datasheet's coordinate / Level columns into the project's target CRS.
+    // Omitted (empty) when no coordinate system is configured.
+    const coord_overrides = {}
+    if (normaliseEpsg(coordinateSystem?.target_epsg)) {
+      const basis = (allPoints && allPoints.length) ? allPoints : selectedPoints
+      const converted = applyCoordinateSystem(basis, coordinateSystem)
+      const offsets = coordinateSystem?.elevation_offsets || {}
+      for (const cp of converted) {
+        if (cp?.PointId == null) continue
+        const key = `${cp.db_id ?? ''}||${cp.PointId}`
+        const zoff = Number(offsets[String(cp.LevelReference)]) || 0
+        coord_overrides[key] = {
+          X1: cp.X1 ?? null,
+          Y1: cp.Y1 ?? null,
+          Z1: cp.Z1 ?? null,
+          Projection1: cp.Projection1 != null ? String(cp.Projection1) : '',
+          Zoffset: zoff,
+        }
+      }
+    }
+
     return {
+      coord_overrides,
       // Primary project — used by the backend for strata lookup.
       project_id:    selectedProjects[0]?.ProjectId ?? '',
       project_ids:   hasProjDb
