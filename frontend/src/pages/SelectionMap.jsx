@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Polygon, Polyline, Popup, Tooltip, LayersControl, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Polygon, Polyline, Tooltip, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import { invoke } from '../tauri-api'
+import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { reproject, toLatLng, pointToLatLng } from '../lib/proj'
 
@@ -168,6 +169,7 @@ function JupiterLayer({ whoami, enabled, onStatus }) {
 
 export default function SelectionMap() {
   const { allPoints } = useFilter()
+  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects } = useApp()
   const [initials, setInitials] = useState('')
   const [showJupiter, setShowJupiter] = useState(() => mapStore.showJupiter)
   const [jupiterStatus, setJupiterStatus] = useState('')
@@ -215,6 +217,49 @@ export default function SelectionMap() {
     return m
   }, [pts, loaded])
   const colorFor = (dbId) => dbColors[dbId] || SOURCE_PALETTE[0]
+
+  // ── Selection from the map (M4.4a) ──────────────────────────────────────────
+  // Project index for resolving a clicked point's parent project.
+  const projIndex = useRef({})
+  useEffect(() => {
+    invoke('list_projects')
+      .then(rows => {
+        const idx = {}
+        for (const r of (rows || [])) idx[`${r.db_id ?? '?'}||${r.ProjectId}`] = r
+        projIndex.current = idx
+      })
+      .catch(() => {})
+  }, [])
+
+  const selectedIds = useMemo(
+    () => new Set((selectedPoints || []).map(p => `${p.db_id ?? '?'}_${p.PointId}`)),
+    [selectedPoints],
+  )
+  const ptIdSet = useMemo(() => new Set(pts.map(f => f.id)), [pts])
+
+  // Toggle a clicked point in/out of the selection; selecting also ensures its
+  // parent project is selected so the Projects/Points subtabs populate (Q-B2).
+  function toggleSelect(p) {
+    const id = `${p.db_id ?? '?'}_${p.PointId}`
+    if (selectedIds.has(id)) {
+      setSelectedPoints((selectedPoints || []).filter(sp => `${sp.db_id ?? '?'}_${sp.PointId}` !== id))
+      return
+    }
+    setSelectedPoints([...(selectedPoints || []), p])
+    const pk = `${p.db_id ?? '?'}||${p.ProjectId}`
+    const proj = projIndex.current[pk]
+    if (proj && !(selectedProjects || []).some(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` === pk)) {
+      setSelectedProjects([...(selectedProjects || []), proj])
+    }
+  }
+
+  // Visible points (loaded ∪ selected-project) that are selected → red ring.
+  const ringPoints = useMemo(() => {
+    const byId = new Map()
+    pts.forEach(f => byId.set(f.id, f))
+    loaded.forEach(f => { if (!byId.has(f.id)) byId.set(f.id, f) })
+    return [...byId.values()].filter(f => selectedIds.has(f.id))
+  }, [pts, loaded, selectedIds])
 
   // Shared loader (M4.3a pipeline): given polygon vertices as [lng, lat] in
   // EPSG:4326, find each DB's coordinate systems, reproject the polygon into
@@ -381,21 +426,20 @@ export default function SelectionMap() {
           <JupiterLayer whoami={whoami} enabled={showJupiter} onStatus={setJupiterStatus} />
 
           {/* M4.3 available points loaded in view — orange (not selectable yet). */}
-          {loaded.map(({ id, latlng, p }) => (
+          {loaded.filter(f => !ptIdSet.has(f.id)).map(({ id, latlng, p }) => (
             <CircleMarker
               key={`avail_${id}`}
               center={latlng}
               radius={5}
-              // Available = hollow ring in the source colour (vs solid = selected).
+              // Available = hollow ring in the source colour.  Click to select.
               pathOptions={{ color: colorFor(p.db_id), weight: 2, fillColor: colorFor(p.db_id), fillOpacity: 0.2 }}
+              eventHandlers={{ click: () => toggleSelect(p) }}
             >
-              <Popup>
-                <div style={{ fontSize: '.8rem', lineHeight: 1.5 }}>
-                  <strong>{p.PointNo ?? p.PointId}</strong> <span className="hint">(available)</span><br />
-                  {p.PointType ? <>Type: {p.PointType}<br /></> : null}
-                  DB: {p.db_id ?? '?'} · EPSG {p.Projection1}
-                </div>
-              </Popup>
+              <Tooltip>
+                <span style={{ fontSize: '.75rem' }}>
+                  {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
+                </span>
+              </Tooltip>
             </CircleMarker>
           ))}
 
@@ -407,19 +451,28 @@ export default function SelectionMap() {
               key={id}
               center={latlng}
               radius={6}
-              // Selected = solid fill in the source colour.
+              // Selected-project point, solid fill in the source colour.  Click to select.
               pathOptions={{ color: '#fff', weight: 1.5, fillColor: colorFor(p.db_id), fillOpacity: 0.95 }}
+              eventHandlers={{ click: () => toggleSelect(p) }}
             >
-              <Popup>
-                <div style={{ fontSize: '.8rem', lineHeight: 1.5 }}>
-                  <strong>{p.PointNo ?? p.PointId}</strong><br />
-                  {p.PointType ? <>Type: {p.PointType}<br /></> : null}
-                  DB: {p.db_id ?? '?'}<br />
-                  {p.ProjectNo ? <>Project: {p.ProjectNo}<br /></> : null}
-                  {p.Bottom != null ? <>Depth: {p.Bottom} m</> : null}
-                </div>
-              </Popup>
+              <Tooltip>
+                <span style={{ fontSize: '.75rem' }}>
+                  {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'}{p.ProjectNo ? ` · ${p.ProjectNo}` : ''} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
+                </span>
+              </Tooltip>
             </CircleMarker>
+          ))}
+
+          {/* Red ring on selected points (M4.4a) — non-interactive so clicks
+              reach the underlying point. */}
+          {ringPoints.map(f => (
+            <CircleMarker
+              key={`ring_${f.id}`}
+              center={f.latlng}
+              radius={9}
+              interactive={false}
+              pathOptions={{ color: '#dc2626', weight: 2.5, fill: false }}
+            />
           ))}
         </MapContainer>
 
@@ -446,7 +499,7 @@ export default function SelectionMap() {
               </div>
             )}
             {(pts.length > 0 || loaded.length > 0) && (
-              <div className="hint" style={{ marginTop: '.3rem' }}>● selected · ○ available</div>
+              <div className="hint" style={{ marginTop: '.3rem' }}>● in project · ○ available · ⭕ selected</div>
             )}
           </div>
         )}
