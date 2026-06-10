@@ -408,6 +408,90 @@ pub async fn open_project_folder(
         .map_err(|e| format!("Failed to open project folder: {e}"))
 }
 
+/// Issue #139: scaffold a new, empty project at `path`.
+///   * creates the folder (and `Datasheets/`) if missing,
+///   * writes a minimal `GIRTool_settings.json` if none exists,
+///   * records the folder in the recent list.
+/// Returns the (normalised) project path.
+#[tauri::command]
+pub async fn create_project(path: String) -> Result<String, String> {
+    if path.trim().is_empty() {
+        return Err("No project path provided.".into());
+    }
+    let path_clone = path.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let root = std::path::Path::new(&path_clone);
+        std::fs::create_dir_all(root)
+            .map_err(|e| format!("Failed to create project folder: {e}"))?;
+        std::fs::create_dir_all(root.join("Datasheets"))
+            .map_err(|e| format!("Failed to create Datasheets folder: {e}"))?;
+        let settings = root.join("GIRTool_settings.json");
+        if !settings.exists() {
+            std::fs::write(&settings, "{\n  \"sessions\": {}\n}\n")
+                .map_err(|e| format!("Failed to write GIRTool_settings.json: {e}"))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))??;
+
+    record_recent_folder(&path);
+    Ok(path)
+}
+
+/// Issue #139: copy an entire project folder `src` to `dst` (config + all
+/// data: xlsx, Datasheets/, map addons/, cpt calc settings/, settings).
+/// Rejects when `dst` already exists and is non-empty.  Returns `dst`.
+#[tauri::command]
+pub async fn copy_project(src: String, dst: String) -> Result<String, String> {
+    if src.trim().is_empty() || dst.trim().is_empty() {
+        return Err("Both source and destination paths are required.".into());
+    }
+    let dst_clone = dst.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let src_p = std::path::Path::new(&src);
+        let dst_p = std::path::Path::new(&dst_clone);
+        if !src_p.is_dir() {
+            return Err(format!("Source project folder not found: {src}"));
+        }
+        // Refuse to clobber a non-empty destination.
+        if dst_p.exists() {
+            let non_empty = std::fs::read_dir(dst_p)
+                .map(|mut it| it.next().is_some())
+                .unwrap_or(false);
+            if non_empty {
+                return Err(format!(
+                    "Destination already exists and is not empty: {dst_clone}. Choose an empty / new folder."
+                ));
+            }
+        }
+        copy_dir_recursive(src_p, dst_p)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))??;
+
+    record_recent_folder(&dst);
+    Ok(dst)
+}
+
+/// Recursively copy a directory tree (files + subfolders).
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create {}: {e}", dst.display()))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("Read dir {} failed: {e}", src.display()))? {
+        let entry = entry.map_err(|e| format!("Dir entry error: {e}"))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)
+                .map_err(|e| format!("Copy {} failed: {e}", from.display()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Called by the Sidebar "Refresh data" button.
 /// Returns Ok(()) so the frontend can bump its refreshKey.
 #[tauri::command]

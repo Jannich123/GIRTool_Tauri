@@ -5,6 +5,7 @@ import { FilterProvider }     from './context/FilterContext'
 import Sidebar        from './components/Sidebar'
 import FilterPanel    from './components/FilterPanel'
 import ErrorBoundary  from './components/ErrorBoundary'
+import StartupScreen  from './components/StartupScreen'
 import SettingsPage   from './pages/SettingsPage'
 import ProjectsPage   from './pages/ProjectsPage'
 import PointsPage     from './pages/PointsPage'
@@ -47,40 +48,91 @@ function Shell() {
     } catch { return 'settings' }
   })()
   const [page, setPage] = useState(initialPage)
-  const { setConnected, setSelectedProjects, setSelectedPoints } = useApp()
+  const { connection, saveConnection, setConnected, setSelectedProjects, setSelectedPoints } = useApp()
 
-  // On load, probe the backend and restore connection state.  After the DB
-  // is back online, also restore the project / point selection saved in
-  // GIRTool_settings.json so the user lands on their previous workspace.
+  // Issue #139: the main window gates on a full-screen StartupScreen until a
+  // project is opened.  Pop-out windows (?page=…) skip the gate — they're
+  // opened against the already-connected session of the main window.
+  const [projectOpen, setProjectOpen] = useState(!isMainWindow)
+
+  // Pop-out windows reconnect silently to the saved session on mount (they
+  // don't show the startup screen).
   useEffect(() => {
+    if (isMainWindow) return
     invoke('db_status').then(r => {
-      if (r.configured) {
-        const saved = localStorage.getItem('db_settings')
-        if (saved) {
-          const s = JSON.parse(saved)
-          invoke('connect', {
-            server:       s.server,
-            database:     s.database,
-            authMethod:   s.auth_method,
-            username:     s.username,
-            password:     s.password,
-            outputFolder: s.output_folder,
-          })
-            .then(() => {
-              setConnected(true)
-              // Issue #95: selection no longer flows through
-              // GIRTool_settings.json — projects.xlsx and points.xlsx
-              // auto-load on their respective page mounts.  Main window
-              // lands on the Projects tab and the user navigates from
-              // there.  Pop-out windows stay on whatever page they were
-              // opened to (no setPage call).
-              if (isMainWindow) setPage('projects')
-            })
-            .catch(() => { if (isMainWindow) setPage('settings') })
-        }
-      }
+      if (!r.configured) return
+      const saved = localStorage.getItem('db_settings')
+      if (!saved) return
+      const s = JSON.parse(saved)
+      invoke('connect', {
+        server: s.server, database: s.database, authMethod: s.auth_method,
+        username: s.username, password: s.password, outputFolder: s.output_folder,
+      }).then(() => setConnected(true)).catch(() => {})
     }).catch(() => {})
   }, [])
+
+  // Open a project folder: persist it, connect every DB, restore the saved
+  // selection from projects.xlsx / points.xlsx (mirrors the Settings
+  // "Connect project folder" flow, #103), then enter the app.  Called by the
+  // StartupScreen for New / Open / Copy / Recent.
+  async function openProject(folder) {
+    const merged = { ...connection, output_folder: folder }
+    saveConnection(merged)
+
+    // Legacy single-DB connect (best-effort — folder may have no DB yet).
+    try {
+      await invoke('connect', {
+        server: merged.server, database: merged.database, authMethod: merged.auth_method,
+        username: merged.username, password: merged.password, outputFolder: folder,
+      })
+      setConnected(true)
+    } catch (err) {
+      console.warn('legacy connect failed (continuing):', err)
+    }
+
+    // Multi-DB connect (reads GIRTool_settings.json::databases for this folder).
+    let anyDbOk = false
+    try {
+      const results = await invoke('connect_all_databases')
+      if (Array.isArray(results) && results.some(r => r && r.ok)) { anyDbOk = true; setConnected(true) }
+    } catch (err) { console.warn('connect_all_databases failed:', err) }
+
+    invoke('ensure_strata_file').catch(() => {})
+
+    // Restore selection from xlsx (same matching as #103).
+    if (anyDbOk) {
+      try {
+        const [allProjects, xlsxProjects] = await Promise.all([
+          invoke('list_projects').catch(() => []),
+          invoke('load_projects_xlsx').catch(() => []),
+        ])
+        if (Array.isArray(allProjects) && Array.isArray(xlsxProjects) && xlsxProjects.length) {
+          const pk = p => `${p?.db_id ?? '?'}||${p?.ProjectId ?? ''}`
+          const keys = new Set(xlsxProjects.map(pk))
+          const matched = allProjects.filter(p => keys.has(pk(p)))
+          if (matched.length) {
+            setSelectedProjects(matched)
+            const idArg = matched.some(p => p?.db_id)
+              ? matched.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
+              : matched.map(p => p.ProjectId)
+            const [allPoints, xlsxPoints] = await Promise.all([
+              invoke('get_points', { projectIds: idArg }).catch(() => []),
+              invoke('load_points_xlsx').catch(() => []),
+            ])
+            if (Array.isArray(allPoints) && Array.isArray(xlsxPoints) && xlsxPoints.length) {
+              const tk = p => `${p?.db_id ?? '?'}||${p?.PointId ?? ''}`
+              const ptKeys = new Set(xlsxPoints.map(tk))
+              const ptMatched = allPoints.filter(p => ptKeys.has(tk(p)))
+              if (ptMatched.length) setSelectedPoints(ptMatched)
+            }
+          }
+        }
+      } catch (err) { console.warn('selection restore failed:', err) }
+    }
+
+    setPage('projects')
+    setProjectOpen(true)
+  }
 
   function renderPage() {
     switch (page) {
@@ -97,6 +149,12 @@ function Shell() {
   }
 
   const showFilter = page === 'map' || page === 'charts' || page === 'data'
+
+  // Issue #139: gate the main window behind the startup screen until a
+  // project is opened.
+  if (!projectOpen) {
+    return <StartupScreen onOpen={openProject} />
+  }
 
   return (
     <div className="layout">

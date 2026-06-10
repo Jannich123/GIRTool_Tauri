@@ -46,6 +46,8 @@ pub fn run() {
             commands::database::forget_recent_folder,
             commands::database::load_folder_db_config,
             commands::database::open_project_folder,
+            commands::database::create_project,
+            commands::database::copy_project,
             // database — multi-DB (issue #46)
             commands::database::list_databases,
             commands::database::save_databases,
