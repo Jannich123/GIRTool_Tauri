@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, TileLayer, WMSTileLayer, CircleMarker, Popup, LayersControl, useMap } from 'react-leaflet'
 import { invoke } from '../tauri-api'
 import { useFilter } from '../context/FilterContext'
-import { toLatLng } from '../lib/proj'
+import { pointToLatLng } from '../lib/proj'
 
 // Issue #153 (M4.1) + #155 (M4.2) — selection map.
 //
@@ -18,9 +18,10 @@ import { toLatLng } from '../lib/proj'
 const { BaseLayer, Overlay } = LayersControl
 
 // Verified endpoint: ows/3857.jsp serves the jupiter map in EPSG:3857 (Leaflet
-// CRS); GetMap of this layer returns image/png.  `whoami=<initials>@cowi.com`
-// follows the COWI convention (initials = OS username).
-const JUPITER_BASE  = 'http://data.geus.dk/geusmap/ows/3857.jsp'
+// CRS); GetMap of this layer returns image/png.  HTTPS is required — the webview
+// runs in a secure context and blocks http tiles as mixed content.
+// `whoami=<initials>@cowi.com` follows the COWI convention (initials = OS user).
+const JUPITER_BASE  = 'https://data.geus.dk/geusmap/ows/3857.jsp'
 const JUPITER_LAYER = 'jupiter_lithologi_over_10m_dybe'
 
 // Fit the view to the rendered points whenever their count changes.
@@ -58,7 +59,9 @@ export default function SelectionMap() {
     return allPoints
       .filter(p => p.X1 != null && p.Y1 != null)
       .map(p => {
-        const latlng = toLatLng(Number(p.X1), Number(p.Y1), p.Projection1 ?? p.projection1)
+        // Same projection path as the Project map: per-point Projection1 with a
+        // Danish-default fallback so points are never silently dropped.
+        const latlng = pointToLatLng(p)
         if (!latlng) return null
         return { id: `${p.db_id ?? '?'}_${p.PointId}`, latlng, p }
       })
