@@ -25,10 +25,10 @@ SELECT
     A.[ProjectNo],
     A.[Title],
     ISNULL(B.[PointCount], 0) AS PointCount
-FROM [Projects] A
+FROM #DB#[Projects] A
 LEFT JOIN (
     SELECT [ProjectId], COUNT([ProjectId]) AS PointCount
-    FROM [Points]
+    FROM #DB#[Points]
     GROUP BY [ProjectId]
 ) B ON A.[ProjectId] = B.[ProjectId]
 ORDER BY A.[ProjectNo] ASC
@@ -47,8 +47,13 @@ pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Value>, Str
     let pairs: Vec<_> = databases
         .into_iter()
         .map(|d| {
+            // Issue #141: resolve the `#DB#` table-prefix placeholder.  Each
+            // multi-DB connection already targets the right database, so the
+            // prefix is empty for now — the hook makes the SQL portable and
+            // lets a user override use `#DB#[Points]` safely.
             let sql = lookup_sql(&folder, SECTION_PROJECT_LIST, &d.query_type)
-                .unwrap_or_else(|| PROJECTS_SQL.to_string());
+                .unwrap_or_else(|| PROJECTS_SQL.to_string())
+                .replace("#DB#", "");
             (d, sql)
         })
         .collect();
