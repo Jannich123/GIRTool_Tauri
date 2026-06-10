@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ProjectsPage from './ProjectsPage'
 import PointsPage from './PointsPage'
 import SelectionMap from './SelectionMap'
+
+// Session-scoped memory of the active subtab so leaving Data Selection and
+// returning reopens the same subtab (issue: restore where you left off).
+let savedSub = 'projects'
 
 // Issue #151 (M3) — Data Selection shell.  Merges the former top-level Projects
 // + Points tabs into one tab with subtabs [ Projects | Points | Map ].
@@ -21,7 +25,8 @@ const SUBTABS = [
 ]
 
 export default function DataSelectionPage({ setPage }) {
-  const [sub, setSub] = useState('projects')
+  const [sub, setSub] = useState(() => savedSub)
+  useEffect(() => { savedSub = sub }, [sub]) // remember across unmount/remount
 
   // Intercept in-tab navigation; everything else goes to the top-level router.
   const navigate = (target) => {
