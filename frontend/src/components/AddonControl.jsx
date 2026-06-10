@@ -55,14 +55,15 @@ export default function AddonControl({ target }) {
             <button style={btn} disabled={i === 0} onClick={() => move(a.id, -1)} title="Move up">↑</button>
             <button style={btn} disabled={i === list.length - 1} onClick={() => move(a.id, 1)} title="Move down">↓</button>
           </div>
-          <input
-            type="range" min="0" max="1" step="0.05"
-            value={typeof a.opacity === 'number' ? a.opacity : 1}
-            onChange={e => update(a.id, { opacity: parseFloat(e.target.value) })}
-            style={{ width: '100%' }}
-            title="Transparency"
-            disabled={a.visible === false}
-          />
+          {a.visible !== false && (
+            <input
+              type="range" min="0" max="1" step="0.05"
+              value={typeof a.opacity === 'number' ? a.opacity : 1}
+              onChange={e => update(a.id, { opacity: parseFloat(e.target.value) })}
+              style={{ width: '100%' }}
+              title="Transparency"
+            />
+          )}
         </div>
       ))}
     </div>
