@@ -34,6 +34,18 @@ const JUPITER_COLOR  = '#cbd5e1'
 // Map subtab) and returning restores the last view, loaded points, and toggles.
 const mapStore = { view: null, loaded: [], showJupiter: true, loadStatus: '', hiddenDbs: [] }
 
+// Ray-casting point-in-polygon for [lat, lng] coordinates (lng = x, lat = y).
+function pointInPolygonLatLng(ll, poly) {
+  const px = ll[1], py = ll[0]
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][1], yi = poly[i][0]
+    const xj = poly[j][1], yj = poly[j][0]
+    if (((yi > py) !== (yj > py)) && (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi)) inside = !inside
+  }
+  return inside
+}
+
 // Fit the view to the rendered DB points whenever their count changes.
 function FitBounds({ pts }) {
   const map = useMap()
@@ -276,46 +288,47 @@ export default function SelectionMap() {
   // each, run the spatial-intersect query, and render the results.  `merge`
   // adds to the loaded set (polygon "Add points"); otherwise it replaces it
   // (quick "Load in view").
-  async function loadFromLngLat(points) {
-    if (!points || points.length < 3) { setLoadStatus('need at least 3 points'); return }
-    setLoading(true); setLoadStatus('finding coordinate systems…')
+  // Shared spatial query: polygon vertices as [lng, lat] in EPSG:4326 →
+  // reproject into each DB's coordinate systems → points inside.
+  async function queryPointsInPolygon(points) {
+    const groups = await invoke('map_distinct_epsgs') // [{ db_id, epsgs }]
+    const requests = []
+    let skipped = 0
+    for (const g of (groups || [])) {
+      for (const epsg of (g.epsgs || [])) {
+        const proj = points.map(([lng, lat]) => reproject(lng, lat, 'EPSG:4326', `EPSG:${epsg}`))
+        if (proj.some(p => !p)) { skipped++; continue } // EPSG unknown to proj4
+        const ring = proj.map(p => `${p[0]} ${p[1]}`).join(', ')
+        const wkt = `POLYGON((${ring}, ${proj[0][0]} ${proj[0][1]}))`
+        requests.push({ db_id: g.db_id, epsg, wkt })
+      }
+    }
+    if (!requests.length) return { feats: [], skipped, noEpsg: true }
+    const rows = await invoke('map_polygon_points', { requests })
+    const feats = (rows || []).map(p => {
+      const latlng = toLatLng(Number(p.X1), Number(p.Y1), p.Projection1)
+      if (!latlng) return null
+      return { id: `${p.db_id ?? '?'}_${p.PointId}`, latlng, p }
+    }).filter(Boolean)
+    return { feats, skipped, noEpsg: false }
+  }
+
+  // Load available points inside the region (orange), de-duped against the map.
+  async function loadInside(points) {
+    if (!points || points.length < 3) return
+    setLoading(true); setLoadStatus('querying databases…')
     try {
-      const groups = await invoke('map_distinct_epsgs') // [{ db_id, epsgs }]
-      const requests = []
-      let skipped = 0
-      for (const g of (groups || [])) {
-        for (const epsg of (g.epsgs || [])) {
-          const proj = points.map(([lng, lat]) => reproject(lng, lat, 'EPSG:4326', `EPSG:${epsg}`))
-          if (proj.some(p => !p)) { skipped++; continue } // EPSG unknown to proj4
-          const ring = proj.map(p => `${p[0]} ${p[1]}`).join(', ')
-          const wkt = `POLYGON((${ring}, ${proj[0][0]} ${proj[0][1]}))`
-          requests.push({ db_id: g.db_id, epsg, wkt })
-        }
-      }
-      if (!requests.length) {
-        setLoadStatus('no usable coordinate systems found in the configured databases')
-        return
-      }
-      setLoadStatus('querying databases…')
-      const rows = await invoke('map_polygon_points', { requests })
-      const feats = (rows || []).map(p => {
-        const latlng = toLatLng(Number(p.X1), Number(p.Y1), p.Projection1)
-        if (!latlng) return null
-        return { id: `${p.db_id ?? '?'}_${p.PointId}`, latlng, p }
-      }).filter(Boolean)
-      // Always accumulate, but never add a point already on the map — neither an
-      // already-loaded available point nor a selected-project point (same
-      // db_id||PointId).  So repeated / overlapping loads don't duplicate.
+      const { feats, skipped, noEpsg } = await queryPointsInPolygon(points)
+      if (noEpsg) { setLoadStatus('no usable coordinate systems found in the configured databases'); return }
       const onMap = new Set([...loaded.map(f => f.id), ...pts.map(f => f.id)])
       const fresh = feats.filter(f => !onMap.has(f.id))
       setLoaded(prev => {
         const seen = new Set([...prev.map(f => f.id), ...pts.map(f => f.id)])
         return [...prev, ...feats.filter(f => !seen.has(f.id))]
       })
-      const dupes = feats.length - fresh.length
-      const dup  = dupes ? ` · ${dupes} already on map` : ''
+      const dup  = (feats.length - fresh.length) ? ` · ${feats.length - fresh.length} already on map` : ''
       const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
-      setLoadStatus(`${fresh.length} new point${fresh.length === 1 ? '' : 's'} added${dup}${skip}`)
+      setLoadStatus(`${fresh.length} new point${fresh.length === 1 ? '' : 's'} loaded${dup}${skip}`)
     } catch (e) {
       setLoadStatus(`error: ${String(e).slice(0, 140)}`)
     } finally {
@@ -323,11 +336,50 @@ export default function SelectionMap() {
     }
   }
 
+  // Select every DB point inside the region, adding their parent projects (Q-B2).
+  async function selectInside(points) {
+    if (!points || points.length < 3) return
+    setLoading(true); setLoadStatus('querying databases…')
+    try {
+      const { feats, skipped, noEpsg } = await queryPointsInPolygon(points)
+      if (noEpsg) { setLoadStatus('no usable coordinate systems found in the configured databases'); return }
+      const have = new Set((selectedPoints || []).map(p => `${p.db_id ?? '?'}_${p.PointId}`))
+      const toAdd = feats.filter(f => !have.has(f.id))
+      if (toAdd.length) {
+        setSelectedPoints([...(selectedPoints || []), ...toAdd.map(f => f.p)])
+        const projKeys = new Set((selectedProjects || []).map(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}`))
+        const newProjs = []
+        for (const f of toAdd) {
+          const pk = `${f.p.db_id ?? '?'}||${f.p.ProjectId}`
+          if (!projKeys.has(pk) && projIndex.current[pk]) { projKeys.add(pk); newProjs.push(projIndex.current[pk]) }
+        }
+        if (newProjs.length) setSelectedProjects([...(selectedProjects || []), ...newProjs])
+      }
+      const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
+      setLoadStatus(`${toAdd.length} point${toAdd.length === 1 ? '' : 's'} selected${skip}`)
+    } catch (e) {
+      setLoadStatus(`error: ${String(e).slice(0, 140)}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Remove every selected point inside the polygon (client-side, no query).
+  function removeInside(polyLatLng) {
+    const before = (selectedPoints || []).length
+    const kept = (selectedPoints || []).filter(p => {
+      const ll = pointToLatLng(p)
+      return ll ? !pointInPolygonLatLng(ll, polyLatLng) : true
+    })
+    setSelectedPoints(kept)
+    setLoadStatus(`${before - kept.length} point${before - kept.length === 1 ? '' : 's'} removed from selection`)
+  }
+
   // Quick load: every available point inside the current view rectangle.
   function loadInView() {
     if (!map) return
     const b = map.getBounds()
-    loadFromLngLat([
+    loadInside([
       [b.getWest(), b.getSouth()],
       [b.getEast(), b.getSouth()],
       [b.getEast(), b.getNorth()],
@@ -335,13 +387,16 @@ export default function SelectionMap() {
     ])
   }
 
-  // Finish the drawn polygon: load the available points inside it.
-  function finishPolygon() {
+  // Apply a finished polygon: load / select / remove the points inside it.
+  function applyPolygon(action) {
     if (vertices.length < 3) return
-    const ring4326 = vertices.map(([lat, lng]) => [lng, lat]) // [lat,lng] → [lng,lat]
+    const polyLatLng = vertices                              // [[lat, lng], …]
+    const ring4326 = vertices.map(([lat, lng]) => [lng, lat]) // → [lng, lat]
     setDrawing(false)
     setVertices([])
-    loadFromLngLat(ring4326)
+    if (action === 'load') loadInside(ring4326)
+    else if (action === 'select') selectInside(ring4326)
+    else if (action === 'remove') removeInside(polyLatLng)
   }
 
   return (
@@ -374,14 +429,20 @@ export default function SelectionMap() {
           </>
         ) : (
           <>
-            <button className="btn-primary" onClick={finishPolygon} disabled={vertices.length < 3 || loading}>
-              ✔ Add points{vertices.length ? ` (${vertices.length})` : ''}
+            <button className="btn-secondary" onClick={() => applyPolygon('load')} disabled={vertices.length < 3 || loading}>
+              ⬇ Load{vertices.length ? ` (${vertices.length})` : ''}
+            </button>
+            <button className="btn-primary" onClick={() => applyPolygon('select')} disabled={vertices.length < 3 || loading}>
+              ✚ Select inside
+            </button>
+            <button className="btn-secondary" onClick={() => applyPolygon('remove')} disabled={vertices.length < 3 || loading}>
+              ✖ Remove inside
             </button>
             <button className="btn-secondary" onClick={() => { setDrawing(false); setVertices([]) }} disabled={loading}>
-              ✖ Cancel
+              Cancel
             </button>
             <span className="hint" style={{ margin: 0 }}>
-              Click the map to drop polygon vertices (zoom/pan freely) · <strong>Add points</strong> finishes &amp; loads inside it
+              Click to drop vertices (zoom/pan freely), then <strong>Load</strong> / <strong>Select</strong> / <strong>Remove</strong> inside
             </span>
           </>
         )}
