@@ -136,6 +136,11 @@ pub struct AppState {
     /// connect / database-config changes; bypassed with `refresh: true`.
     pub projects_cache: Mutex<Option<Vec<serde_json::Value>>>,
 
+    /// Per-project points cache (issue #190): `(db_id||ProjectId)` → rows.
+    /// Lazily hydrated from `{folder}/points_cache.json`; only projects missing
+    /// from the cache hit the database.  None = not loaded yet for this folder.
+    pub points_cache: Mutex<Option<std::collections::HashMap<String, Vec<serde_json::Value>>>>,
+
     pub sp:        Mutex<SpState>,
 }
 

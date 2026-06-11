@@ -141,9 +141,11 @@ export function FilterProvider({ children }) {
   const lastRefreshKeyRef = useRef(refreshKey)
   useEffect(() => {
     const pk = (p) => `${p?.db_id ?? '?'}||${p?.ProjectId ?? ''}`
+    let force = false // pass refresh:true to bust the backend points cache (#190)
     if (lastRefreshKeyRef.current !== refreshKey) {
       lastRefreshKeyRef.current = refreshKey
       fetchedProjKeysRef.current = new Set() // force full re-pull on Refresh
+      force = true
     }
     if (!selectedProjects.length) {
       fetchedProjKeysRef.current = new Set()
@@ -154,7 +156,7 @@ export function FilterProvider({ children }) {
     if (!hasDb) {
       // Legacy rows without db_id (pre-#51 shape) — full refetch.
       const seq = ++legacySeqRef.current
-      invoke('get_points', { projectIds: selectedProjects.map(p => p.ProjectId) })
+      invoke('get_points', { projectIds: selectedProjects.map(p => p.ProjectId), refresh: force })
         .then(r => {
           if (seq !== legacySeqRef.current) return
           setAllPoints(Array.isArray(r) ? r : [])
@@ -177,6 +179,7 @@ export function FilterProvider({ children }) {
     toFetch.forEach(p => fetchedProjKeysRef.current.add(pk(p))) // double-fetch guard
     invoke('get_points', {
       projectIds: toFetch.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId })),
+      refresh: force,
     })
       .then(r => {
         setAllPoints(prev => {

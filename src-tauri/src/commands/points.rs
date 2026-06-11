@@ -102,11 +102,171 @@ pub struct ProjectIdEntry {
     pub project_id: String,
 }
 
+// ── Points disk cache (issue #190) ────────────────────────────────────────────
+//
+// `{folder}/points_cache.json` = { "db_id||ProjectId": [rows…] }.  JSON (not
+// CSV) so column types survive exactly.  Hydrated lazily into
+// `state.points_cache`; only projects missing from the cache hit the database,
+// which makes startup selection-restore and map project-adds instant across
+// app restarts.  `refresh: true` re-queries the requested projects.
+
+fn points_cache_path(folder: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(folder).join("points_cache.json")
+}
+
+fn read_points_cache(folder: &str) -> HashMap<String, Vec<Value>> {
+    if folder.is_empty() {
+        return HashMap::new();
+    }
+    std::fs::read(points_cache_path(folder))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<HashMap<String, Vec<Value>>>(&b).ok())
+        .unwrap_or_default()
+}
+
+fn write_points_cache(folder: &str, cache: &HashMap<String, Vec<Value>>) {
+    if folder.is_empty() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(cache) {
+        let _ = std::fs::write(points_cache_path(folder), text);
+    }
+}
+
+fn value_str(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
 #[tauri::command]
 pub async fn get_points(
     project_ids: ProjectIdsArg,
+    refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Value>, String> {
+    let force = refresh.unwrap_or(false);
+    let folder = state.output_folder().unwrap_or_default();
+
+    // ── Per-DB form: cache-aware path (issue #190) ───────────────────────────
+    if let ProjectIdsArg::PerDb(entries) = &project_ids {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Hydrate the memory cache from disk once per session/folder.
+        {
+            let mut guard = state.points_cache.lock().unwrap();
+            if guard.is_none() {
+                *guard = Some(read_points_cache(&folder));
+            }
+            if force {
+                if let Some(map) = guard.as_mut() {
+                    for e in entries {
+                        map.remove(&format!("{}||{}", e.db_id, e.project_id));
+                    }
+                }
+            }
+        }
+
+        // Partition requested projects into cached / missing.
+        let mut out: Vec<Value> = Vec::new();
+        let mut missing: Vec<&ProjectIdEntry> = Vec::new();
+        {
+            let guard = state.points_cache.lock().unwrap();
+            let map = guard.as_ref().unwrap();
+            for e in entries {
+                match map.get(&format!("{}||{}", e.db_id, e.project_id)) {
+                    Some(rows) => out.extend(rows.iter().cloned()),
+                    None => missing.push(e),
+                }
+            }
+        }
+        if missing.is_empty() {
+            return Ok(out);
+        }
+
+        // Query ONLY the missing projects.
+        let databases = active_databases(&state);
+        if databases.is_empty() {
+            // Can't fetch the missing ones — return whatever the cache had.
+            if !out.is_empty() {
+                return Ok(out);
+            }
+            return Err("No database connection configured.".into());
+        }
+        let mut per_db: HashMap<String, Vec<String>> = HashMap::new();
+        for e in &missing {
+            let safe = sanitise_id(&e.project_id)?;
+            per_db.entry(e.db_id.clone()).or_default().push(safe);
+        }
+        let mut tasks: Vec<(crate::state::DbConfig, String)> = Vec::new();
+        for db in databases {
+            let id = db.effective_id();
+            let Some(ids) = per_db.get(&id) else { continue };
+            if ids.is_empty() { continue }
+            let template = lookup_sql(&folder, SECTION_POINTS_LIST, &db.query_type)
+                .unwrap_or_else(|| POINTS_SQL.to_string())
+                .replace("#DB#", "");
+            let sql = template.replace("{ids}", &ids.join(", "));
+            tasks.push((db, sql));
+        }
+
+        let mut errors = Vec::new();
+        let fresh = if tasks.is_empty() {
+            Vec::new()
+        } else {
+            fan_out_query_per_db(tasks, &mut errors).await
+        };
+        for e in &errors {
+            tracing::warn!("get_points: a database query failed: {e}");
+        }
+        if out.is_empty() && fresh.is_empty() && !errors.is_empty() {
+            let first = errors.first()
+                .and_then(|e| e.get("error"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| "All databases failed.".into());
+            return Err(first);
+        }
+
+        // Cache the fresh results per (db, project) — but never for DBs whose
+        // query failed (so they retry next time).
+        let failed: std::collections::HashSet<String> = errors
+            .iter()
+            .filter_map(|e| e.get("db_id").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        {
+            let mut grouped: HashMap<String, Vec<Value>> = HashMap::new();
+            for row in &fresh {
+                let key = format!(
+                    "{}||{}",
+                    value_str(row.get("db_id")),
+                    value_str(row.get("ProjectId")),
+                );
+                grouped.entry(key).or_default().push(row.clone());
+            }
+            let mut guard = state.points_cache.lock().unwrap();
+            let map = guard.as_mut().unwrap();
+            for e in &missing {
+                if failed.contains(&e.db_id) {
+                    continue;
+                }
+                let key = format!("{}||{}", e.db_id, e.project_id);
+                map.insert(key.clone(), grouped.remove(&key).unwrap_or_default());
+            }
+            // Persist the snapshot (best-effort, off the async runtime).
+            let snapshot = map.clone();
+            let folder_c = folder.clone();
+            tokio::task::spawn_blocking(move || write_points_cache(&folder_c, &snapshot));
+        }
+
+        out.extend(fresh);
+        return Ok(out);
+    }
+
+    // ── Legacy flat form: original uncached path ─────────────────────────────
     let databases = active_databases(&state);
     if databases.is_empty() {
         return Err("No database connection configured.".into());
@@ -128,12 +288,7 @@ pub async fn get_points(
                 per_db.insert(db.effective_id(), safe.clone());
             }
         }
-        ProjectIdsArg::PerDb(entries) => {
-            for e in entries {
-                let safe = sanitise_id(&e.project_id)?;
-                per_db.entry(e.db_id).or_default().push(safe);
-            }
-        }
+        ProjectIdsArg::PerDb(_) => unreachable!("handled above"),
     }
 
     // Build (DbConfig, sql) pairs — each DB resolves its own SQL template via

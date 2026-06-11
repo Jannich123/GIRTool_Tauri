@@ -258,7 +258,8 @@ pub async fn set_output_folder(folder: String, state: State<'_, AppState>) -> Re
         return Err("Folder path is empty.".into());
     }
     *state.output_folder.lock().unwrap() = folder.clone();
-    *state.projects_cache.lock().unwrap() = None; // new workspace → new list (#185)
+    *state.projects_cache.lock().unwrap() = None;
+    *state.points_cache.lock().unwrap() = None; // new workspace → new list (#185)
     record_recent_folder(&folder);
     Ok(())
 }
@@ -289,6 +290,7 @@ pub async fn connect(
 
     // Connection target may have changed — drop the session project cache (#185).
     *state.projects_cache.lock().unwrap() = None;
+    *state.points_cache.lock().unwrap() = None;
 
     // odbc-api is sync — move it off the async runtime.
     let probe = cfg.clone();
@@ -720,6 +722,7 @@ pub async fn save_databases(
 ) -> Result<(), String> {
     // Database set changed — drop the session project cache (#185).
     *state.projects_cache.lock().unwrap() = None;
+    *state.points_cache.lock().unwrap() = None;
     let databases = body.databases;
     if databases.is_empty() {
         return Err("At least one database is required.".into());
@@ -817,6 +820,7 @@ pub async fn connect_all_databases(
 ) -> Result<Vec<TestResult>, String> {
     // Connection set may change — drop the session project cache (#185).
     *state.projects_cache.lock().unwrap() = None;
+    *state.points_cache.lock().unwrap() = None;
     // Issue #107: ALWAYS prefer the disk copy when a folder is set.  The
     // legacy `connect` command pushes a `{ id: "primary", … }` entry into
     // `state.databases` as a bridge to the multi-DB world; without this
