@@ -16,6 +16,7 @@ pub mod charts;
 pub mod map;
 pub mod map_query;
 pub mod map_addons;
+pub mod cpt;
 pub mod boundaries;
 pub mod session;
 pub mod windows;

@@ -7,6 +7,7 @@ const NAV_MAIN = [
   { key: 'dataSelection', label: '🧭 Data Selection' },
   { key: 'strata',    label: '🪨 Strata'            },
   { key: 'data',      label: '📊 Data'              },
+  { key: 'cpt',       label: '🧮 CPT – Calc'        },
   { key: 'grouping',  label: '🏷️ Grouping'          },
   { key: 'colors',    label: '🎨 Colors & Symbols'  },
   { key: 'map',        label: '🗺️ Project map'        },
