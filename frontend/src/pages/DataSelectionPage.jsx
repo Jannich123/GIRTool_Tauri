@@ -8,7 +8,7 @@ import SelectionMap from './SelectionMap'
 let savedSub = 'projects'
 
 // Issue #151 (M3) — Data Selection shell.  Merges the former top-level Projects
-// + Points tabs into one tab with subtabs [ Projects | Points | Map ].
+// + Points tabs into one tab with subtabs [ Map | Projects | Points ] (#200).
 // Projects/Points are the existing pages embedded unchanged; the Map subtab is
 // the new selection map (#153, M4.1+).
 //
@@ -19,9 +19,9 @@ let savedSub = 'projects'
 // leaves the tab.
 
 const SUBTABS = [
+  { key: 'map',      label: '🗺️ Map' },
   { key: 'projects', label: '📁 Projects' },
   { key: 'points',   label: '📍 Points' },
-  { key: 'map',      label: '🗺️ Map' },
 ]
 
 export default function DataSelectionPage({ setPage }) {
