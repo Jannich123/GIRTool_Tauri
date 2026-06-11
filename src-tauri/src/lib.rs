@@ -108,6 +108,7 @@ pub fn run() {
             commands::cpt::save_cpt_point_data,
             commands::cpt::load_cpt_layer_data,
             commands::cpt::save_cpt_layer_data,
+            commands::cpt::open_cpt_settings_xlsx,
             commands::cpt::run_cpt_calc,
             commands::download::list_datasheets,
             commands::download::read_datasheet,

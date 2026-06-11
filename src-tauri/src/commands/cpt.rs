@@ -22,7 +22,8 @@ use std::sync::OnceLock;
 use calamine::{open_workbook_auto, Data, Reader as XlsxReader};
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook};
 use serde_json::{json, Map, Value};
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::commands::download::{
     datasheets_dir, persist_datasheet_meta, read_existing_datasheet, write_datasheet,
@@ -41,90 +42,93 @@ pub struct CatEntry {
     pub unit: &'static str,
     pub round: i32, // default decimals; -1 = text column (no rounding)
     pub default_selected: bool,
+    /// Calculation reference (formula + source) shown in the picker — mirrors
+    /// the reference spreadsheet's "Calculation reference" column (issue #198).
+    pub reference: &'static str,
 }
 
 macro_rules! cat {
-    ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr) => {
-        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: false }
+    ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr, $f:expr) => {
+        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: false, reference: $f }
     };
-    ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr, sel) => {
-        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: true }
+    ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr, $f:expr, sel) => {
+        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: true, reference: $f }
     };
 }
 
 pub static CATALOG: &[CatEntry] = &[
     // ── Basic Plots ──
-    cat!("Basic Plots", "Water Level", "Groundwater table elevation mapped per point", "m", 2),
-    cat!("Basic Plots", "Corr_Depth", "Depth corrected to ground/seabed level", "m", 3),
-    cat!("Basic Plots", "qc/Pa", "Cone resistance normalised by atmospheric pressure", "-", 3),
-    cat!("Basic Plots", "u0", "Hydrostatic pore pressure", "kPa", 2),
-    cat!("Basic Plots", "qt", "Corrected cone resistance", "MPa", 4),
-    cat!("Basic Plots", "Rf", "Friction ratio fs/qt", "%", 2),
-    cat!("Basic Plots", "UW", "Unit weight (manual per layer or Robertson correlation)", "kN/m³", 2, sel),
-    cat!("Basic Plots", "UW_eff", "Per-interval effective overburden contribution", "kPa", 3),
-    cat!("Basic Plots", "Sigma_eff_v0", "Effective vertical stress (cumulative)", "kPa", 2),
-    cat!("Basic Plots", "Sigma_t_v0", "Total vertical stress", "kPa", 2),
-    cat!("Basic Plots", "Stress_Ratio", "σv0 / σ'v0", "-", 3),
-    cat!("Basic Plots", "Delta_u", "Excess pore pressure u2 − u0", "kPa", 2),
-    cat!("Basic Plots", "qn", "Net cone resistance qt − σv0", "kPa", 2),
+    cat!("Basic Plots", "Water Level", "Groundwater table elevation mapped per point", "m", 2, "User input (CPT point data)"),
+    cat!("Basic Plots", "Corr_Depth", "Depth corrected to ground/seabed level", "m", 3, "GSB − Level (or Depth)"),
+    cat!("Basic Plots", "qc/Pa", "Cone resistance normalised by atmospheric pressure", "-", 3, "qc / Pa, Pa = 100 kPa"),
+    cat!("Basic Plots", "u0", "Hydrostatic pore pressure", "kPa", 2, "(WL − Level)·γw below the water table"),
+    cat!("Basic Plots", "qt", "Corrected cone resistance", "MPa", 4, "qt = qc + u2·(1−a) — CPT Guide 2022"),
+    cat!("Basic Plots", "Rf", "Friction ratio fs/qt", "%", 2, "Rf = fs/qt·100"),
+    cat!("Basic Plots", "UW", "Unit weight (manual per layer or Robertson correlation)", "kN/m³", 2, "γ/γw = 0.27·logRf + 0.36·log(qt/Pa) + 1.236 — Robertson & Cabal (2010)", sel),
+    cat!("Basic Plots", "UW_eff", "Per-interval effective overburden contribution", "kPa", 3, "ΔLevel · γ' per interval"),
+    cat!("Basic Plots", "Sigma_eff_v0", "Effective vertical stress (cumulative)", "kPa", 2, "σ'v0 = Σ UW_eff per borehole"),
+    cat!("Basic Plots", "Sigma_t_v0", "Total vertical stress", "kPa", 2, "σv0 = σ'v0 + u0"),
+    cat!("Basic Plots", "Stress_Ratio", "σv0 / σ'v0", "-", 3, "σv0 / σ'v0"),
+    cat!("Basic Plots", "Delta_u", "Excess pore pressure u2 − u0", "kPa", 2, "Δu = u2 − u0"),
+    cat!("Basic Plots", "qn", "Net cone resistance qt − σv0", "kPa", 2, "qn = qt − σv0"),
     // ── Normalized Plots ──
-    cat!("Normalized Plots", "Qt_n", "Normalised cone resistance (n = 1)", "-", 2),
-    cat!("Normalized Plots", "Fr", "Normalised friction ratio", "%", 3),
-    cat!("Normalized Plots", "Bq", "Pore pressure parameter", "-", 3),
-    cat!("Normalized Plots", "n", "Stress exponent (iterative)", "-", 3),
-    cat!("Normalized Plots", "Cn", "Stress normalisation factor", "-", 3),
-    cat!("Normalized Plots", "Qtn", "Normalised cone resistance (iterative n)", "-", 2),
-    cat!("Normalized Plots", "Ic", "Soil behaviour type index (iterative)", "-", 3),
-    cat!("Normalized Plots", "Ligne", "Robertson 2010 Qt–Fr grid row", "-", 0),
-    cat!("Normalized Plots", "Colonne", "Robertson 2010 Qt–Fr grid column", "-", 0),
-    cat!("Normalized Plots", "Zone", "Robertson 2010 Qt–Fr zone (1–9)", "-", 0),
-    cat!("Normalized Plots", "SBTn", "Soil behaviour type (Qt–Fr)", "text", -1),
-    cat!("Normalized Plots", "Ligne_2", "Robertson 2010 Qt–Bq grid row", "-", 0),
-    cat!("Normalized Plots", "Colonne_2", "Robertson 2010 Qt–Bq grid column", "-", 0),
-    cat!("Normalized Plots", "Zone_2", "Robertson 2010 Qt–Bq zone (1–9)", "-", 0),
-    cat!("Normalized Plots", "Type_2", "Soil behaviour type (Qt–Bq)", "text", -1),
-    cat!("Normalized Plots", "Robertson 2010", "Outside Robertson 2010 graph? 0 = no, 1 = yes", "-", 0),
-    cat!("Normalized Plots", "Robertson 1986", "Outside Robertson 1986 graph? 0 = no, 1 = yes", "-", 0),
-    cat!("Normalized Plots", "Schmertmann 1978", "Outside Schmertmann 1978 graph? 0 = no, 1 = yes", "-", 0),
+    cat!("Normalized Plots", "Qt_n", "Normalised cone resistance (n = 1)", "-", 2, "Qt = (qt − σv0)/σ'v0 — Robertson (1990)"),
+    cat!("Normalized Plots", "Fr", "Normalised friction ratio", "%", 3, "Fr = fs/(qt − σv0)·100 — Robertson (1990)"),
+    cat!("Normalized Plots", "Bq", "Pore pressure parameter", "-", 3, "Bq = Δu/qn — Robertson (1990)"),
+    cat!("Normalized Plots", "n", "Stress exponent (iterative)", "-", 3, "n = 0.381·Ic + 0.05·(σ'v0/Pa) − 0.15 ≤ 1 — Robertson (2009)"),
+    cat!("Normalized Plots", "Cn", "Stress normalisation factor", "-", 3, "Cn = (Pa/σ'v0)^n — Robertson (2009)"),
+    cat!("Normalized Plots", "Qtn", "Normalised cone resistance (iterative n)", "-", 2, "Qtn = ((qt − σv0)/Pa)·Cn — Robertson (2009)"),
+    cat!("Normalized Plots", "Ic", "Soil behaviour type index (iterative)", "-", 3, "Ic = √[(3.47 − logQtn)² + (logFr + 1.22)²] — Robertson (2009)"),
+    cat!("Normalized Plots", "Ligne", "Robertson 2010 Qt–Fr grid row", "-", 0, "Robertson (2010) Qt–Fr chart lookup"),
+    cat!("Normalized Plots", "Colonne", "Robertson 2010 Qt–Fr grid column", "-", 0, "Robertson (2010) Qt–Fr chart lookup"),
+    cat!("Normalized Plots", "Zone", "Robertson 2010 Qt–Fr zone (1–9)", "-", 0, "Robertson (2010) SBTn zones"),
+    cat!("Normalized Plots", "SBTn", "Soil behaviour type (Qt–Fr)", "text", -1, "Robertson (2010) zone description"),
+    cat!("Normalized Plots", "Ligne_2", "Robertson 2010 Qt–Bq grid row", "-", 0, "Robertson (2010) Qt–Bq chart lookup"),
+    cat!("Normalized Plots", "Colonne_2", "Robertson 2010 Qt–Bq grid column", "-", 0, "Robertson (2010) Qt–Bq chart lookup"),
+    cat!("Normalized Plots", "Zone_2", "Robertson 2010 Qt–Bq zone (1–9)", "-", 0, "Robertson (2010) SBTn zones"),
+    cat!("Normalized Plots", "Type_2", "Soil behaviour type (Qt–Bq)", "text", -1, "Robertson (2010) zone description"),
+    cat!("Normalized Plots", "Robertson 2010", "Outside Robertson 2010 graph? 0 = no, 1 = yes", "-", 0, "0.1 ≤ Fr ≤ 10 and 1 ≤ Qtn ≤ 1000"),
+    cat!("Normalized Plots", "Robertson 1986", "Outside Robertson 1986 graph? 0 = no, 1 = yes", "-", 0, "0 ≤ Rf ≤ 8 and 0.1 ≤ qc ≤ 100"),
+    cat!("Normalized Plots", "Schmertmann 1978", "Outside Schmertmann 1978 graph? 0 = no, 1 = yes", "-", 0, "0 ≤ Rf ≤ 7 and 0.1 ≤ qc ≤ 100"),
     // ── Estimation Plots ──
-    cat!("Estimation Plots", "Nkt", "Cone factor (manual per layer or selected method)", "-", 2, sel),
-    cat!("Estimation Plots", "su_qt", "Undrained shear strength from qt and Nkt", "kPa", 2),
-    cat!("Estimation Plots", "N_Delta_u", "Nkt·Bq", "-", 2),
-    cat!("Estimation Plots", "Su_Delta_u", "Undrained shear strength from Δu", "kPa", 2),
-    cat!("Estimation Plots", "su(Rem)", "Remoulded shear strength (= fs)", "kPa", 2),
-    cat!("Estimation Plots", "St", "Sensitivity su/su(rem) for Ic < 2.6", "-", 2),
-    cat!("Estimation Plots", "su_Ratio", "Undrained strength ratio", "-", 3),
-    cat!("Estimation Plots", "su(Rem)_Ratio", "Remoulded strength ratio", "-", 3),
-    cat!("Estimation Plots", "OCR_2013", "Overconsolidation ratio (Robertson 2013)", "-", 2),
-    cat!("Estimation Plots", "OCR_2009", "Overconsolidation ratio (Robertson 2009)", "-", 2),
-    cat!("Estimation Plots", "m", "Yield stress exponent (Mayne)", "-", 3),
-    cat!("Estimation Plots", "sigma_eff_p", "Preconsolidation stress (Mayne 1992)", "kPa", 2),
-    cat!("Estimation Plots", "OCR_1992", "Overconsolidation ratio (Mayne 1992)", "-", 2),
-    cat!("Estimation Plots", "alpha_E", "Young's modulus factor", "-", 3),
-    cat!("Estimation Plots", "Es", "Drained Young's modulus (sands)", "MPa", 2),
-    cat!("Estimation Plots", "alpha_M", "Constrained modulus factor", "-", 3),
-    cat!("Estimation Plots", "Ms", "1D constrained modulus", "MPa", 2),
-    cat!("Estimation Plots", "Ms/qc", "Constrained modulus over qc", "-", 2),
-    cat!("Estimation Plots", "Dr (Baldi, 1986)", "Relative density (Baldi 1986)", "-", 3),
-    cat!("Estimation Plots", "Dr (Kulhawy & Mayne, 1990)", "Relative density (Kulhawy & Mayne 1990)", "-", 3),
-    cat!("Estimation Plots", "Dr (Bray and Olaya, 2022)", "Relative density (Bray & Olaya 2022)", "-", 3),
-    cat!("Estimation Plots", "K_c", "Grain characteristic correction (Robertson 2022)", "-", 2),
-    cat!("Estimation Plots", "Qtn,cs", "Clean-sand equivalent normalised resistance", "-", 2),
-    cat!("Estimation Plots", "Psi", "State parameter", "-", 3),
-    cat!("Estimation Plots", "Phi_Rob_Cam", "Peak friction angle (Robertson & Campanella)", "°", 1),
-    cat!("Estimation Plots", "Phi_Kul_May", "Peak friction angle (Kulhawy & Mayne)", "°", 1),
-    cat!("Estimation Plots", "Phi_Jeff_Been", "Peak friction angle (Jefferies & Been)", "°", 1),
-    cat!("Estimation Plots", "Phi_Mayne_2006", "Friction angle clays/silts (Mayne 2006)", "°", 1),
-    cat!("Estimation Plots", "K_0_OCR_2013", "In-situ stress ratio from OCR 2013", "-", 3),
-    cat!("Estimation Plots", "K_0_OCR_2009", "In-situ stress ratio from OCR 2009", "-", 3),
-    cat!("Estimation Plots", "K_0_OCR_1992", "In-situ stress ratio from OCR 1992", "-", 3),
-    cat!("Estimation Plots", "alpha_vs", "Shear-wave velocity factor", "-", 2),
-    cat!("Estimation Plots", "Vs", "Shear wave velocity", "m/s", 1),
-    cat!("Estimation Plots", "Vs1", "Stress-normalised shear wave velocity", "m/s", 1),
-    cat!("Estimation Plots", "G_0", "Small-strain shear modulus", "MPa", 2),
-    cat!("Estimation Plots", "K_G", "Small-strain rigidity index", "-", 1),
-    cat!("Estimation Plots", "k", "Hydraulic conductivity (from Ic)", "m/s", 8),
-    cat!("Estimation Plots", "N60", "SPT N60 equivalent (Robertson 2012)", "-", 1),
+    cat!("Estimation Plots", "Nkt", "Cone factor (manual per layer or selected method)", "-", 2, "Mayne & Peuchen (2022): Nkt = 10.5 − 4.6·ln(Bq + 0.1) · Robertson (2012): Nkt = 10.5 + 7·logFr", sel),
+    cat!("Estimation Plots", "su_qt", "Undrained shear strength from qt and Nkt", "kPa", 2, "su = (qt − σv0)/Nkt"),
+    cat!("Estimation Plots", "N_Delta_u", "Nkt·Bq", "-", 2, "NΔu = Nkt·Bq"),
+    cat!("Estimation Plots", "Su_Delta_u", "Undrained shear strength from Δu", "kPa", 2, "su = Δu/NΔu"),
+    cat!("Estimation Plots", "su(Rem)", "Remoulded shear strength (= fs)", "kPa", 2, "su(rem) ≈ fs — CPT Guide 2022"),
+    cat!("Estimation Plots", "St", "Sensitivity su/su(rem) for Ic < 2.6", "-", 2, "St = su/su(rem) — CPT Guide 2022"),
+    cat!("Estimation Plots", "su_Ratio", "Undrained strength ratio", "-", 3, "σ'v0·Qt/Nkt ratio form"),
+    cat!("Estimation Plots", "su(Rem)_Ratio", "Remoulded strength ratio", "-", 3, "su(rem)/σ'v0"),
+    cat!("Estimation Plots", "OCR_2013", "Overconsolidation ratio (Robertson 2013)", "-", 2, "OCR = (2.625 + 1.75·logFr)^−1.25 · Qt^1.25 — Robertson (2013)"),
+    cat!("Estimation Plots", "OCR_2009", "Overconsolidation ratio (Robertson 2009)", "-", 2, "OCR = 0.25·Qt^1.25 — Robertson (2009)"),
+    cat!("Estimation Plots", "m", "Yield stress exponent (Mayne)", "-", 3, "m = 1 − 0.28/(1 + (Ic/2.65)^25)… — Mayne et al. (2009)"),
+    cat!("Estimation Plots", "sigma_eff_p", "Preconsolidation stress (Mayne 1992)", "kPa", 2, "σ'p = 0.33·(qt − σv0)^m — Mayne (1992)"),
+    cat!("Estimation Plots", "OCR_1992", "Overconsolidation ratio (Mayne 1992)", "-", 2, "OCR = σ'p/σ'v0 — Mayne (1992)"),
+    cat!("Estimation Plots", "alpha_E", "Young's modulus factor", "-", 3, "αE = 0.015·10^(0.55·Ic + 1.68) — Robertson (2009)"),
+    cat!("Estimation Plots", "Es", "Drained Young's modulus (sands)", "MPa", 2, "E = αE·(qt − σv0) — Robertson (2009)"),
+    cat!("Estimation Plots", "alpha_M", "Constrained modulus factor", "-", 3, "αM per Ic/Qt — Robertson (2009)"),
+    cat!("Estimation Plots", "Ms", "1D constrained modulus", "MPa", 2, "M = αM·(qt − σv0) — Robertson (2009)"),
+    cat!("Estimation Plots", "Ms/qc", "Constrained modulus over qc", "-", 2, "M/qc"),
+    cat!("Estimation Plots", "Dr (Baldi, 1986)", "Relative density (Baldi 1986)", "-", 3, "Dr = (1/2.41)·ln(Qtn/15.7) — Baldi et al. (1986)"),
+    cat!("Estimation Plots", "Dr (Kulhawy & Mayne, 1990)", "Relative density (Kulhawy & Mayne 1990)", "-", 3, "Dr = √(Qtn/350) — Kulhawy & Mayne (1990)"),
+    cat!("Estimation Plots", "Dr (Bray and Olaya, 2022)", "Relative density (Bray & Olaya 2022)", "-", 3, "Dr = √(Qtn·Ic^3.5/1500) for 1.6 < Ic ≤ 2.6 — Bray & Olaya (2022)"),
+    cat!("Estimation Plots", "K_c", "Grain characteristic correction (Robertson 2022)", "-", 2, "Kc = 15 − 14/(1 + (Ic/2.95)^11) — Robertson (2022)"),
+    cat!("Estimation Plots", "Qtn,cs", "Clean-sand equivalent normalised resistance", "-", 2, "Qtn,cs = Kc·Qtn — Robertson & Wride (1998)"),
+    cat!("Estimation Plots", "Psi", "State parameter", "-", 3, "ψ = 0.56 − 0.33·log(Qtn,cs) — Robertson (2010)"),
+    cat!("Estimation Plots", "Phi_Rob_Cam", "Peak friction angle (Robertson & Campanella)", "°", 1, "tanφ' = (1/2.68)·[log(qc/σ'v0) + 0.29] — Robertson & Campanella (1983)"),
+    cat!("Estimation Plots", "Phi_Kul_May", "Peak friction angle (Kulhawy & Mayne)", "°", 1, "φ' = 17.6 + 11·log(Qtn) — Kulhawy & Mayne (1990)"),
+    cat!("Estimation Plots", "Phi_Jeff_Been", "Peak friction angle (Jefferies & Been)", "°", 1, "φ' = 3 + 15.84·log(Qtn,cs) − 26.88 — Jefferies & Been (2006)"),
+    cat!("Estimation Plots", "Phi_Mayne_2006", "Friction angle clays/silts (Mayne 2006)", "°", 1, "φ' = 29.5·Bq^0.121·(0.256 + 0.336·Bq + logQt) — Mayne (2006)"),
+    cat!("Estimation Plots", "K_0_OCR_2013", "In-situ stress ratio from OCR 2013", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — Mayne & Kulhawy (1982)"),
+    cat!("Estimation Plots", "K_0_OCR_2009", "In-situ stress ratio from OCR 2009", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — Mayne & Kulhawy (1982)"),
+    cat!("Estimation Plots", "K_0_OCR_1992", "In-situ stress ratio from OCR 1992", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — Mayne & Kulhawy (1982)"),
+    cat!("Estimation Plots", "alpha_vs", "Shear-wave velocity factor", "-", 2, "αvs = 10^(0.55·Ic + 1.68) — Robertson (2009)"),
+    cat!("Estimation Plots", "Vs", "Shear wave velocity", "m/s", 1, "Vs = √(αvs·(qt − σv0)/100) — Robertson (2009)"),
+    cat!("Estimation Plots", "Vs1", "Stress-normalised shear wave velocity", "m/s", 1, "Vs1 = Vs·(100/σ'v0)^0.25"),
+    cat!("Estimation Plots", "G_0", "Small-strain shear modulus", "MPa", 2, "G0 = ρ·Vs² — CPT Guide 2022"),
+    cat!("Estimation Plots", "K_G", "Small-strain rigidity index", "-", 1, "KG = (G0/qn)·Qtn^0.75 — Robertson (2016)"),
+    cat!("Estimation Plots", "k", "Hydraulic conductivity (from Ic)", "m/s", 8, "k = 10^(0.952 − 3.04·Ic) for 1 < Ic ≤ 3.27 — Robertson (2010)"),
+    cat!("Estimation Plots", "N60", "SPT N60 equivalent (Robertson 2012)", "-", 1, "(qt/Pa)/(10^(1.1268 − 0.2817·Ic)) — Robertson (2012)"),
 ];
 
 // ── Robertson 2010 grids (embedded; identical files to the python oracle) ─────
@@ -824,13 +828,21 @@ fn cpt_dir(folder: &str) -> PathBuf {
     PathBuf::from(folder).join("cpt calc settings")
 }
 
+// Issue #198: DB + Project columns identify each borehole in Excel; the reader
+// below matches by HEADER NAME, so files written with the old 4-column layout
+// still load fine.
 const POINT_HEADERS: &[&str] = &[
     "PointNo",
+    "DB",
+    "Project",
     "Insert Cone Area Ratio [-]",
     "Ground/Seabed Level [m]",
     "Insert Water Level [m]",
 ];
 const LAYER_HEADERS: &[&str] = &["Strata", "Unit weight [kN/m^3]", "Nkt [-]"];
+
+/// Columns that must stay text on read (labels — never numeric-parsed).
+const TEXT_HEADERS: &[&str] = &["PointNo", "DB", "Project", "Strata"];
 
 fn cell_str(c: &Data) -> String {
     match c {
@@ -858,20 +870,38 @@ fn cell_f64(c: &Data) -> Option<f64> {
 }
 
 /// Read a simple header+rows xlsx into row objects keyed by the given headers.
+/// Columns are matched by HEADER NAME (issue #198), so column order — and
+/// files written before new columns existed — don't matter.  Headers listed in
+/// `TEXT_HEADERS` stay strings; everything else is numeric-parsed.
 fn read_simple_xlsx(path: &PathBuf, headers: &[&str]) -> Vec<Map<String, Value>> {
     let mut out = Vec::new();
     let Ok(mut wb) = open_workbook_auto(path) else { return out };
     let Some(name) = wb.sheet_names().first().cloned() else { return out };
     let Ok(range) = wb.worksheet_range(&name) else { return out };
-    for row in range.rows().skip(1) {
+
+    let mut rows_iter = range.rows();
+    let Some(header_row) = rows_iter.next() else { return out };
+    // Actual column index per requested header (case-insensitive name match).
+    let col_of: Vec<Option<usize>> = headers
+        .iter()
+        .map(|h| {
+            header_row
+                .iter()
+                .position(|c| cell_str(c).eq_ignore_ascii_case(h))
+        })
+        .collect();
+
+    for row in rows_iter {
         let mut obj = Map::new();
         let mut any = false;
-        for (j, h) in headers.iter().enumerate() {
-            let cell = row.get(j);
+        for (hi, h) in headers.iter().enumerate() {
+            let cell = col_of[hi].and_then(|j| row.get(j));
+            let is_text = TEXT_HEADERS.iter().any(|t| t.eq_ignore_ascii_case(h));
             let v = match cell {
                 Some(c) => {
-                    if j == 0 {
-                        Value::String(cell_str(c))
+                    if is_text {
+                        let s = cell_str(c);
+                        if s.is_empty() { Value::Null } else { Value::String(s) }
                     } else {
                         match cell_f64(c) {
                             Some(f) => json!(f),
@@ -881,7 +911,7 @@ fn read_simple_xlsx(path: &PathBuf, headers: &[&str]) -> Vec<Map<String, Value>>
                 }
                 None => Value::Null,
             };
-            if !matches!(v, Value::Null) && !(matches!(&v, Value::String(s) if s.is_empty())) {
+            if !matches!(v, Value::Null) {
                 any = true;
             }
             obj.insert((*h).to_string(), v);
@@ -939,6 +969,7 @@ pub fn get_cpt_catalog() -> Value {
         .map(|c| json!({
             "group": c.group, "name": c.name, "desc": c.desc,
             "unit": c.unit, "round": c.round, "default_selected": c.default_selected,
+            "reference": c.reference,
         }))
         .collect::<Vec<_>>())
 }
@@ -993,6 +1024,31 @@ pub async fn save_cpt_point_data(rows: Vec<Value>, state: State<'_, AppState>) -
     let dir = cpt_dir(&folder);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create cpt settings dir: {e}"))?;
     write_simple_xlsx(&dir.join("cpt_point_data.xlsx"), POINT_HEADERS, &rows)
+}
+
+/// Open one of the cpt-calc settings workbooks in the OS xlsx handler (issue
+/// #198) — `which` = "point" | "layer".  Creates an empty header-only file
+/// first when it doesn't exist yet, so the user always gets a template.
+#[tauri::command]
+pub async fn open_cpt_settings_xlsx(
+    which: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let dir = cpt_dir(&folder);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create cpt settings dir: {e}"))?;
+    let (file, headers): (&str, &[&str]) = match which.as_str() {
+        "layer" => ("cpt_layer_data.xlsx", LAYER_HEADERS),
+        _       => ("cpt_point_data.xlsx", POINT_HEADERS),
+    };
+    let path = dir.join(file);
+    if !path.exists() {
+        write_simple_xlsx(&path, headers, &[])?;
+    }
+    app.opener()
+        .open_path(path.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|e| format!("Failed to open {file}: {e}"))
 }
 
 #[tauri::command]
@@ -1065,9 +1121,9 @@ pub async fn run_cpt_calc(fname: String, state: State<'_, AppState>) -> Result<V
     let mut gsb_level = HashMap::new();
     for r in &point_rows {
         let Some(pn) = r.get(POINT_HEADERS[0]).and_then(|v| v.as_str()).map(str::to_string) else { continue };
-        if let Some(a) = r.get(POINT_HEADERS[1]).and_then(|v| v.as_f64()) { area_ratio.insert(pn.clone(), a); }
-        if let Some(g) = r.get(POINT_HEADERS[2]).and_then(|v| v.as_f64()) { gsb_level.insert(pn.clone(), g); }
-        if let Some(w) = r.get(POINT_HEADERS[3]).and_then(|v| v.as_f64()) { water_level.insert(pn.clone(), w); }
+        if let Some(a) = r.get(POINT_HEADERS[3]).and_then(|v| v.as_f64()) { area_ratio.insert(pn.clone(), a); }
+        if let Some(g) = r.get(POINT_HEADERS[4]).and_then(|v| v.as_f64()) { gsb_level.insert(pn.clone(), g); }
+        if let Some(w) = r.get(POINT_HEADERS[5]).and_then(|v| v.as_f64()) { water_level.insert(pn.clone(), w); }
     }
     let mut gamma_soil = HashMap::new();
     let mut nkt_values = HashMap::new();

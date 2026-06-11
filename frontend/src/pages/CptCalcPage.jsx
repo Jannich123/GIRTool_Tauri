@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 
@@ -17,6 +17,8 @@ import { useApp } from '../context/AppContext'
 
 const PH = {
   point: 'PointNo',
+  db: 'DB',
+  proj: 'Project',
   area: 'Insert Cone Area Ratio [-]',
   gsb: 'Ground/Seabed Level [m]',
   water: 'Insert Water Level [m]',
@@ -24,7 +26,7 @@ const PH = {
 const LH = { layer: 'Strata', uw: 'Unit weight [kN/m^3]', nkt: 'Nkt [-]' }
 
 export default function CptCalcPage() {
-  const { selectedProjects, selectedPoints, connection } = useApp()
+  const { selectedProjects, connection } = useApp()
   const hasFolder = !!connection?.output_folder
   const [sub, setSub] = useState('calc')
 
@@ -58,6 +60,11 @@ export default function CptCalcPage() {
     if (next.has(name)) next.delete(name); else next.add(name)
     patchConfig({ selected: [...next] })
   }
+  const toggleGroup = (entries, on) => {
+    const next = new Set(selectedSet)
+    entries.forEach(c => { if (on) next.add(c.name); else next.delete(c.name) })
+    patchConfig({ selected: [...next] })
+  }
   const setRound = (name, raw) => {
     const v = parseInt(raw, 10)
     patchConfig({ round: { ...(config?.round || {}), [name]: isFinite(v) ? v : 0 } })
@@ -80,38 +87,59 @@ export default function CptCalcPage() {
     }
   }
 
-  // ── Point data (Subtab 2, Q-E4a) ────────────────────────────────────────────
+  // ── Point data (Subtab 2, Q-E4a; #198: sourced from the CPTData sheet) ─────
   const [pointRows, setPointRows] = useState([])
   const pointSaveTimer = useRef(null)
   const [pointMsg, setPointMsg] = useState('')
 
-  useEffect(() => {
+  const loadPointData = useCallback(async () => {
     if (!hasFolder) return
-    invoke('load_cpt_point_data')
-      .then(saved => {
-        const savedRows = Array.isArray(saved) ? saved : []
-        const byNo = new Map(savedRows.map(r => [String(r[PH.point] ?? ''), r]))
-        // One row per CPT point in the selection (CPT types preferred; falls
-        // back to every selected point when none are typed CPT).
-        const cpts = (selectedPoints || []).filter(p => String(p.PointType || '').toUpperCase().includes('CPT'))
-        const basis = cpts.length ? cpts : (selectedPoints || [])
-        const seen = new Set()
-        const rows = []
-        for (const p of basis) {
-          const no = String(p.PointNo ?? '')
-          if (!no || seen.has(no)) continue
-          seen.add(no)
-          const existing = byNo.get(no)
-          rows.push(existing || { [PH.point]: no, [PH.area]: 0.8, [PH.gsb]: null, [PH.water]: 0 })
-          byNo.delete(no)
-        }
-        // Keep rows from the xlsx that aren't in the current selection.
-        for (const r of byNo.values()) rows.push(r)
-        setPointRows(rows)
-        setPointMsg(rows.length ? '' : 'No points selected — pick CPT points in Data Selection first.')
-      })
-      .catch(() => {})
-  }, [hasFolder, selectedPoints]) // eslint-disable-line react-hooks/exhaustive-deps
+    try {
+      const [saved, sheet, projects] = await Promise.all([
+        invoke('load_cpt_point_data').catch(() => []),
+        invoke('read_datasheet', { fname: 'CPTData' }).catch(() => null),
+        invoke('list_projects').catch(() => []),
+      ])
+      if (!sheet || !Array.isArray(sheet.columns)) {
+        setPointRows([])
+        setPointMsg('CPTData.xlsx not found — download CPT data first (Data → Download menu).')
+        return
+      }
+      const ci = (n) => sheet.columns.findIndex(c => String(c).toLowerCase() === n)
+      const iPn = ci('pointno'), iDb = ci('db_id'), iProj = ci('projectid')
+      if (iPn < 0) {
+        setPointRows([])
+        setPointMsg('CPTData.xlsx has no PointNo column.')
+        return
+      }
+      const projNo = new Map((projects || []).map(pr => [`${pr.db_id ?? '?'}||${pr.ProjectId}`, pr.ProjectNo]))
+      const byNo = new Map((Array.isArray(saved) ? saved : []).map(r => [String(r[PH.point] ?? ''), r]))
+      const seen = new Set()
+      const rows = []
+      for (const r of (sheet.rows || [])) {
+        const no = String(r[iPn] ?? '').trim()
+        if (!no || no === 'No Data' || seen.has(no)) continue
+        seen.add(no)
+        const db = iDb >= 0 ? String(r[iDb] ?? '') : ''
+        const pid = iProj >= 0 ? String(r[iProj] ?? '') : ''
+        const ex = byNo.get(no) || {}
+        rows.push({
+          [PH.point]: no,
+          [PH.db]: db,
+          [PH.proj]: projNo.get(`${db || '?'}||${pid}`) ?? (ex[PH.proj] ?? ''),
+          [PH.area]: ex[PH.area] ?? 0.8,
+          [PH.gsb]: ex[PH.gsb] ?? null,
+          [PH.water]: ex[PH.water] ?? 0,
+        })
+      }
+      setPointRows(rows)
+      setPointMsg(rows.length ? '' : 'No CPT points found in CPTData.xlsx.')
+    } catch (e) {
+      setPointMsg(String(e).slice(0, 160))
+    }
+  }, [hasFolder, connection?.output_folder]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadPointData() }, [loadPointData])
 
   function editPoint(i, key, raw) {
     setPointRows(prev => {
@@ -129,7 +157,7 @@ export default function CptCalcPage() {
   const layerSaveTimer = useRef(null)
   const [newLayer, setNewLayer] = useState('')
 
-  useEffect(() => {
+  const loadLayerData = useCallback(() => {
     if (!hasFolder) return
     Promise.all([
       invoke('load_cpt_layer_data').catch(() => []),
@@ -149,6 +177,18 @@ export default function CptCalcPage() {
       setLayerRows(rows)
     })
   }, [hasFolder, connection?.output_folder]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadLayerData() }, [loadLayerData])
+
+  // 📂 Open the settings workbooks in Excel (#198): persist the current rows
+  // first so the file matches the UI, then open it.
+  async function openSettingsXlsx(which) {
+    try {
+      if (which === 'point') await invoke('save_cpt_point_data', { rows: pointRows })
+      else await invoke('save_cpt_layer_data', { rows: layerRows })
+    } catch { /* best-effort — open anyway */ }
+    invoke('open_cpt_settings_xlsx', { which }).catch(() => {})
+  }
 
   function persistLayers(next) {
     clearTimeout(layerSaveTimer.current)
@@ -236,29 +276,54 @@ export default function CptCalcPage() {
             Inputs come from the <strong>CPT point data</strong> / <strong>CPT layer data</strong> subtabs.
           </p>
 
-          {groups.map(([g, entries]) => (
+          {groups.map(([g, entries]) => {
+            const allSel = entries.every(c => selectedSet.has(c.name))
+            const someSel = entries.some(c => selectedSet.has(c.name))
+            return (
             <div key={g} style={{ marginBottom: '1rem' }}>
-              <h4 style={{ margin: '0 0 .35rem' }}>{g}</h4>
-              <table className="data-table" style={{ maxWidth: 980 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem', margin: '0 0 .35rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={allSel}
+                  ref={el => { if (el) el.indeterminate = !allSel && someSel }}
+                  onChange={e => toggleGroup(entries, e.target.checked)}
+                  title={`Select / deselect all ${g} columns`}
+                />
+                <h4 style={{ margin: 0 }}>{g}</h4>
+                <span className="hint" style={{ fontWeight: 400 }}>
+                  ({entries.filter(c => selectedSet.has(c.name)).length}/{entries.length} selected)
+                </span>
+              </label>
+              <table className="data-table" style={{ maxWidth: 1280 }}>
                 <thead>
                   <tr>
                     <th style={{ width: 36 }} />
-                    <th style={{ width: 230 }}>Column</th>
+                    <th style={{ width: 220 }}>Column</th>
                     <th>Description</th>
-                    <th style={{ width: 70 }}>Unit</th>
-                    <th style={{ width: 70 }}>Round</th>
+                    <th style={{ width: 64 }}>Unit</th>
+                    <th style={{ width: 64 }}>Round</th>
+                    <th style={{ width: 360 }}>Calculation reference</th>
                   </tr>
                 </thead>
                 <tbody>
                   {entries.map(c => (
-                    <tr key={c.name}>
+                    <tr
+                      key={c.name}
+                      onClick={() => toggleCol(c.name)}
+                      className={selectedSet.has(c.name) ? 'selected' : ''}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <td style={{ textAlign: 'center' }}>
-                        <input type="checkbox" checked={selectedSet.has(c.name)} onChange={() => toggleCol(c.name)} />
+                        <input
+                          type="checkbox" checked={selectedSet.has(c.name)}
+                          onChange={() => toggleCol(c.name)}
+                          onClick={e => e.stopPropagation()}
+                        />
                       </td>
                       <td><code style={{ fontSize: '.82em' }}>{c.name}</code></td>
                       <td style={{ fontSize: '.85em' }}>{c.desc}</td>
                       <td>{c.unit}</td>
-                      <td>
+                      <td onClick={e => e.stopPropagation()}>
                         {c.round >= 0 ? (
                           <input
                             type="text" inputMode="numeric"
@@ -268,28 +333,42 @@ export default function CptCalcPage() {
                           />
                         ) : <span className="hint">text</span>}
                       </td>
+                      <td style={{ fontSize: '.78em', color: '#475569' }}>{c.reference}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
       {/* ── Subtab 2: per-point inputs ── */}
       {sub === 'points' && (
-        <div style={{ maxWidth: 760 }}>
-          <p className="hint" style={{ marginTop: 0 }}>
-            One row per CPT point in the selection. Saved to{' '}
-            <code>cpt calc settings/cpt_point_data.xlsx</code> (editable in Excel too).
-          </p>
+        <div style={{ maxWidth: 920 }}>
+          <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
+            <button className="btn-secondary btn-sm" onClick={() => openSettingsXlsx('point')}
+                    title="Save the table below to cpt_point_data.xlsx and open it in Excel">
+              📂 Open in Excel
+            </button>
+            <button className="btn-secondary btn-sm" onClick={loadPointData}
+                    title="Re-read cpt_point_data.xlsx and the CPTData sheet">
+              ↻ Reload from Excel
+            </button>
+            <span className="hint" style={{ margin: 0 }}>
+              One row per point found in <code>CPTData.xlsx</code> · saved to{' '}
+              <code>cpt calc settings/cpt_point_data.xlsx</code>
+            </span>
+          </div>
           {pointMsg && <p className="hint">{pointMsg}</p>}
           {pointRows.length > 0 && (
             <table className="data-table">
               <thead>
                 <tr>
                   <th>PointNo</th>
+                  <th style={{ width: 90 }}>DB</th>
+                  <th style={{ width: 130 }}>Project</th>
                   <th style={{ width: 170 }}>Cone Area Ratio [-]</th>
                   <th style={{ width: 190 }}>Ground/Seabed Level [m]</th>
                   <th style={{ width: 160 }}>Water Level [m]</th>
@@ -299,6 +378,15 @@ export default function CptCalcPage() {
                 {pointRows.map((r, i) => (
                   <tr key={`${r[PH.point]}_${i}`}>
                     <td>{r[PH.point]}</td>
+                    <td>
+                      <code style={{
+                        fontSize: '.75rem', padding: '0.08rem 0.5rem', background: '#eef2ff',
+                        color: '#3730a3', border: '1px solid #c7d2fe', borderRadius: 999, whiteSpace: 'nowrap',
+                      }}>
+                        {r[PH.db] || '?'}
+                      </code>
+                    </td>
+                    <td>{r[PH.proj]}</td>
                     <td>{numInput(r[PH.area], v => editPoint(i, PH.area, v))}</td>
                     <td>{numInput(r[PH.gsb], v => editPoint(i, PH.gsb, v))}</td>
                     <td>{numInput(r[PH.water], v => editPoint(i, PH.water, v))}</td>
@@ -327,6 +415,16 @@ export default function CptCalcPage() {
             Manual cells win; blank cells fall back to the estimate (UW: Robertson correlation;
             Nkt: the method above). Saved to <code>cpt calc settings/cpt_layer_data.xlsx</code>.
           </p>
+          <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
+            <button className="btn-secondary btn-sm" onClick={() => openSettingsXlsx('layer')}
+                    title="Save the table below to cpt_layer_data.xlsx and open it in Excel">
+              📂 Open in Excel
+            </button>
+            <button className="btn-secondary btn-sm" onClick={loadLayerData}
+                    title="Re-read cpt_layer_data.xlsx and the strata layers">
+              ↻ Reload from Excel
+            </button>
+          </div>
           <table className="data-table">
             <thead>
               <tr>
