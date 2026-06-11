@@ -104,6 +104,14 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] "Use projects →" now only prunes points of deselected projects (no longer clears the whole point selection).
 - [ ] Opening a pop-out never blanks the main window's selection.
 
+### 6g. Explicit-only point selection (#207)
+
+- [ ] Select a project, pick a FEW points on the map, then untick the project in the Projects list → the point selection keeps only what was picked (drops the removed project's picks) — never balloons to "all points".
+- [ ] Select a project WITHOUT picking any points → the point selection stays **empty** (Data header shows no "N points selected").
+- [ ] "Use points →" with nothing ticked selects **nothing** (the old behaviour selected everything).
+- [ ] Pick points on the MAP only, restart the app → the map picks are restored (they now persist to points.xlsx).
+- [ ] points.xlsx in the output folder mirrors the live selection after any change (map pick, table tick, project removal).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

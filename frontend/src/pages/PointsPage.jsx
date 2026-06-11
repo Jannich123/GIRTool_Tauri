@@ -192,9 +192,14 @@ export default function PointsPage({ setPage }) {
   }
 
   // ── points.xlsx auto-load on first fetch (issue #77) ─────────────────────
+  // #207: only a COLD-START fallback.  The in-app (cross-window synced)
+  // selection is the live truth — when one exists, re-ticking rows from the
+  // possibly-stale file would resurrect an old selection, which live-apply
+  // would then promote back into the app on the next interaction.
   useEffect(() => {
     if (xlsxAutoLoadedRef.current || points.length === 0) return
     xlsxAutoLoadedRef.current = true
+    if (selectedPointsRef.current.length) return
     invoke('load_points_xlsx')
       .then(rows => {
         if (!Array.isArray(rows) || rows.length === 0) return
@@ -247,12 +252,12 @@ export default function PointsPage({ setPage }) {
 
   // Select from the CONVERTED view (issue #147) so the persisted points.xlsx
   // and the in-app selection both carry the project's target-CRS coordinates.
+  // #207: the selection is exactly the ticked rows — the old "nothing ticked
+  // → take everything" fallback silently turned a project-only selection into
+  // an all-points selection (and wrote it to points.xlsx, which then kept
+  // resurrecting it).
   function currentSelection() {
-    const anyChecked = Object.values(checked).some(Boolean)
-    if (anyChecked) {
-      return viewPoints.filter(p => checked[ptKey(p)])
-    }
-    return viewPoints
+    return viewPoints.filter(p => checked[ptKey(p)])
   }
 
   async function savePointsXlsx(selectedRows) {
