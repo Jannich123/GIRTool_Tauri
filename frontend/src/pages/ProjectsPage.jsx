@@ -217,21 +217,25 @@ export default function ProjectsPage({ setPage }) {
       .catch(err => console.warn('load_projects_xlsx failed:', err))
   }, [projects])
 
-  // Auto-save: whenever the in-app selection changes (after a user
-  // interaction), rewrite `projects.xlsx` in the output folder so the file
-  // is always in sync with the top table (#81).  300 ms debounce so a burst
-  // of select-all clicks coalesces into one write.
+  // Ref mirror for the live-apply content compare (read at timer fire time).
+  const selectedProjectsRef = useRef(selectedProjects)
+  useEffect(() => { selectedProjectsRef.current = selectedProjects }, [selectedProjects])
+
+  // Auto-save + live-apply: whenever the table selection changes (after a
+  // user interaction), rewrite `projects.xlsx` (#81) AND push the ticked rows
+  // into the app-wide selection (#205) — the tables ARE the selection, no
+  // "Use projects →" press needed, so the map and other windows follow every
+  // tick.  300 ms debounce so a burst of clicks coalesces into one write.
   useEffect(() => {
     if (!userInteractedRef.current) return
     const t = setTimeout(() => {
-      const rows = projects
-        .filter(p => checked[projKey(p)])
-        .map(p => ({
-          db_id:     p.db_id ?? '',
-          ProjectId: p.ProjectId,
-          ProjectNo: p.ProjectNo ?? '',
-          Title:     p.Title ?? '',
-        }))
+      const selObjs = projects.filter(p => checked[projKey(p)])
+      const rows = selObjs.map(p => ({
+        db_id:     p.db_id ?? '',
+        ProjectId: p.ProjectId,
+        ProjectNo: p.ProjectNo ?? '',
+        Title:     p.Title ?? '',
+      }))
       invoke('save_projects_xlsx', { selected: rows })
         .then(() => setXlsxMsg({
           kind: 'ok',
@@ -241,6 +245,16 @@ export default function ProjectsPage({ setPage }) {
           console.warn('auto save_projects_xlsx failed:', err)
           setXlsxMsg({ kind: 'err', text: `Auto-save failed: ${err}` })
         })
+      // Live-apply — skipped when content-identical (e.g. the checked re-seed
+      // that follows a cross-window update) so apply/broadcast can't echo.
+      const newKeys = selObjs.map(projKey).join('\n')
+      const curKeys = selectedProjectsRef.current.map(projKey).join('\n')
+      if (newKeys !== curKeys) {
+        setSelectedProjects(selObjs)
+        // Points of deselected projects leave the selection with them.
+        const keep = new Set(selObjs.map(projKey))
+        setSelectedPoints(prev => prev.filter(pt => keep.has(projKey(pt))))
+      }
     }, 300)
     return () => clearTimeout(t)
   }, [checked, projects])
@@ -275,7 +289,11 @@ export default function ProjectsPage({ setPage }) {
   function confirm() {
     const selected = projects.filter(p => checked[projKey(p)])
     setSelectedProjects(selected)
-    setSelectedPoints([])
+    // #205: prune points of deselected projects instead of clearing all —
+    // selection now applies live on every tick, so a blanket clear here would
+    // wipe a point selection the user just made elsewhere (e.g. on the map).
+    const keep = new Set(selected.map(projKey))
+    setSelectedPoints(prev => prev.filter(pt => keep.has(projKey(pt))))
     // Issue #95: projects.xlsx is the SOLE persistence path for the project
     // selection (auto-saved on every checkbox change via the useEffect
     // above).  GIRTool_settings.json no longer carries selectedProjects.

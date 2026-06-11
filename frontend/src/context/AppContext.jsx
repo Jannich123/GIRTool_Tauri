@@ -142,33 +142,64 @@ export function AppProvider({ children }) {
   const [winLabel] = useState(windowLabel)
   const applyingRemoteRef = useRef(false)  // suppress re-broadcast of a remote apply
   const syncMountedRef    = useRef(false)  // suppress the initial-mount broadcast
+  const hadSelectionRef   = useRef(false)  // this window has held a non-empty selection
+  const gotSnapshotRef    = useRef(false)  // a remote snapshot has been applied here
+  const lastSyncKeysRef   = useRef(null)   // key-form of the last broadcast/applied snapshot
   const selectedPointsRef = useRef(selectedPoints)
   useEffect(() => { selectedPointsRef.current = selectedPoints }, [selectedPoints])
+
+  // Content identity for echo suppression: cheap keys, not full objects, so a
+  // content-identical re-apply (e.g. a page pushing back what it just
+  // received) never re-broadcasts.  Project order matters (selectedProjects[0]
+  // is the active project) — don't sort.
+  const syncKeys = (projects, points) => JSON.stringify({
+    pr: (projects || []).map(p => `${p?.db_id ?? '?'}||${p?.ProjectId ?? ''}`),
+    pt: (points   || []).map(p => `${p?.db_id ?? '?'}||${p?.PointId   ?? ''}`),
+  })
 
   useEffect(() => {
     let offUpdate = null
     let offRequest = null
-    listen('selection:updated', (e) => {
-      const p = e?.payload
-      if (!p || p.src === winLabel) return
-      applyingRemoteRef.current = true
-      setSelectedProjects(Array.isArray(p.projects) ? p.projects : [])
-      setSelectedPoints(Array.isArray(p.points) ? p.points : [])
-    }).then(fn => { offUpdate = fn })
-    listen('selection:sync-request', (e) => {
-      if (!e?.payload || e.payload === winLabel) return
-      // Only windows actually holding a selection reply — an empty window must
-      // not "sync" the requester back to nothing.
-      if (!selectedProjectsRef.current.length && !selectedPointsRef.current.length) return
-      emit('selection:updated', {
-        src:      winLabel,
-        projects: selectedProjectsRef.current,
-        points:   selectedPointsRef.current,
-      })
-    }).then(fn => { offRequest = fn })
-    // Pull the live selection from any already-open window.
-    emit('selection:sync-request', winLabel)
+    let retryTimer = null
+    let disposed = false
+    ;(async () => {
+      try {
+        offUpdate = await listen('selection:updated', (e) => {
+          const p = e?.payload
+          if (!p || p.src === winLabel) return
+          gotSnapshotRef.current = true
+          applyingRemoteRef.current = true
+          const projects = Array.isArray(p.projects) ? p.projects : []
+          const points   = Array.isArray(p.points)   ? p.points   : []
+          lastSyncKeysRef.current = syncKeys(projects, points)
+          if (projects.length || points.length) hadSelectionRef.current = true
+          setSelectedProjects(projects)
+          setSelectedPoints(points)
+        })
+        offRequest = await listen('selection:sync-request', (e) => {
+          if (!e?.payload || e.payload === winLabel) return
+          // Only windows actually holding a selection reply — an empty window
+          // must not "sync" the requester back to nothing.
+          if (!selectedProjectsRef.current.length && !selectedPointsRef.current.length) return
+          emit('selection:updated', {
+            src:      winLabel,
+            projects: selectedProjectsRef.current,
+            points:   selectedPointsRef.current,
+          })
+        })
+      } catch { return /* event API unavailable (plain browser) */ }
+      if (disposed) return
+      // Both listeners are registered — only NOW is it safe to ask for the
+      // live selection (an instant reply can no longer be missed).  One retry
+      // covers a busy peer.
+      emit('selection:sync-request', winLabel)
+      retryTimer = setTimeout(() => {
+        if (!disposed && !gotSnapshotRef.current) emit('selection:sync-request', winLabel)
+      }, 700)
+    })()
     return () => {
+      disposed = true
+      clearTimeout(retryTimer)
       if (typeof offUpdate  === 'function') offUpdate()
       if (typeof offRequest === 'function') offRequest()
     }
@@ -183,8 +214,15 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!syncMountedRef.current) { syncMountedRef.current = true; return }
     if (applyingRemoteRef.current) { applyingRemoteRef.current = false; return }
+    if (selectedProjects.length || selectedPoints.length) hadSelectionRef.current = true
+    // A window that never held a selection must not broadcast "empty" — a
+    // freshly opened pop-out would wipe every other window's selection.
+    if (!hadSelectionRef.current) return
     clearTimeout(broadcastTimerRef.current)
     broadcastTimerRef.current = setTimeout(() => {
+      const keys = syncKeys(selectedProjectsRef.current, selectedPointsRef.current)
+      if (keys === lastSyncKeysRef.current) return  // identical content — no echo
+      lastSyncKeysRef.current = keys
       emit('selection:updated', {
         src:      winLabel,
         projects: selectedProjectsRef.current,
