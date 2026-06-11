@@ -95,6 +95,15 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] No ping-pong: making one change produces ONE update in the other window, and points.xlsx is not rewritten by the receiving window unless you interact there.
 - [ ] Two pop-outs + main: a change in any window reaches both others.
 
+### 6f. Pop-out session attach + live selection apply (#205)
+
+- [ ] Pop out any page (↗) → it attaches to the running session immediately (no stall): Projects/Points lists populate, coordinate system + map addons load.
+- [ ] Pop out while a selection exists → the selection shows up right away (handshake no longer racy; one automatic retry after 0.7 s).
+- [ ] **Untick a project row — no button press** → ~0.5 s later the own-window map drops its points AND every other window follows. Same for re-ticking.
+- [ ] Untick/tick point rows — same live behaviour everywhere.
+- [ ] "Use projects →" now only prunes points of deselected projects (no longer clears the whole point selection).
+- [ ] Opening a pop-out never blanks the main window's selection.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

@@ -276,12 +276,23 @@ export default function PointsPage({ setPage }) {
     }
   }
 
-  // Auto-save (issue #190, mirrors projects.xlsx): persist the ticked rows to
-  // points.xlsx 300 ms after any user-driven selection change.
+  // Ref mirror for the live-apply content compare (read at timer fire time).
+  const selectedPointsRef = useRef(selectedPoints)
+  useEffect(() => { selectedPointsRef.current = selectedPoints }, [selectedPoints])
+
+  // Auto-save + live-apply (issue #190 + #205): persist the ticked rows to
+  // points.xlsx 300 ms after any user-driven change, AND push them into the
+  // app-wide selection — the table IS the selection, no "Use points →" press
+  // needed, so the map and other windows follow every tick.
   useEffect(() => {
     if (!userInteractedRef.current) return
     const t = setTimeout(async () => {
       const rows = viewPoints.filter(p => checked[ptKey(p)])
+      // Live-apply — skipped when content-identical (e.g. the checked re-seed
+      // that follows a cross-window update) so apply/broadcast can't echo.
+      const newKeys = rows.map(ptKey).join('\n')
+      const curKeys = selectedPointsRef.current.map(ptKey).join('\n')
+      if (newKeys !== curKeys) setSelectedPoints(rows)
       const r = await savePointsXlsx(rows)
       setXlsxMsg(r.ok
         ? { ok: true, text: `Auto-saved ${r.count} point${r.count === 1 ? '' : 's'} to points.xlsx` }

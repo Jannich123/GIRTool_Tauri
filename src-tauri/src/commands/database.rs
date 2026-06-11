@@ -869,6 +869,13 @@ pub async fn connect_all_databases(
             Err(message) => out.push(TestResult { id, ok: false, message }),
         }
     }
+    // A working multi-DB session flips the session-live flag too — it used to
+    // be set only by the legacy `connect`, so `db_status` reported
+    // connected=false on multi-DB sessions and pop-out windows could not
+    // detect the already-running session (#205).
+    if out.iter().any(|r| r.ok) {
+        *state.connected.lock().unwrap() = true;
+    }
     Ok(out)
 }
 

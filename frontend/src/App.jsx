@@ -57,20 +57,38 @@ function Shell() {
   // opened against the already-connected session of the main window.
   const [projectOpen, setProjectOpen] = useState(!isMainWindow)
 
-  // Pop-out windows reconnect silently to the saved session on mount (they
-  // don't show the startup screen).
+  // Pop-out windows attach silently to the running session on mount (they
+  // don't show the startup screen).  The Rust backend is SHARED across
+  // windows, so when the main window has already opened a project the only
+  // thing to do is flip this window's local `connected` flag (#205) — the old
+  // code re-ran the legacy single-DB connect here, which could stall on an
+  // unreachable default server, clobber the shared backend state and clear
+  // its caches.  The reconnect chain below only runs in the rare case where
+  // the backend is NOT live, and mirrors openProject (#188: folder-based
+  // multi-DB first, legacy single-DB last).
   useEffect(() => {
     if (isMainWindow) return
-    invoke('db_status').then(r => {
-      if (!r.configured) return
-      const saved = localStorage.getItem('db_settings')
-      if (!saved) return
-      const s = JSON.parse(saved)
-      invoke('connect', {
-        server: s.server, database: s.database, authMethod: s.auth_method,
-        username: s.username, password: s.password, outputFolder: s.output_folder,
-      }).then(() => setConnected(true)).catch(() => {})
-    }).catch(() => {})
+    ;(async () => {
+      try {
+        const st = await invoke('db_status').catch(() => null)
+        if (st?.connected) { setConnected(true); return }
+        const saved = localStorage.getItem('db_settings')
+        if (!saved) return
+        const s = JSON.parse(saved)
+        if (s.output_folder) {
+          try { await invoke('set_output_folder', { folder: s.output_folder }) } catch { /* keep going */ }
+          try {
+            const results = await invoke('connect_all_databases')
+            if (Array.isArray(results) && results.some(r => r && r.ok)) { setConnected(true); return }
+          } catch { /* fall through to legacy */ }
+        }
+        await invoke('connect', {
+          server: s.server, database: s.database, authMethod: s.auth_method,
+          username: s.username, password: s.password, outputFolder: s.output_folder,
+        })
+        setConnected(true)
+      } catch { /* stay disconnected — pages show their usual hint */ }
+    })()
   }, [])
 
   // Open a project folder: persist it, connect every DB, restore the saved
