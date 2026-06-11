@@ -57,7 +57,16 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] **Sanity-check a few values against the old GIRTool** on the same data (the real-world acceptance test, plan Q-E1).
 - ⚠ One reference quirk to be aware of (faithfully ported, pinned by fixtures): the reference **overwrites a manually-entered Unit weight with the correlation wherever Rf/qt are valid** (manual only wins where the correlation can't compute) — Nkt manual values win always. If UW-manual-should-win is what you want, say so and Claude will change engine + oracle deliberately.
 
-## 6. Quick regression sweep
+## 6. Performance: project-list cache + fast map select (#185)
+
+- [ ] **Projects tab**: first open after app start queries the DB once; switching away and back is **instant** (served from the session cache). `↻ Refresh list` re-queries.
+- [ ] **`projects_list.csv`** appears in the project folder after the first load — full list incl. Danish characters correct in Excel (semicolon-delimited, UTF-8 BOM).
+- [ ] Offline fallback: with the DB unreachable, the Projects tab still shows the CSV snapshot.
+- [ ] **Map click-select is fast now**: selecting an available (hollow) point adds it ± its project with only that ONE project's points fetched (previously it re-pulled everything or stalled on groups/strata). **Deselecting stays instant.**
+- [ ] Selecting a point from a NEW project now also populates that project's other points (blue) on the map — previously they could silently never load.
+- [ ] Sidebar `↺ Refresh data` still forces a full re-pull of points.
+
+## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
 - [ ] Points table + points.xlsx still show converted coordinates (target CRS).

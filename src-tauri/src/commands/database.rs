@@ -270,6 +270,9 @@ pub async fn connect(
         output_folder: output_folder.unwrap_or_default(),
     };
 
+    // Connection target may have changed — drop the session project cache (#185).
+    *state.projects_cache.lock().unwrap() = None;
+
     // odbc-api is sync — move it off the async runtime.
     let probe = cfg.clone();
     let probe_result = tokio::task::spawn_blocking(move || {
@@ -698,6 +701,8 @@ pub async fn save_databases(
     body: SaveDatabasesBody,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // Database set changed — drop the session project cache (#185).
+    *state.projects_cache.lock().unwrap() = None;
     let databases = body.databases;
     if databases.is_empty() {
         return Err("At least one database is required.".into());
@@ -793,6 +798,8 @@ pub async fn test_database(cfg: DbConfig) -> Result<TestResult, String> {
 pub async fn connect_all_databases(
     state: State<'_, AppState>,
 ) -> Result<Vec<TestResult>, String> {
+    // Connection set may change — drop the session project cache (#185).
+    *state.projects_cache.lock().unwrap() = None;
     // Issue #107: ALWAYS prefer the disk copy when a folder is set.  The
     // legacy `connect` command pushes a `{ id: "primary", … }` entry into
     // `state.databases` as a bridge to the multi-DB world; without this

@@ -37,7 +37,7 @@ function deserializeFilters(payload) {
 const FilterContext = createContext(null)
 
 export function FilterProvider({ children }) {
-  const { selectedProjects, setStrataLayersList } = useApp()
+  const { selectedProjects, setStrataLayersList, refreshKey } = useApp()
   const projectId = selectedProjects[0]?.ProjectId
 
   const [filterOpen,       setFilterOpen]       = useState(false)
@@ -106,13 +106,8 @@ export function FilterProvider({ children }) {
       lastSavedFiltersRef.current = null
       return
     }
-    // Issue #48: forward db_id when the project list has it, so the backend
-    // routes the query to the correct database.  Legacy projects (no db_id)
-    // use the flat-list form which fans out across every active DB.
-    const ids = selectedProjects.some(p => p?.db_id)
-      ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
-      : selectedProjects.map(p => p.ProjectId)
-    invoke('get_points', { projectIds: ids }).then(r => setAllPoints(r)).catch(() => {})
+    // Points are maintained incrementally by the dedicated effect below
+    // (issue #185) — this effect only handles the heavier per-project data.
     fetchGroupData()
     fetchStrataLayers()
 
@@ -134,6 +129,69 @@ export function FilterProvider({ children }) {
       setCheckedStrataPrimary(null); setCheckedStrataSecondary(null)
     })
   }, [projectId])   // eslint-disable-line
+
+  // ── Incremental allPoints maintenance (issue #185) ─────────────────────────
+  // Previously every change refetched (or worse, skipped fetching) the points
+  // of ALL selected projects.  Now: ADDING a project fetches only that
+  // project's points and appends them; REMOVING one prunes locally — instant.
+  // This is what makes map click-select fast.  The ↺ Refresh data button
+  // (refreshKey bump) clears the fetched set so everything re-pulls fresh.
+  const fetchedProjKeysRef = useRef(new Set())
+  const legacySeqRef = useRef(0)
+  const lastRefreshKeyRef = useRef(refreshKey)
+  useEffect(() => {
+    const pk = (p) => `${p?.db_id ?? '?'}||${p?.ProjectId ?? ''}`
+    if (lastRefreshKeyRef.current !== refreshKey) {
+      lastRefreshKeyRef.current = refreshKey
+      fetchedProjKeysRef.current = new Set() // force full re-pull on Refresh
+    }
+    if (!selectedProjects.length) {
+      fetchedProjKeysRef.current = new Set()
+      setAllPoints([])
+      return
+    }
+    const hasDb = selectedProjects.every(p => p?.db_id)
+    if (!hasDb) {
+      // Legacy rows without db_id (pre-#51 shape) — full refetch.
+      const seq = ++legacySeqRef.current
+      invoke('get_points', { projectIds: selectedProjects.map(p => p.ProjectId) })
+        .then(r => {
+          if (seq !== legacySeqRef.current) return
+          setAllPoints(Array.isArray(r) ? r : [])
+          fetchedProjKeysRef.current = new Set(selectedProjects.map(pk))
+        })
+        .catch(() => {})
+      return
+    }
+    const wanted = new Set(selectedProjects.map(pk))
+    // Removals: prune locally (no network).
+    setAllPoints(prev =>
+      prev.some(p => !wanted.has(pk(p))) ? prev.filter(p => wanted.has(pk(p))) : prev,
+    )
+    fetchedProjKeysRef.current = new Set(
+      [...fetchedProjKeysRef.current].filter(k => wanted.has(k)),
+    )
+    // Additions: fetch ONLY the new projects' points, then append (deduped).
+    const toFetch = selectedProjects.filter(p => !fetchedProjKeysRef.current.has(pk(p)))
+    if (!toFetch.length) return
+    toFetch.forEach(p => fetchedProjKeysRef.current.add(pk(p))) // double-fetch guard
+    invoke('get_points', {
+      projectIds: toFetch.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId })),
+    })
+      .then(r => {
+        setAllPoints(prev => {
+          const seen = new Set(prev.map(p => `${p.db_id ?? '?'}||${p.PointId}`))
+          const fresh = (Array.isArray(r) ? r : []).filter(
+            p => !seen.has(`${p.db_id ?? '?'}||${p.PointId}`),
+          )
+          return fresh.length ? [...prev, ...fresh] : prev
+        })
+      })
+      .catch(() => {
+        // Failed — un-mark so a later change retries.
+        toFetch.forEach(p => fetchedProjKeysRef.current.delete(pk(p)))
+      })
+  }, [selectedProjects, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Debounced save: any filter change persists to GIRTool_settings.json ────
   // The lastSavedFiltersRef check prevents a save loop when the change came
