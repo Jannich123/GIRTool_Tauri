@@ -3,10 +3,36 @@
 // odbc-api is fully synchronous; callers in async commands should wrap these
 // helpers in `tokio::task::spawn_blocking`.
 
+use std::sync::OnceLock;
+
 use crate::state::DbConfig;
 use anyhow::{Context, Result};
-use odbc_api::{ConnectionOptions, Cursor, DataType, Environment, ResultSetMetadata};
+use odbc_api::{
+    buffers::{AnySlice, BufferDesc, ColumnarAnyBuffer},
+    ConnectionOptions, Cursor, DataType, Environment, ResultSetMetadata,
+};
 use serde_json::{Map, Value};
+
+/// Rows fetched per ODBC round-trip (issue #194).  One driver call fills the
+/// whole batch instead of one call per cell.
+const BATCH_SIZE: usize = 1024;
+/// Per-cell character cap for text columns whose declared size is unbounded
+/// (VARCHAR(MAX)) or unknown.  Datasheet cells are far below this; a warn is
+/// logged once per column if a value actually hits the cap (truncation).
+const MAX_TEXT_CHARS: usize = 2048;
+
+/// Shared ODBC environment — creating one per query is wasteful and the
+/// environment is thread-safe by design.
+static ENV: OnceLock<Environment> = OnceLock::new();
+
+fn environment() -> Result<&'static Environment> {
+    if let Some(e) = ENV.get() {
+        return Ok(e);
+    }
+    let e = Environment::new().context("ODBC Environment init failed")?;
+    let _ = ENV.set(e); // racing initialisers both produce valid environments
+    Ok(ENV.get().expect("ODBC environment just initialised"))
+}
 
 /// Build an ODBC connection string from the stored config.
 ///
@@ -42,20 +68,33 @@ pub fn connection_string(cfg: &DbConfig) -> String {
 /// a friendly hint that points the user at the Microsoft Access Database
 /// Engine 2016 Redistributable when it sees that pattern.
 pub fn test_connection(cfg: &DbConfig) -> Result<()> {
-    let env = Environment::new().context("ODBC Environment init failed")?;
+    let env = environment()?;
     let conn_str = connection_string(cfg);
     env.connect_with_connection_string(&conn_str, ConnectionOptions::default())
         .context("ODBC connect failed")?;
     Ok(())
 }
 
+/// How a result column is bound + converted (issue #194 bulk fetch).
+#[derive(Clone, Copy, PartialEq)]
+enum ColKind {
+    I64,
+    F64,
+    Text,
+}
+
 /// Execute a SELECT and return each row as a JSON object keyed by column name.
 ///
-/// Numeric columns (integer / decimal / float) are returned as JSON numbers so
-/// frontend sort comparators stay numeric; everything else comes back as a
-/// string. SQL NULLs become JSON `null`.
+/// Issue #194: fetches in 1024-row COLUMNAR batches (one ODBC round-trip per
+/// batch) instead of the old one-call-per-cell loop — the difference between
+/// minutes and seconds on large datasheets.  Numeric SQL types bind native
+/// i64/f64 buffers (JSON numbers, no string round-trip); everything else binds
+/// wide-text (UTF-16) buffers so Danish characters (æ, ø, å) stay lossless.
+/// PointNo / ProjectNo / PointId / ProjectId are always returned as strings —
+/// borehole labels may carry leading zeros or letters that numeric parsing
+/// would corrupt.  SQL NULLs become JSON `null`.
 pub fn query_rows(cfg: &DbConfig, sql: &str) -> Result<Vec<Value>> {
-    let env = Environment::new().context("ODBC Environment init failed")?;
+    let env = environment()?;
     let conn_str = connection_string(cfg);
     let conn = env
         .connect_with_connection_string(&conn_str, ConnectionOptions::default())
@@ -72,76 +111,124 @@ pub fn query_rows(cfg: &DbConfig, sql: &str) -> Result<Vec<Value>> {
         .context("Failed to read column names")?
         .collect::<std::result::Result<_, _>>()
         .context("Failed to decode column name")?;
-    let num_cols = names.len() as u16;
+    let num_cols = names.len();
 
-    let mut data_types: Vec<DataType> = Vec::with_capacity(num_cols as usize);
+    // Per-column buffer plan.
+    let mut kinds: Vec<ColKind> = Vec::with_capacity(num_cols);
+    let mut caps: Vec<usize> = Vec::with_capacity(num_cols);
+    let mut descs: Vec<BufferDesc> = Vec::with_capacity(num_cols);
     for i in 0..num_cols {
-        data_types.push(
-            cursor
-                .col_data_type(i + 1)
-                .with_context(|| format!("Failed to read type for column {}", names[i as usize]))?,
+        let dt = cursor
+            .col_data_type((i + 1) as u16)
+            .with_context(|| format!("Failed to read type for column {}", names[i]))?;
+        let force_string = matches!(
+            names[i].to_ascii_lowercase().as_str(),
+            "pointno" | "projectno" | "pointid" | "projectid"
         );
+        let kind = if force_string {
+            ColKind::Text
+        } else {
+            match dt {
+                DataType::Integer | DataType::SmallInt | DataType::TinyInt | DataType::BigInt => {
+                    ColKind::I64
+                }
+                DataType::Numeric { .. }
+                | DataType::Decimal { .. }
+                | DataType::Float { .. }
+                | DataType::Double
+                | DataType::Real => ColKind::F64,
+                _ => ColKind::Text,
+            }
+        };
+        let cap = match kind {
+            ColKind::Text => dt
+                .display_size()
+                .map(|n| n.get())
+                .unwrap_or(MAX_TEXT_CHARS)
+                .clamp(1, MAX_TEXT_CHARS),
+            _ => 0,
+        };
+        descs.push(match kind {
+            ColKind::I64 => BufferDesc::I64 { nullable: true },
+            ColKind::F64 => BufferDesc::F64 { nullable: true },
+            ColKind::Text => BufferDesc::WText { max_str_len: cap },
+        });
+        kinds.push(kind);
+        caps.push(cap);
     }
 
+    let buffer = ColumnarAnyBuffer::from_descs(BATCH_SIZE, descs);
+    let mut block = cursor
+        .bind_buffer(buffer)
+        .context("Failed to bind fetch buffers")?;
+
     let mut rows: Vec<Value> = Vec::new();
-    let mut wbuf: Vec<u16> = Vec::new();
-    while let Some(mut row) = cursor.next_row().context("Failed to fetch next row")? {
-        let mut obj = Map::with_capacity(num_cols as usize);
-        for i in 0..num_cols {
-            // Always request data as UTF-16 (SQL_C_WCHAR) via `get_wide_text`.
-            // SQL Server's driver converts every column type — text, integer,
-            // decimal, date — into the requested Unicode encoding, so we get
-            // lossless Danish characters (æ, ø, å, …) from VARCHAR columns
-            // and clean numeric strings we can parse for INT/DECIMAL columns.
-            // Without this, `get_text` returns ANSI bytes in the connection's
-            // legacy code page and non-ASCII characters become `?`.
-            wbuf.clear();
-            let not_null = row
-                .get_wide_text(i + 1, &mut wbuf)
-                .with_context(|| format!("Failed to read column {}", names[i as usize]))?;
+    let mut truncation_logged = vec![false; num_cols];
 
-            let val = if !not_null {
-                Value::Null
-            } else {
-                // SQL Server gave us valid UTF-16; decode losslessly.
-                let s = String::from_utf16_lossy(&wbuf);
+    while let Some(batch) = block
+        .fetch_with_truncation_check(false)
+        .context("Failed to fetch row batch")?
+    {
+        let n = batch.num_rows();
 
-                // Columns that must ALWAYS stay strings, regardless of the
-                // underlying SQL type.  PointNo is a borehole label and may
-                // contain leading zeros ("0001"), letters ("B12"), or hyphens
-                // ("BH-04") — parsing as a number would silently corrupt those.
-                let col_name_lc = names[i as usize].to_ascii_lowercase();
-                let force_string = matches!(col_name_lc.as_str(),
-                    "pointno" | "projectno" | "pointid" | "projectid"
-                );
-
-                let parsed: Option<Value> = if force_string {
-                    None
-                } else {
-                    match data_types[i as usize] {
-                        DataType::Integer
-                        | DataType::SmallInt
-                        | DataType::TinyInt
-                        | DataType::BigInt => s.parse::<i64>().ok().map(Value::from),
-                        DataType::Numeric { .. }
-                        | DataType::Decimal { .. }
-                        | DataType::Float { .. }
-                        | DataType::Double
-                        | DataType::Real => s
-                            .parse::<f64>()
-                            .ok()
-                            .and_then(serde_json::Number::from_f64)
-                            .map(Value::Number),
-                        _ => None,
-                    }
-                };
-                parsed.unwrap_or(Value::String(s))
-            };
-            obj.insert(names[i as usize].clone(), val);
+        // Resolve each column's view once per batch, then index per row.
+        enum View<'a> {
+            I64(&'a [i64], &'a [isize]),
+            F64(&'a [f64], &'a [isize]),
+            Text(odbc_api::buffers::TextColumnView<'a, u16>),
         }
-        rows.push(Value::Object(obj));
+        let mut views: Vec<View> = Vec::with_capacity(num_cols);
+        for i in 0..num_cols {
+            let v = match batch.column(i) {
+                AnySlice::NullableI64(s) => {
+                    let (vals, ind) = s.raw_values();
+                    View::I64(vals, ind)
+                }
+                AnySlice::NullableF64(s) => {
+                    let (vals, ind) = s.raw_values();
+                    View::F64(vals, ind)
+                }
+                AnySlice::WText(t) => View::Text(t),
+                _ => anyhow::bail!("unexpected buffer type for column {}", names[i]),
+            };
+            views.push(v);
+        }
+
+        for r in 0..n {
+            let mut obj = Map::with_capacity(num_cols);
+            for i in 0..num_cols {
+                let val = match &views[i] {
+                    View::I64(vals, ind) => {
+                        if ind[r] < 0 { Value::Null } else { Value::from(vals[r]) }
+                    }
+                    View::F64(vals, ind) => {
+                        if ind[r] < 0 {
+                            Value::Null
+                        } else {
+                            serde_json::Number::from_f64(vals[r])
+                                .map(Value::Number)
+                                .unwrap_or(Value::Null)
+                        }
+                    }
+                    View::Text(t) => match t.get(r) {
+                        None => Value::Null,
+                        Some(u16s) => {
+                            if u16s.len() >= caps[i] && !truncation_logged[i] {
+                                truncation_logged[i] = true;
+                                tracing::warn!(
+                                    "query_rows: column '{}' hit the {}-char cell cap — value(s) truncated",
+                                    names[i], caps[i]
+                                );
+                            }
+                            Value::String(String::from_utf16_lossy(u16s))
+                        }
+                    },
+                };
+                obj.insert(names[i].clone(), val);
+            }
+            rows.push(Value::Object(obj));
+        }
     }
 
     Ok(rows)
 }
-
