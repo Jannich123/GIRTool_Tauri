@@ -43,3 +43,33 @@ export function listen(eventName, handler) {
   }
   return ev.listen(eventName, handler);
 }
+
+/**
+ * Broadcast a Tauri event to ALL windows of the app — including the sender,
+ * so payloads should carry a `src` window label letting the sender ignore
+ * its own echo.  No-op in plain-browser dev.
+ */
+export function emit(eventName, payload) {
+  const ev = window.__TAURI__?.event ?? window.__TAURI_INTERNALS__?.event;
+  if (!ev || typeof ev.emit !== 'function') return Promise.resolve();
+  return ev.emit(eventName, payload);
+}
+
+/**
+ * Label of the current Tauri window (`main` or `popout-<page>`).  Falls back
+ * to deriving it from the ?page= query parameter — which mirrors how
+ * windows.rs labels pop-outs — when the window API is unavailable.
+ */
+export function windowLabel() {
+  try {
+    const w = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.()
+           ?? window.__TAURI__?.window?.getCurrentWindow?.();
+    if (w?.label) return w.label;
+  } catch { /* fall through to the URL heuristic */ }
+  try {
+    const page = new URLSearchParams(window.location.search).get('page');
+    return page ? `popout-${page}` : 'main';
+  } catch {
+    return 'main';
+  }
+}

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { invoke, listen } from '../tauri-api'
+import { invoke, listen, emit, windowLabel } from '../tauri-api'
 import { mergeBuiltins } from '../lib/baseLayers'
 
 const AppContext = createContext(null)
@@ -128,6 +128,70 @@ export function AppProvider({ children }) {
     subscribe()
     return () => { if (typeof unlisten === 'function') unlisten() }
   }, [])
+
+  // ── Live cross-window selection sync (#203) ───────────────────────────────
+  // Every window shares the same Rust backend, but each webview holds its own
+  // React state — so the point/project selection is mirrored over the Tauri
+  // event bus:
+  //   selection:updated      {src, projects, points} — applied by every window
+  //                                                    except the sender
+  //   selection:sync-request "<label>"               — a freshly opened window
+  //                                                    asking for the current
+  //                                                    selection (pop-outs
+  //                                                    start empty otherwise)
+  const [winLabel] = useState(windowLabel)
+  const applyingRemoteRef = useRef(false)  // suppress re-broadcast of a remote apply
+  const syncMountedRef    = useRef(false)  // suppress the initial-mount broadcast
+  const selectedPointsRef = useRef(selectedPoints)
+  useEffect(() => { selectedPointsRef.current = selectedPoints }, [selectedPoints])
+
+  useEffect(() => {
+    let offUpdate = null
+    let offRequest = null
+    listen('selection:updated', (e) => {
+      const p = e?.payload
+      if (!p || p.src === winLabel) return
+      applyingRemoteRef.current = true
+      setSelectedProjects(Array.isArray(p.projects) ? p.projects : [])
+      setSelectedPoints(Array.isArray(p.points) ? p.points : [])
+    }).then(fn => { offUpdate = fn })
+    listen('selection:sync-request', (e) => {
+      if (!e?.payload || e.payload === winLabel) return
+      // Only windows actually holding a selection reply — an empty window must
+      // not "sync" the requester back to nothing.
+      if (!selectedProjectsRef.current.length && !selectedPointsRef.current.length) return
+      emit('selection:updated', {
+        src:      winLabel,
+        projects: selectedProjectsRef.current,
+        points:   selectedPointsRef.current,
+      })
+    }).then(fn => { offRequest = fn })
+    // Pull the live selection from any already-open window.
+    emit('selection:sync-request', winLabel)
+    return () => {
+      if (typeof offUpdate  === 'function') offUpdate()
+      if (typeof offRequest === 'function') offRequest()
+    }
+  }, [])  // eslint-disable-line
+
+  // Broadcast local selection changes.  A remote apply lands here as ONE
+  // batched render, where it consumes the suppress flag — so only user- and
+  // restore-driven changes emit.  Debounced: rapid map clicks coalesce, and
+  // large point selections aren't serialized over IPC once per click.
+  const broadcastTimerRef = useRef(null)
+  useEffect(() => () => { clearTimeout(broadcastTimerRef.current) }, [])
+  useEffect(() => {
+    if (!syncMountedRef.current) { syncMountedRef.current = true; return }
+    if (applyingRemoteRef.current) { applyingRemoteRef.current = false; return }
+    clearTimeout(broadcastTimerRef.current)
+    broadcastTimerRef.current = setTimeout(() => {
+      emit('selection:updated', {
+        src:      winLabel,
+        projects: selectedProjectsRef.current,
+        points:   selectedPointsRef.current,
+      })
+    }, 150)
+  }, [selectedProjects, selectedPoints])  // eslint-disable-line
 
   // Debounced boundaries save to GIRTool_settings.json.
   const boundariesTimerRef = useRef(null)

@@ -86,6 +86,15 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] During ⬇ Download / ⊕ Append the per-datasheet badges now update **live, one sheet at a time** (⏳ queued… → ⏳ downloading… → ✓), and a failing sheet doesn't stop the rest.
 - [ ] `cd src-tauri && cargo test` still green (CPT oracle).
 
+### 6e. Map-first + multi-window live selection sync (#202, #203)
+
+- [ ] Fresh app start → Data Selection opens on the **Map** subtab (after that, the last-used subtab is restored as before).
+- [ ] Pop out a window (↗ arrow) **while points are selected** → the new window opens *with* the current selection (previously it started empty).
+- [ ] Select/deselect points on the map in one window → the other window's Map **and** Points tables update live (≤ ~0.2 s).
+- [ ] Change the project selection in one window → the other window follows (points reload for the new projects).
+- [ ] No ping-pong: making one change produces ONE update in the other window, and points.xlsx is not rewritten by the receiving window unless you interact there.
+- [ ] Two pop-outs + main: a change in any window reaches both others.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
