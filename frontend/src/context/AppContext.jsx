@@ -228,6 +228,32 @@ export function AppProvider({ children }) {
         projects: selectedProjectsRef.current,
         points:   selectedPointsRef.current,
       })
+      // Persist alongside the broadcast (#207): projects.xlsx / points.xlsx
+      // now track EVERY local selection change — including map picks and
+      // project-removal prunes, which previously never reached the files and
+      // let stale content resurrect old selections on restore.  Only the
+      // originating window writes (remote applies never get here).
+      const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v)
+      invoke('save_projects_xlsx', {
+        selected: selectedProjectsRef.current.map(p => ({
+          db_id:     p.db_id ?? '',
+          ProjectId: p.ProjectId,
+          ProjectNo: p.ProjectNo ?? '',
+          Title:     p.Title ?? '',
+        })),
+      }).catch(() => {})
+      invoke('save_points_xlsx', {
+        selected: selectedPointsRef.current.map(p => ({
+          db_id:     p.db_id ?? '',
+          ProjectId: p.ProjectId ?? '',
+          PointId:   p.PointId ?? '',
+          PointNo:   String(p.PointNo ?? ''),
+          X1: num(p.X1), Y1: num(p.Y1), Z1: num(p.Z1),
+          Projection1: p.Projection1 != null ? String(p.Projection1) : '',
+          origin_X1: num(p.origin_X1), origin_Y1: num(p.origin_Y1), origin_Z1: num(p.origin_Z1),
+          origin_Projection1: p.origin_Projection1 != null ? String(p.origin_Projection1) : '',
+        })),
+      }).catch(() => {})
     }, 150)
   }, [selectedProjects, selectedPoints])  // eslint-disable-line
 
