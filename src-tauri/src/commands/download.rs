@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use calamine::{open_workbook, Data, Reader, Xlsx};
-use rust_xlsxwriter::{Format, Table, TableColumn, TableStyle, Workbook};
+use rust_xlsxwriter::{Format, Formula, Table, TableColumn, TableStyle, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
@@ -157,12 +157,36 @@ fn datasheet_cache_path(folder: &str, fname: &str) -> PathBuf {
     datasheet_cache_dir(folder).join(format!("{fname}.json"))
 }
 
+/// Sparse map of user-authored formulas in a datasheet (issue #176, M5):
+/// `(data_row_index, column_index) → formula string` — data rows are 0-based
+/// and EXCLUDE the header row.  Captured on read, re-emitted on write so user
+/// formulas survive Append / Re-add Strata round-trips (plan Q-F3 option c).
+pub(crate) type FormulaMap = HashMap<(usize, usize), String>;
+
 /// Write the parsed `{columns, rows}` to the sidecar.  Best-effort — any
 /// failure is swallowed (the next read just takes the slow path again).
-fn write_datasheet_cache(folder: &str, fname: &str, columns: &[String], rows: &[Vec<Value>]) {
+/// Formulas (when present) are stored sparsely as `"row,col" → "=…"`; values
+/// in `rows` stay the cached results, so previews/charts read values as before.
+fn write_datasheet_cache(
+    folder: &str,
+    fname: &str,
+    columns: &[String],
+    rows: &[Vec<Value>],
+    formulas: Option<&FormulaMap>,
+) {
     let _ = std::fs::create_dir_all(datasheet_cache_dir(folder));
     let path = datasheet_cache_path(folder, fname);
-    if let Ok(text) = serde_json::to_string(&json!({ "columns": columns, "rows": rows })) {
+    let mut obj = json!({ "columns": columns, "rows": rows });
+    if let Some(fm) = formulas {
+        if !fm.is_empty() {
+            let sparse: serde_json::Map<String, Value> = fm
+                .iter()
+                .map(|((r, c), f)| (format!("{r},{c}"), Value::String(f.clone())))
+                .collect();
+            obj["formulas"] = Value::Object(sparse);
+        }
+    }
+    if let Ok(text) = serde_json::to_string(&obj) {
         let _ = std::fs::write(&path, text);
     }
 }
@@ -607,6 +631,9 @@ fn write_datasheet(
     path: &Path,
     columns: &[String],
     rows: &[Vec<Value>],
+    // Issue #176 (M5): user-authored formulas to re-emit as live formulas.
+    // None / empty = plain value write (fresh downloads).
+    formulas: Option<&FormulaMap>,
 ) -> Result<(), String> {
     let mut workbook = Workbook::new();
     let ws = workbook.add_worksheet();
@@ -635,6 +662,23 @@ fn write_datasheet(
     for (i, row) in rows.iter().enumerate() {
         let row_idx = (i + 1) as u32;
         for (j, val) in row.iter().enumerate() {
+            // Issue #176: a cell that was a user formula on read is written
+            // back as a live formula, with its cached value as the stored
+            // result so it displays correctly until Excel recalculates.
+            if let Some(f) = formulas.and_then(|m| m.get(&(i, j))) {
+                let mut formula = Formula::new(f.as_str());
+                let cached = match val {
+                    Value::Number(n) => Some(n.to_string()),
+                    Value::String(s) => Some(s.clone()),
+                    Value::Bool(b)   => Some(b.to_string()),
+                    _                => None,
+                };
+                if let Some(c) = cached {
+                    formula = formula.set_result(&c);
+                }
+                let _ = ws.write_formula(row_idx, j as u16, formula);
+                continue;
+            }
             write_cell(ws, row_idx, j as u16, val);
         }
     }
@@ -705,17 +749,22 @@ fn row_id_key(row: &[Value], indices: &[usize]) -> Vec<String> {
         .collect()
 }
 
-/// Read an existing datasheet xlsx back into `(columns, rows)` format
-/// compatible with `write_datasheet`.  Returns `None` if the file is
+/// Read an existing datasheet xlsx back into `(columns, rows, formulas)`
+/// format compatible with `write_datasheet`.  Returns `None` if the file is
 /// missing or unreadable; returns an empty rows vec if the sheet only has
-/// the header row.
-fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>)> {
+/// the header row.  `formulas` (issue #176) maps `(data_row, col)` to the
+/// user-authored formula string for cells that carry one — aligned through
+/// the blank-row skipping below so positions match the returned `rows`.
+fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>, FormulaMap)> {
     use calamine::{open_workbook_auto, Reader, Data};
     if !path.exists() {
         return None;
     }
     let mut wb = open_workbook_auto(path).ok()?;
     let sheet_name = wb.sheet_names().first().cloned()?;
+    // Formula range first (separate lookup; same absolute sheet coordinates
+    // convention as merge_formula_columns: header at sheet row 0).
+    let formula_range = wb.worksheet_formula(&sheet_name).ok();
     let range = wb.worksheet_range(&sheet_name).ok()?;
     let mut rows_iter = range.rows();
 
@@ -736,7 +785,11 @@ fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>)
 
     let n_cols = columns.len();
     let mut rows: Vec<Vec<Value>> = Vec::new();
-    for row in rows_iter {
+    let mut formulas: FormulaMap = HashMap::new();
+    // data_idx = position within the SHEET's data rows (header = sheet row 0,
+    // first data row = sheet row 1); rows.len() = output index after skipping
+    // blank rows — the formula lookup below keys on the OUTPUT index.
+    for (data_idx, row) in rows_iter.enumerate() {
         let mut out = Vec::with_capacity(n_cols);
         for c in row.iter().take(n_cols) {
             let v = match c {
@@ -762,8 +815,20 @@ fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>)
         while out.len() < n_cols {
             out.push(Value::Null);
         }
-        // Skip completely blank rows (Excel artefacts).
-        let all_blank = out.iter().all(|v| match v {
+        // A row counts as blank only when it ALSO has no formulas — a row of
+        // formulas whose cached values are empty must survive the round-trip.
+        let sheet_row = data_idx + 1; // header occupies sheet row 0
+        let mut row_formulas: Vec<(usize, String)> = Vec::new();
+        if let Some(fr) = formula_range.as_ref() {
+            for j in 0..n_cols {
+                if let Some(f) = fr.get((sheet_row, j)) {
+                    if !f.is_empty() {
+                        row_formulas.push((j, f.clone()));
+                    }
+                }
+            }
+        }
+        let all_blank = row_formulas.is_empty() && out.iter().all(|v| match v {
             Value::Null               => true,
             Value::String(s) if s.is_empty() => true,
             _                          => false,
@@ -771,9 +836,13 @@ fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>)
         if all_blank {
             continue;
         }
+        let out_idx = rows.len();
+        for (j, f) in row_formulas {
+            formulas.insert((out_idx, j), f);
+        }
         rows.push(out);
     }
-    Some((columns, rows))
+    Some((columns, rows, formulas))
 }
 
 fn write_cell(ws: &mut rust_xlsxwriter::Worksheet, row: u32, col: u16, val: &Value) {
@@ -2151,7 +2220,8 @@ pub async fn download_data(
         let rows_clone = rows.clone();
         let path_clone = path.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            write_datasheet(&path_clone, &cols_clone, &rows_clone)
+            // Fresh export rebuilt from the DB — no user formulas to carry.
+            write_datasheet(&path_clone, &cols_clone, &rows_clone, None)
         })
         .await
         .map_err(|e| format!("internal task error: {e}"))?
@@ -2170,7 +2240,7 @@ pub async fn download_data(
             // Issue #128: write the JSON sidecar from the in-memory data so
             // the very first read_datasheet is already fast (no xlsx parse).
             // Written AFTER write_datasheet so the cache mtime >= xlsx mtime.
-            write_datasheet_cache(&folder, &q.fname, &columns, &rows);
+            write_datasheet_cache(&folder, &q.fname, &columns, &rows, None);
         }
     }
 
@@ -2336,8 +2406,8 @@ pub async fn append_data(
             .map_err(|e| format!("internal task error: {e}"))?;
 
         let new_row_count = new_rows.len();
-        let (final_columns, final_rows, appended) = match existing {
-            Some((existing_columns, existing_rows)) => {
+        let (final_columns, final_rows, final_formulas, appended) = match existing {
+            Some((existing_columns, existing_rows, existing_formulas)) => {
                 if existing_columns != columns {
                     errors.push(json!({
                         "file":  xlsx_name,
@@ -2352,6 +2422,8 @@ pub async fn append_data(
                 let existing_keys: HashSet<Vec<String>> = existing_rows.iter()
                     .map(|r| row_id_key(r, &indices))
                     .collect();
+                // Existing rows keep their positions (new rows append below),
+                // so their formula map carries over unchanged (issue #176).
                 let mut kept: Vec<Vec<Value>> = existing_rows;
                 let mut new_appended = 0usize;
                 for r in new_rows {
@@ -2361,21 +2433,22 @@ pub async fn append_data(
                         new_appended += 1;
                     }
                 }
-                (columns, kept, new_appended)
+                (columns, kept, existing_formulas, new_appended)
             }
             None => {
                 // File didn't exist — write everything (same as Download).
-                (columns, new_rows, new_row_count)
+                (columns, new_rows, FormulaMap::new(), new_row_count)
             }
         };
         let skipped = new_row_count.saturating_sub(appended);
 
-        // Write the combined sheet.
+        // Write the combined sheet (user formulas re-emitted as formulas).
         let cols_clone = final_columns.clone();
         let rows_clone = final_rows.clone();
+        let formulas_clone = final_formulas.clone();
         let path_clone = path.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            write_datasheet(&path_clone, &cols_clone, &rows_clone)
+            write_datasheet(&path_clone, &cols_clone, &rows_clone, Some(&formulas_clone))
         })
         .await
         .map_err(|e| format!("internal task error: {e}"))?
@@ -2398,7 +2471,7 @@ pub async fn append_data(
             // Issue #128: refresh the JSON sidecar from the combined data so
             // the next read_datasheet is fast.  Written after write_datasheet
             // so cache mtime >= xlsx mtime.
-            write_datasheet_cache(&folder, &q.fname, &final_columns, &final_rows);
+            write_datasheet_cache(&folder, &q.fname, &final_columns, &final_rows, Some(&final_formulas));
         }
     }
 
@@ -2455,7 +2528,7 @@ pub async fn readd_strata(
             .await
             .map_err(|e| format!("internal task error: {e}"))?;
 
-        let Some((mut columns, mut rows)) = existing else {
+        let Some((mut columns, mut rows, mut formulas)) = existing else {
             errors.push(json!({ "file": xlsx_name, "error": "Failed to read existing datasheet." }));
             continue;
         };
@@ -2463,11 +2536,21 @@ pub async fn readd_strata(
         let row_count = rows.len();
         upsert_strata_columns(&mut columns, &mut rows, &strata_lookup);
 
+        // Issue #176: the strata columns were just overwritten with values —
+        // drop any user formulas that pointed at those cells; all other
+        // formulas survive the rewrite.
+        let strata_idx: Vec<usize> = columns.iter().enumerate()
+            .filter(|(_, c)| c.eq_ignore_ascii_case("primary layer") || c.eq_ignore_ascii_case("secondary layer"))
+            .map(|(i, _)| i)
+            .collect();
+        formulas.retain(|(_, col), _| !strata_idx.contains(col));
+
         let cols_clone = columns.clone();
         let rows_clone = rows.clone();
+        let formulas_clone = formulas.clone();
         let write_path = path.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            write_datasheet(&write_path, &cols_clone, &rows_clone)
+            write_datasheet(&write_path, &cols_clone, &rows_clone, Some(&formulas_clone))
         })
         .await
         .map_err(|e| format!("internal task error: {e}"))?
@@ -2676,8 +2759,8 @@ pub async fn read_datasheet(
         }
         // 2. Slow path — parse the xlsx, then write a fresh cache.
         match read_existing_datasheet(&path_c) {
-            Some((columns, rows)) => {
-                write_datasheet_cache(&folder_c, &fname_c, &columns, &rows);
+            Some((columns, rows, formulas)) => {
+                write_datasheet_cache(&folder_c, &fname_c, &columns, &rows, Some(&formulas));
                 Ok(json!({ "columns": columns, "rows": rows }))
             }
             None => Err(format!("Datasheet not found: {}", path_c.display())),
