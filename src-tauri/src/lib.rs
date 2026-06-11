@@ -48,6 +48,7 @@ pub fn run() {
             commands::database::open_project_folder,
             commands::database::create_project,
             commands::database::copy_project,
+            commands::database::set_output_folder,
             // database — multi-DB (issue #46)
             commands::database::list_databases,
             commands::database::save_databases,

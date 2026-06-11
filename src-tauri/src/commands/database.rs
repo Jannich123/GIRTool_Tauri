@@ -246,6 +246,23 @@ fn seed_output_folder(cfg: &DbConfig) -> Result<(), String> {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
+/// Set the workspace folder WITHOUT probing any database (issue #188).
+/// `openProject` calls this first so `connect_all_databases` can read
+/// `{folder}/GIRTool_settings.json` directly — the legacy single-DB probe (a
+/// full ODBC connect to the legacy default server, which can stall for many
+/// seconds when that server is unreachable) is no longer on the startup
+/// critical path.
+#[tauri::command]
+pub async fn set_output_folder(folder: String, state: State<'_, AppState>) -> Result<(), String> {
+    if folder.trim().is_empty() {
+        return Err("Folder path is empty.".into());
+    }
+    *state.output_folder.lock().unwrap() = folder.clone();
+    *state.projects_cache.lock().unwrap() = None; // new workspace → new list (#185)
+    record_recent_folder(&folder);
+    Ok(())
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn connect(
     server:        String,

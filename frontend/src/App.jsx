@@ -81,23 +81,35 @@ function Shell() {
     const merged = { ...connection, output_folder: folder }
     saveConnection(merged)
 
-    // Legacy single-DB connect (best-effort — folder may have no DB yet).
-    try {
-      await invoke('connect', {
-        server: merged.server, database: merged.database, authMethod: merged.auth_method,
-        username: merged.username, password: merged.password, outputFolder: folder,
-      })
-      setConnected(true)
-    } catch (err) {
-      console.warn('legacy connect failed (continuing):', err)
-    }
+    // Issue #188: set the workspace folder WITHOUT the legacy single-DB probe.
+    // That probe (a full ODBC connect to the legacy default server) used to sit
+    // FIRST in the chain and could stall startup for many seconds whenever that
+    // server was unreachable — even though the folder's own databases list is
+    // what actually matters.
+    try { await invoke('set_output_folder', { folder }) }
+    catch (err) { console.warn('set_output_folder failed:', err) }
 
-    // Multi-DB connect (reads GIRTool_settings.json::databases for this folder).
+    // Multi-DB connect (reads GIRTool_settings.json::databases for this
+    // folder; probes run in parallel backend-side).
     let anyDbOk = false
     try {
       const results = await invoke('connect_all_databases')
       if (Array.isArray(results) && results.some(r => r && r.ok)) { anyDbOk = true; setConnected(true) }
     } catch (err) { console.warn('connect_all_databases failed:', err) }
+
+    // Legacy fallback — only for folders with no working databases list.
+    if (!anyDbOk) {
+      try {
+        await invoke('connect', {
+          server: merged.server, database: merged.database, authMethod: merged.auth_method,
+          username: merged.username, password: merged.password, outputFolder: folder,
+        })
+        anyDbOk = true
+        setConnected(true)
+      } catch (err) {
+        console.warn('legacy connect failed (continuing):', err)
+      }
+    }
 
     invoke('ensure_strata_file').catch(() => {})
 
