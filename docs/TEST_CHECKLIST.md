@@ -66,6 +66,13 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] Selecting a point from a NEW project now also populates that project's other points (blue) on the map — previously they could silently never load.
 - [ ] Sidebar `↺ Refresh data` still forces a full re-pull of points.
 
+### 6b. Points = Projects layout + instant startup lists (#190)
+
+- [ ] **Points subtab** now mirrors Projects exactly: Selected table (fixed window, own **search bar**, Clear all, count + "auto-saved to points.xlsx") above an Available table (own **search bar**, Select all visible, infinite scroll).
+- [ ] Ticking/dragging rows **auto-saves** to points.xlsx after ~0.3 s (banner confirms) — no 💾 button needed anymore.
+- [ ] **Second app start is instant**: the Projects list comes from `projects_list.csv` and the restored selection's points from `points_cache.json` — no DB wait. (`↻ Refresh list` / `↻ Refresh` / `↺ Refresh data` pull fresh from the DB.)
+- [ ] Map: selecting a point from a project you've loaded before (even in a past session) adds instantly — its points come from the cache.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

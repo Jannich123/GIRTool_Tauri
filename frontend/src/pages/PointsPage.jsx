@@ -40,10 +40,108 @@ function DbIdPill({ id }) {
   )
 }
 
-// Issue #89: same pagination cadence the Available table on the Projects tab
-// uses (#83).  Render this many rows initially and append PAGE_STEP more
-// whenever the user scrolls within ~120 px of the bottom.
+// Issue #89: same pagination cadence as the Projects tab (#83).
 const PAGE_STEP = 50
+
+// ── Shared table (issue #190 — mirrors ProjectsTable) ─────────────────────────
+
+function PointsTable({
+  items, checkedFlag, onToggle, dragRowProps, tbodyStyle,
+  sortCol, sortDir, onSort, emptyText, height, maxHeight, onScroll,
+  footerHint, typeColor,
+}) {
+  const wrapStyle = {
+    overflowY: 'auto',
+    ...(height ? { height } : {}),
+    ...(maxHeight ? { maxHeight } : {}),
+  }
+  return (
+    <div className="table-wrap" style={wrapStyle} onScroll={onScroll}>
+      <table className="data-table">
+        <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
+          <tr>
+            <th style={{ width: 40 }} />
+            <th style={{ width: 10 }} />
+            <th className="sortable" onClick={() => onSort('db_id')} style={{ width: 110 }}>
+              DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" onClick={() => onSort('PointNo')}>
+              Point No <SortIcon col="PointNo" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" onClick={() => onSort('PointType')}>
+              Type <SortIcon col="PointType" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" onClick={() => onSort('ProjectNo')}>
+              Project <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('X1')}>
+              X <SortIcon col="X1" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Y1')}>
+              Y <SortIcon col="Y1" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Z1')}>
+              Z <SortIcon col="Z1" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Top')}>
+              Top <SortIcon col="Top" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+            <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Bottom')}>
+              Bottom <SortIcon col="Bottom" sortCol={sortCol} sortDir={sortDir} />
+            </th>
+          </tr>
+        </thead>
+        <tbody style={tbodyStyle}>
+          {items.map((p, idx) => {
+            const k = ptKey(p)
+            const rowProps = dragRowProps
+              ? dragRowProps(p, idx)
+              : { onClick: () => onToggle(k), style: { cursor: 'pointer' } }
+            return (
+              <tr key={k} className={checkedFlag ? 'selected' : ''} {...rowProps}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={checkedFlag}
+                    onChange={() => onToggle(k)}
+                    onClick={e => e.stopPropagation()}
+                  />
+                </td>
+                <td>
+                  <span
+                    style={{
+                      display: 'inline-block', width: 8, height: 8,
+                      borderRadius: '50%', background: typeColor(p.PointType),
+                    }}
+                  />
+                </td>
+                <td><DbIdPill id={p.db_id} /></td>
+                <td>{p.PointNo}</td>
+                <td>{p.PointType}</td>
+                <td>{p.ProjectNo}</td>
+                <td style={{ textAlign: 'right' }}>{p.X1}</td>
+                <td style={{ textAlign: 'right' }}>{p.Y1}</td>
+                <td style={{ textAlign: 'right' }}>{p.Z1}</td>
+                <td style={{ textAlign: 'right' }}>{p.Top}</td>
+                <td style={{ textAlign: 'right' }}>{p.Bottom}</td>
+              </tr>
+            )
+          })}
+          {items.length === 0 && (
+            <tr><td colSpan={11} className="no-data">{emptyText}</td></tr>
+          )}
+          {footerHint && (
+            <tr>
+              <td colSpan={11} className="no-data" style={{ fontStyle: 'italic', textAlign: 'center' }}>
+                {footerHint}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -53,13 +151,17 @@ export default function PointsPage({ setPage }) {
   const [points,  setPoints]  = useState([])
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
-  const [search,  setSearch]  = useState('')
+  const [search,         setSearch]         = useState('')   // Available table
+  const [selectedSearch, setSelectedSearch] = useState('')   // Selected table
   const [checked, setChecked] = useState({})
   const [sortCol, setSortCol] = useState('PointNo')
   const [sortDir, setSortDir] = useState('asc')
   const [xlsxBusy, setXlsxBusy] = useState(false)
   const [xlsxMsg,  setXlsxMsg]  = useState(null)   // { ok, text }
   const xlsxAutoLoadedRef = useRef(false)
+  // Auto-save guard (issue #190, mirrors Projects): only persist after a real
+  // user interaction so the initial restore doesn't immediately rewrite xlsx.
+  const userInteractedRef = useRef(false)
 
   useEffect(() => {
     if (selectedProjects.length > 0) fetchPoints()
@@ -71,17 +173,15 @@ export default function PointsPage({ setPage }) {
     setChecked(init)
   }, [selectedPoints])
 
-  async function fetchPoints() {
+  // Issue #190: `force` re-queries the DB; the default path is served from the
+  // backend's points cache (memory + points_cache.json) when warm.
+  async function fetchPoints(force = false) {
     setLoading(true); setError('')
     try {
-      // Multi-DB routing (issue #48): when a project row carries `db_id`
-      // (added by list_projects fan-out), send the per-DB form so the backend
-      // routes the query to the correct database.  Otherwise fall back to the
-      // legacy flat list (which the backend runs against every DB).
       const ids = selectedProjects.some(p => p?.db_id)
         ? selectedProjects.map(p => ({ db_id: p.db_id, ProjectId: p.ProjectId }))
         : selectedProjects.map(p => p.ProjectId)
-      const res = await invoke('get_points', { projectIds: ids })
+      const res = await invoke('get_points', { projectIds: ids, refresh: !!force })
       setPoints(res)
     } catch (err) {
       console.error(err)
@@ -92,8 +192,6 @@ export default function PointsPage({ setPage }) {
   }
 
   // ── points.xlsx auto-load on first fetch (issue #77) ─────────────────────
-  // After the initial get_points resolves, look for a saved points.xlsx and
-  // tick any rows whose (db_id, PointId) matches.  Runs once per mount.
   useEffect(() => {
     if (xlsxAutoLoadedRef.current || points.length === 0) return
     xlsxAutoLoadedRef.current = true
@@ -122,9 +220,13 @@ export default function PointsPage({ setPage }) {
       .catch(() => { /* file missing — fine */ })
   }, [points])
 
-  function toggle(key) { setChecked(prev => ({ ...prev, [key]: !prev[key] })) }
+  function toggle(key) {
+    userInteractedRef.current = true
+    setChecked(prev => ({ ...prev, [key]: !prev[key] }))
+  }
 
   const addKeys = useCallback((keys) => {
+    userInteractedRef.current = true
     setChecked(prev => {
       const next = { ...prev }
       keys.forEach(k => { next[k] = true })
@@ -132,19 +234,19 @@ export default function PointsPage({ setPage }) {
     })
   }, [])
 
-  function selectAll() {
+  function selectAllAvailable() {
+    userInteractedRef.current = true
     const all = {}
-    availableRows.forEach(p => { all[ptKey(p)] = true })
+    availableFiltered.forEach(p => { all[ptKey(p)] = true })
     setChecked(prev => ({ ...prev, ...all }))
   }
-  function clearAll() { setChecked({}) }
+  function clearAll() {
+    userInteractedRef.current = true
+    setChecked({})
+  }
 
-  // Build the list of currently-checked point objects (or all visible
-  // points when nothing is ticked — matches the "Use all points" semantics
-  // of the primary button).
   // Select from the CONVERTED view (issue #147) so the persisted points.xlsx
-  // and the in-app selection both carry the project's target-CRS coordinates
-  // (+ origin_* source values), matching what the table shows.
+  // and the in-app selection both carry the project's target-CRS coordinates.
   function currentSelection() {
     const anyChecked = Object.values(checked).some(Boolean)
     if (anyChecked) {
@@ -153,9 +255,6 @@ export default function PointsPage({ setPage }) {
     return viewPoints
   }
 
-  // Persist the current selection (or all points when nothing ticked) to
-  // points.xlsx — fire from the primary Use → button AND the explicit 💾
-  // button (issue #77).
   async function savePointsXlsx(selectedRows) {
     try {
       const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v)
@@ -164,8 +263,6 @@ export default function PointsPage({ setPage }) {
         ProjectId: p.ProjectId ?? '',
         PointId:   p.PointId ?? '',
         PointNo:   String(p.PointNo ?? ''),
-        // Coordinate snapshot (#147): converted X1/Y1/Z1 + target Projection1,
-        // plus the preserved source values.  null where unavailable.
         X1: num(p.X1), Y1: num(p.Y1), Z1: num(p.Z1),
         Projection1: p.Projection1 != null ? String(p.Projection1) : '',
         origin_X1: num(p.origin_X1), origin_Y1: num(p.origin_Y1), origin_Z1: num(p.origin_Z1),
@@ -179,15 +276,20 @@ export default function PointsPage({ setPage }) {
     }
   }
 
-  async function handleSaveToExcel() {
-    setXlsxBusy(true); setXlsxMsg(null)
-    const sel = currentSelection()
-    const r = await savePointsXlsx(sel)
-    setXlsxBusy(false)
-    if (r.ok) setXlsxMsg({ ok: true, text: `Saved ${r.count} point${r.count === 1 ? '' : 's'} to points.xlsx` })
-    else      setXlsxMsg({ ok: false, text: String(r.error || 'Save failed') })
-    setTimeout(() => setXlsxMsg(m => (m && m.ok ? null : m)), 3500)
-  }
+  // Auto-save (issue #190, mirrors projects.xlsx): persist the ticked rows to
+  // points.xlsx 300 ms after any user-driven selection change.
+  useEffect(() => {
+    if (!userInteractedRef.current) return
+    const t = setTimeout(async () => {
+      const rows = viewPoints.filter(p => checked[ptKey(p)])
+      const r = await savePointsXlsx(rows)
+      setXlsxMsg(r.ok
+        ? { ok: true, text: `Auto-saved ${r.count} point${r.count === 1 ? '' : 's'} to points.xlsx` }
+        : { ok: false, text: `Auto-save failed: ${r.error}` })
+    }, 300)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checked])
 
   async function handleOpenExcel() {
     setXlsxMsg(null)
@@ -211,6 +313,7 @@ export default function PointsPage({ setPage }) {
         if (present.has(k)) matched.push(k)
         else                 orphans.push(`${r.db_id}/${r.PointId}`)
       }
+      userInteractedRef.current = true
       const next = {}
       matched.forEach(k => { next[k] = true })
       setChecked(next)
@@ -235,12 +338,9 @@ export default function PointsPage({ setPage }) {
     const selected = currentSelection()
     setSelectedPoints(selected)
     // Issue #91: points.xlsx is the SOLE persistence path for the point
-    // selection — no longer write to GIRTool_settings.json::selectedPoints.
-    // Cross-restart restoration flows through load_points_xlsx on Points
-    // page mount (#78).
+    // selection.  Cross-restart restoration flows through load_points_xlsx.
     savePointsXlsx(selected).catch(() => {})
-    // After picking points, go to the map to see the selection.  In Data
-    // Selection this switches to the Map subtab; standalone it opens the map.
+    // After picking points, go to the map to see the selection.
     setPage('map')
   }
 
@@ -249,19 +349,15 @@ export default function PointsPage({ setPage }) {
     else { setSortCol(col); setSortDir('asc') }
   }
 
-  // Issue #147: convert raw DB points into the project's target coordinate
-  // system (origin_* preserved, X/Y reprojected, Z offset applied).  Pure no-op
-  // when no coordinate system is configured.  Kept separate from `points` so the
-  // table re-derives instantly when the target CRS changes — without refetching.
+  // Issue #147: converted view (target CRS) — re-derives live on CRS change.
   const viewPoints = useMemo(
     () => applyCoordinateSystem(points, coordinateSystem),
     [points, coordinateSystem],
   )
 
-  // Issue #187: Projects-style split — Selected table (top, never hidden by
-  // search) and Available table (bottom: search + sort + pagination).
-  const sorted = useMemo(() => {
-    return [...viewPoints].sort((a, b) => {
+  // ── Derived: selected vs. available, each with its OWN search (#190) ──────
+  function applySort(arr) {
+    return [...arr].sort((a, b) => {
       const av = a[sortCol] ?? ''
       const bv = b[sortCol] ?? ''
       const cmp = typeof av === 'number'
@@ -269,53 +365,52 @@ export default function PointsPage({ setPage }) {
         : String(av).localeCompare(String(bv))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [viewPoints, sortCol, sortDir])
+  }
 
-  const selectedRows = useMemo(
-    () => sorted.filter(p => checked[ptKey(p)]),
-    [sorted, checked],
-  )
-  const availableRows = useMemo(() => {
-    const rest = sorted.filter(p => !checked[ptKey(p)])
+  const matchesQuery = (p, q) =>
+    p.PointNo?.toLowerCase().includes(q)   ||
+    p.PointType?.toLowerCase().includes(q) ||
+    p.ProjectNo?.toLowerCase().includes(q) ||
+    p.db_id?.toLowerCase().includes(q)
+
+  const selectedSorted = useMemo(() => {
+    const q = selectedSearch.toLowerCase()
+    const sel = viewPoints.filter(p => checked[ptKey(p)])
+    return applySort(q ? sel.filter(p => matchesQuery(p, q)) : sel)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewPoints, checked, selectedSearch, sortCol, sortDir])
+
+  const availableFiltered = useMemo(() => {
     const q = search.toLowerCase()
-    if (!q) return rest
-    return rest.filter(p =>
-      p.PointNo?.toLowerCase().includes(q)   ||
-      p.PointType?.toLowerCase().includes(q) ||
-      p.ProjectNo?.toLowerCase().includes(q) ||
-      p.db_id?.toLowerCase().includes(q)
-    )
-  }, [sorted, checked, search])
+    const avail = viewPoints.filter(p => !checked[ptKey(p)])
+    return applySort(q ? avail.filter(p => matchesQuery(p, q)) : avail)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewPoints, checked, search, sortCol, sortDir])
 
-  // Issue #89: only render the first N available rows.  Reset to PAGE_STEP
-  // whenever the filter / sort changes so the user starts at the top.
+  // Issue #89: paginated Available table with infinite scroll.
   const [visibleCount, setVisibleCount] = useState(PAGE_STEP)
   useEffect(() => {
     setVisibleCount(PAGE_STEP)
   }, [search, sortCol, sortDir, points])
 
-  const visibleSlice = useMemo(
-    () => availableRows.slice(0, visibleCount),
-    [availableRows, visibleCount],
+  const availableSlice = useMemo(
+    () => availableFiltered.slice(0, visibleCount),
+    [availableFiltered, visibleCount],
   )
-  const hasMore = availableRows.length > visibleSlice.length
+  const hasMore = availableFiltered.length > availableSlice.length
 
-  // Drag-select is bound to the visible slice so dragging only touches rows
-  // the user can actually see — matches the Available table on Projects.
   const { rowProps: dragRowProps, tbodyStyle } = useDragSelect({
-    items:    visibleSlice,
+    items:    availableSlice,
     getKey:   p => ptKey(p),
     onAdd:    addKeys,
     onToggle: toggle,
   })
 
-  // Infinite-scroll handler — bump visibleCount when the user nears the
-  // bottom of the table-wrap scroll container.
-  function handleTableScroll(e) {
+  function handleAvailableScroll(e) {
     if (!hasMore) return
     const el = e.currentTarget
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
-      setVisibleCount(c => Math.min(c + PAGE_STEP, availableRows.length))
+      setVisibleCount(c => Math.min(c + PAGE_STEP, availableFiltered.length))
     }
   }
 
@@ -332,6 +427,14 @@ export default function PointsPage({ setPage }) {
     )
   }
 
+  // CRS caption (issue #147).
+  const crsCaption = (() => {
+    const t = normaliseEpsg(coordinateSystem?.target_epsg)
+    if (!t) return null
+    const label = CRS_LABELS[t] ? ` (${CRS_LABELS[t]})` : ''
+    return <> · Coordinates in <strong>{t}{label}</strong></>
+  })()
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -339,18 +442,9 @@ export default function PointsPage({ setPage }) {
       <div className="page-header">
         <h2 className="page-title">Points</h2>
         <div className="page-actions">
-          <input
-            className="search-input"
-            placeholder="Search by No, Type, Project or DB…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-          <button onClick={selectAll}   className="btn-secondary btn-sm">Select all</button>
-          <button onClick={clearAll}    className="btn-secondary btn-sm">Clear</button>
-          <button onClick={fetchPoints} className="btn-secondary btn-sm">↻ Refresh</button>
-          <button onClick={handleSaveToExcel} disabled={xlsxBusy} className="btn-secondary btn-sm"
-                  title="Write the current (or all visible) selection to points.xlsx">
-            💾 Save to Excel
+          <button onClick={() => fetchPoints(true)} className="btn-secondary btn-sm"
+                  title="Re-query the databases (otherwise the cached points are used)">
+            ↻ Refresh
           </button>
           <button onClick={handleOpenExcel} className="btn-secondary btn-sm"
                   title="Open points.xlsx in your default xlsx handler">
@@ -369,194 +463,103 @@ export default function PointsPage({ setPage }) {
       </div>
 
       {error && <p className="msg err">{error}</p>}
-      {xlsxMsg && (
-        <p className={`msg ${xlsxMsg.ok ? 'ok' : 'err'}`}>{xlsxMsg.text}</p>
-      )}
+      {/* Fixed-height slot (mirrors Projects, #87) so the auto-save banner
+          doesn't push the tables up and down. */}
+      <div style={{ minHeight: '2.25rem', display: 'flex', alignItems: 'center' }}>
+        {xlsxMsg && (
+          <p className={`msg ${xlsxMsg.ok ? 'ok' : 'err'}`} style={{ margin: 0 }}>{xlsxMsg.text}</p>
+        )}
+      </div>
 
       {loading ? (
         <p className="hint">Loading…</p>
       ) : (
         <>
-          {/* ── Selected points (issue #187) ── */}
-          <h3 className="section-title" style={{ margin: '0 0 .35rem 0' }}>
-            Selected points ({selectedRows.length})
-          </h3>
-          {selectedRows.length === 0 ? (
-            <p className="hint" style={{ margin: '0 0 .9rem 0' }}>
-              No points selected — tick rows in the Available table below (or ↻ Reload from Excel).
-            </p>
-          ) : (
-            <div className="table-wrap" style={{ maxHeight: '28vh', overflowY: 'auto', marginBottom: '1rem' }}>
-              <table className="data-table">
-                <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
-                  <tr>
-                    <th style={{ width: 44 }} />
-                    <th style={{ width: 10 }} />
-                    <th style={{ width: 110 }}>DB</th>
-                    <th>Point No</th>
-                    <th>Type</th>
-                    <th>Project</th>
-                    <th style={{ textAlign: 'right' }}>X</th>
-                    <th style={{ textAlign: 'right' }}>Y</th>
-                    <th style={{ textAlign: 'right' }}>Z</th>
-                    <th style={{ textAlign: 'right' }}>Top</th>
-                    <th style={{ textAlign: 'right' }}>Bottom</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedRows.map(p => {
-                    const k = ptKey(p)
-                    return (
-                      <tr key={k} className="selected">
-                        <td>
-                          <button
-                            className="btn-secondary btn-sm"
-                            style={{ padding: '0 6px', color: '#dc2626', borderColor: '#dc2626' }}
-                            title="Remove from selection"
-                            onClick={() => toggle(k)}
-                          >
-                            ✕
-                          </button>
-                        </td>
-                        <td>
-                          <span
-                            style={{
-                              display: 'inline-block', width: 8, height: 8,
-                              borderRadius: '50%', background: typeColor(p.PointType),
-                            }}
-                          />
-                        </td>
-                        <td><DbIdPill id={p.db_id} /></td>
-                        <td>{p.PointNo}</td>
-                        <td>{p.PointType}</td>
-                        <td>{p.ProjectNo}</td>
-                        <td style={{ textAlign: 'right' }}>{p.X1}</td>
-                        <td style={{ textAlign: 'right' }}>{p.Y1}</td>
-                        <td style={{ textAlign: 'right' }}>{p.Z1}</td>
-                        <td style={{ textAlign: 'right' }}>{p.Top}</td>
-                        <td style={{ textAlign: 'right' }}>{p.Bottom}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+          {/* ── Selected (top) ────────────────────────────────────────────── */}
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: '0.75rem',
+              padding: '0.4rem 0', borderBottom: '1px solid #e5e7eb',
+              marginBottom: '0.4rem',
+            }}>
+              <h3 style={{ margin: 0, fontSize: '.95rem', fontWeight: 600 }}>
+                Selected points
+              </h3>
+              <span className="hint" style={{ fontSize: '.78rem' }}>
+                {numChecked === 0
+                  ? 'Tick rows below to add them here'
+                  : `${numChecked} point${numChecked === 1 ? '' : 's'} · auto-saved to points.xlsx`}
+              </span>
+              <div style={{ flex: 1 }} />
+              <input
+                className="search-input"
+                placeholder="Search selected…"
+                value={selectedSearch}
+                onChange={e => setSelectedSearch(e.target.value)}
+                style={{ maxWidth: 220 }}
+              />
+              {numChecked > 0 && (
+                <button onClick={clearAll} className="btn-secondary btn-sm">Clear all</button>
+              )}
             </div>
-          )}
+            <PointsTable
+              items={selectedSorted}
+              checkedFlag={true}
+              onToggle={toggle}
+              sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
+              emptyText={selectedSearch
+                ? 'No selected points match the search.'
+                : 'No points selected — tick rows in the table below to add them.'}
+              height="210px"
+              typeColor={typeColor}
+            />
+          </div>
 
-          {/* ── Available points ── */}
-          <h3 className="section-title" style={{ margin: '0 0 .35rem 0' }}>
-            Available points ({availableRows.length})
-          </h3>
-          <p className="hint" style={{ margin: '0 0 .35rem 0', fontSize: '.78rem' }}>
-            Showing {visibleSlice.length} of {availableRows.length} row{availableRows.length === 1 ? '' : 's'}
-            {hasMore && ' · scroll for more'}
-            {' · tick / drag to select'}
-            {(() => {
-              const t = normaliseEpsg(coordinateSystem?.target_epsg)
-              if (!t) return null
-              const label = CRS_LABELS[t] ? ` (${CRS_LABELS[t]})` : ''
-              return <> · Coordinates in <strong>{t}{label}</strong> · original values kept as origin_*</>
-            })()}
-          </p>
-        <div
-          className="table-wrap"
-          style={{ maxHeight: '48vh', overflowY: 'auto' }}
-          onScroll={handleTableScroll}
-        >
-          <table className="data-table">
-            <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
-              <tr>
-                <th style={{ width: 40 }}>
-                  <input
-                    type="checkbox"
-                    checked={false}
-                    onChange={() => selectAll()}
-                    title="Select all visible available rows"
-                  />
-                </th>
-                <th style={{ width: 10 }} />
-                <th className="sortable" onClick={() => handleSort('db_id')} style={{ width: 110 }}>
-                  DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" onClick={() => handleSort('PointNo')}>
-                  Point No <SortIcon col="PointNo" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" onClick={() => handleSort('PointType')}>
-                  Type <SortIcon col="PointType" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" onClick={() => handleSort('ProjectNo')}>
-                  Project <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" style={{ textAlign: 'right' }} onClick={() => handleSort('X1')}>
-                  X <SortIcon col="X1" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" style={{ textAlign: 'right' }} onClick={() => handleSort('Y1')}>
-                  Y <SortIcon col="Y1" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" style={{ textAlign: 'right' }} onClick={() => handleSort('Z1')}>
-                  Z <SortIcon col="Z1" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" style={{ textAlign: 'right' }} onClick={() => handleSort('Top')}>
-                  Top <SortIcon col="Top" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className="sortable" style={{ textAlign: 'right' }} onClick={() => handleSort('Bottom')}>
-                  Bottom <SortIcon col="Bottom" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-              </tr>
-            </thead>
-            <tbody style={tbodyStyle}>
-              {visibleSlice.map((p, idx) => {
-                const k = ptKey(p)
-                return (
-                  <tr
-                    key={k}
-                    {...dragRowProps(p, idx)}
-                  >
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={!!checked[k]}
-                        onChange={() => toggle(k)}
-                        onClick={e => e.stopPropagation()}
-                      />
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          display: 'inline-block', width: 8, height: 8,
-                          borderRadius: '50%', background: typeColor(p.PointType),
-                        }}
-                      />
-                    </td>
-                    <td><DbIdPill id={p.db_id} /></td>
-                    <td>{p.PointNo}</td>
-                    <td>{p.PointType}</td>
-                    <td>{p.ProjectNo}</td>
-                    <td style={{ textAlign: 'right' }}>{p.X1}</td>
-                    <td style={{ textAlign: 'right' }}>{p.Y1}</td>
-                    <td style={{ textAlign: 'right' }}>{p.Z1}</td>
-                    <td style={{ textAlign: 'right' }}>{p.Top}</td>
-                    <td style={{ textAlign: 'right' }}>{p.Bottom}</td>
-                  </tr>
-                )
-              })}
-              {availableRows.length === 0 && (
-                <tr>
-                  <td colSpan={11} className="no-data">
-                    {sorted.length > 0 ? 'All points are selected (or hidden by the search).' : 'No points found'}
-                  </td>
-                </tr>
-              )}
-              {hasMore && (
-                <tr>
-                  <td colSpan={11} className="no-data" style={{ fontStyle: 'italic', textAlign: 'center' }}>
-                    {availableRows.length - visibleSlice.length} more row(s) — keep scrolling…
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+          {/* ── Available (bottom) ───────────────────────────────────────── */}
+          <div>
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: '0.75rem',
+              padding: '0.4rem 0', borderBottom: '1px solid #e5e7eb',
+              marginBottom: '0.4rem',
+            }}>
+              <h3 style={{ margin: 0, fontSize: '.95rem', fontWeight: 600 }}>
+                Available points
+              </h3>
+              <span className="hint" style={{ fontSize: '.78rem' }}>
+                Showing {availableSlice.length} of {availableFiltered.length} row
+                {availableFiltered.length === 1 ? '' : 's'}
+                {hasMore && ' · scroll for more'}
+                {crsCaption}
+              </span>
+              <div style={{ flex: 1 }} />
+              <input
+                className="search-input"
+                placeholder="Search by No, Type, Project or DB…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ maxWidth: 260 }}
+              />
+              <button onClick={selectAllAvailable} className="btn-secondary btn-sm"
+                      disabled={availableFiltered.length === 0}>
+                Select all visible
+              </button>
+            </div>
+            <PointsTable
+              items={availableSlice}
+              checkedFlag={false}
+              onToggle={toggle}
+              dragRowProps={dragRowProps}
+              tbodyStyle={tbodyStyle}
+              sortCol={sortCol} sortDir={sortDir} onSort={handleSort}
+              emptyText={search ? 'No points match the search.' : 'No more available points.'}
+              maxHeight="48vh"
+              onScroll={handleAvailableScroll}
+              footerHint={hasMore
+                ? `${availableFiltered.length - availableSlice.length} more row(s) — keep scrolling…`
+                : null}
+              typeColor={typeColor}
+            />
+          </div>
         </>
       )}
     </div>

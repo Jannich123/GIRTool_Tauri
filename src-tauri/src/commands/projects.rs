@@ -121,6 +121,14 @@ pub async fn list_projects(
         if let Some(cached) = state.projects_cache.lock().unwrap().clone() {
             return Ok(cached);
         }
+        // Issue #190: serve the disk snapshot INSTANTLY on the first call of a
+        // session (no DB round-trip, works before/without a connection).  The
+        // DB is only queried on ↻ Refresh list or when no snapshot exists yet.
+        let folder = state.output_folder().unwrap_or_default();
+        if let Some(csv_rows) = read_projects_csv(&folder) {
+            *state.projects_cache.lock().unwrap() = Some(csv_rows.clone());
+            return Ok(csv_rows);
+        }
     }
 
     let databases = active_databases(&state);
