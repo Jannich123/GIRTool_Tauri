@@ -605,9 +605,13 @@ function ErrorTab({ onErrorCountChange }) {
   )
 }
 
-// ── Context-window error blocks ───────────────────────────────────────────────
-
-const CONTEXT = 2   // rows to show above and below each problem row
+// ── Borehole error clusters (issue #178, M6 / plan Q-C1) ─────────────────────
+//
+// Issues are grouped by the WHOLE borehole (db_id, ProjectId, PointId):
+//   • only boreholes containing at least one of the (filtered) issues appear;
+//   • each cluster lists ALL of that borehole's rows — full context — with the
+//     problem rows flagged/coloured;
+//   • the cluster header carries the DB pill, PointNo, and per-borehole counts.
 
 function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
   const issueByRow = {}
@@ -616,142 +620,143 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
     issueByRow[iss.rowIdx].push(iss)
   })
 
-  // Merge overlapping context windows into contiguous blocks
-  const problemRows = [...new Set(issues.map(i => i.rowIdx))].sort((a, b) => a - b)
-  const blocks = []
-  let i = 0
-  while (i < problemRows.length) {
-    let start = Math.max(0, problemRows[i] - CONTEXT)
-    let end   = Math.min(rows.length - 1, problemRows[i] + CONTEXT)
-    while (i + 1 < problemRows.length && problemRows[i + 1] <= end + CONTEXT + 1) {
-      i++
-      end = Math.min(rows.length - 1, problemRows[i] + CONTEXT)
-    }
-    blocks.push({ start, end })
-    i++
-  }
+  // Group every row index by its borehole; keep insertion (depth) order.
+  const bhKey = (r) =>
+    `${r.db_id ?? '?'}||${r.ProjectId ?? r.ProjectID ?? ''}||${r.PointId ?? r.PointID ?? ''}`
+  const clusters = new Map() // key → { db_id, pointNo, rowIdxs }
+  rows.forEach((r, idx) => {
+    const k = bhKey(r)
+    if (!clusters.has(k)) clusters.set(k, { key: k, db_id: r.db_id, pointNo: r.PointNo, rowIdxs: [] })
+    clusters.get(k).rowIdxs.push(idx)
+  })
+
+  // Only boreholes that contain at least one of the (filtered) issues.
+  const problemKeys = new Set(issues.map(i => rows[i.rowIdx] ? bhKey(rows[i.rowIdx]) : ''))
+  const shown = [...clusters.values()].filter(c => problemKeys.has(c.key))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
-      {blocks.map(({ start, end }, blockIdx) => (
-        <div
-          key={blockIdx}
-          style={{
-            border: '1px solid var(--border)',
-            borderRadius: 4,
-            // Issue #99: full width + horizontal scroll instead of clip.
-            width: '100%',
-            overflowX: 'auto',
-          }}
-        >
-          {start > 0 && (
-            <div style={{ fontSize: '0.72em', color: '#9ca3af', padding: '2px 8px', background: '#f9fafb' }}>
-              ↑ {start} row{start !== 1 ? 's' : ''} above not shown
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem', marginTop: '0.5rem' }}>
+      {shown.map(cluster => {
+        const clusterIssues = cluster.rowIdxs.flatMap(idx => issueByRow[idx] || [])
+        const nErr  = clusterIssues.filter(x => x.severity === 'error').length
+        const nWarn = clusterIssues.filter(x => x.severity === 'warning').length
+        return (
+          <div
+            key={cluster.key}
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+              width: '100%',
+              overflowX: 'auto',
+            }}
+          >
+            {/* Borehole header */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: '.5rem',
+                padding: '4px 8px', background: '#f8fafc',
+                borderBottom: '1px solid var(--border)',
+                fontSize: '0.85em', fontWeight: 600,
+              }}
+            >
+              <DbIdPill id={cluster.db_id} />
+              <span>{cluster.pointNo}</span>
+              <span style={{ fontWeight: 400, color: '#64748b' }}>
+                · {cluster.rowIdxs.length} layer{cluster.rowIdxs.length !== 1 ? 's' : ''}
+              </span>
+              <span style={{ marginLeft: 'auto', fontWeight: 400 }}>
+                {nErr > 0 && <span style={{ color: '#dc2626' }}>{nErr} error{nErr !== 1 ? 's' : ''}</span>}
+                {nErr > 0 && nWarn > 0 && ' · '}
+                {nWarn > 0 && <span style={{ color: '#d97706' }}>{nWarn} warning{nWarn !== 1 ? 's' : ''}</span>}
+              </span>
             </div>
-          )}
-          {/* `minWidth: 100%` lets the table stretch when the column content
-              is narrow, but maintain its natural width (triggering the
-              wrapper's overflowX scroll) when content is wide. */}
-          <table className="data-table" style={{ margin: 0, minWidth: '100%' }}>
-            <thead>
-              <tr>
-                <th style={{ width: 100 }}>Issue</th>
-                <th style={{ width: 90 }}>DB</th>
-                <th>PointNo</th>
-                <th style={{ textAlign: 'right' }}>Depth From [m]</th>
-                <th style={{ textAlign: 'right' }}>Depth To [m]</th>
-                <th>Primary Layer</th>
-                <th>Secondary Layer</th>
-                {/* Issue #99: delete column pinned to the right edge so the
-                    button is always visible regardless of horizontal scroll. */}
-                <th
-                  style={{
-                    width: 90,
-                    position: 'sticky',
-                    right: 0,
-                    background: '#fff',
-                    zIndex: 1,
-                    boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
-                  }}
-                />
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: end - start + 1 }, (_, j) => {
-                const rowIdx    = start + j
-                const row       = rows[rowIdx]
-                if (!row) return null
-                const rowIssues = issueByRow[rowIdx] || []
-                const isError   = rowIssues.some(x => x.severity === 'error')
-                const isWarn    = rowIssues.some(x => x.severity === 'warning')
-                const bg = isError ? '#fee2e2' : isWarn ? '#fef9c3' : undefined
+            <table className="data-table" style={{ margin: 0, minWidth: '100%' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 130 }}>Issue</th>
+                  <th style={{ textAlign: 'right' }}>Depth From [m]</th>
+                  <th style={{ textAlign: 'right' }}>Depth To [m]</th>
+                  <th>Primary Layer</th>
+                  <th>Secondary Layer</th>
+                  {/* Delete column pinned right (carried over from #99). */}
+                  <th
+                    style={{
+                      width: 90,
+                      position: 'sticky',
+                      right: 0,
+                      background: '#fff',
+                      zIndex: 1,
+                      boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
+                    }}
+                  />
+                </tr>
+              </thead>
+              <tbody>
+                {cluster.rowIdxs.map(rowIdx => {
+                  const row = rows[rowIdx]
+                  if (!row) return null
+                  const rowIssues = issueByRow[rowIdx] || []
+                  const isError   = rowIssues.some(x => x.severity === 'error')
+                  const isWarn    = rowIssues.some(x => x.severity === 'warning')
+                  const bg = isError ? '#fee2e2' : isWarn ? '#fef9c3' : undefined
 
-                return (
-                  <tr key={rowIdx} style={{ background: bg }}>
-                    <td style={{ fontSize: '0.78em', lineHeight: 1.4 }}>
-                      {rowIssues.map(iss => (
-                        <div key={iss.type} style={{ whiteSpace: 'nowrap' }}>
-                          {iss.type === ERR_NEG     && '🔴 K: Negative thickness'}
-                          {iss.type === ERR_OVERLAP && '🔴 J: Overlapping'}
-                          {iss.type === WARN_GAP    && '⚠ I: Gap in boundary'}
-                        </div>
-                      ))}
-                    </td>
-                    <td><DbIdPill id={row.db_id} /></td>
-                    <td>{row.PointNo}</td>
-                    <td style={{ textAlign: 'right' }}>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={row.From}
-                        onChange={e => onEdit(rowIdx, 'From', e.target.value)}
-                        style={{ width: 80, textAlign: 'right' }}
-                      />
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={row.To}
-                        onChange={e => onEdit(rowIdx, 'To', e.target.value)}
-                        style={{ width: 80, textAlign: 'right' }}
-                      />
-                    </td>
-                    <td>{row.Layer}</td>
-                    <td>{row.Description}</td>
-                    {/* Issue #99: pinned to right edge with row-matching
-                        background so the button is always reachable even
-                        when the table is horizontally scrolled. */}
-                    <td
-                      style={{
-                        position: 'sticky',
-                        right: 0,
-                        background: bg ?? '#fff',
-                        zIndex: 1,
-                        boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
-                      }}
-                    >
-                      <button
-                        className="btn-secondary btn-sm"
-                        style={{ color: '#dc2626', borderColor: '#dc2626', padding: '1px 6px' }}
-                        title="Delete this layer row"
-                        onClick={() => onDelete(rowIdx)}
+                  return (
+                    <tr key={rowIdx} style={{ background: bg }}>
+                      <td style={{ fontSize: '0.78em', lineHeight: 1.4 }}>
+                        {rowIssues.map(iss => (
+                          <div key={iss.type} style={{ whiteSpace: 'nowrap' }}>
+                            {iss.type === ERR_NEG     && '🔴 K: Negative thickness'}
+                            {iss.type === ERR_OVERLAP && '🔴 J: Overlapping'}
+                            {iss.type === WARN_GAP    && '⚠ I: Gap in boundary'}
+                          </div>
+                        ))}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={row.From}
+                          onChange={e => onEdit(rowIdx, 'From', e.target.value)}
+                          style={{ width: 80, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={row.To}
+                          onChange={e => onEdit(rowIdx, 'To', e.target.value)}
+                          style={{ width: 80, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td>{row.Layer}</td>
+                      <td>{row.Description}</td>
+                      <td
+                        style={{
+                          position: 'sticky',
+                          right: 0,
+                          background: bg ?? '#fff',
+                          zIndex: 1,
+                          boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
+                        }}
                       >
-                        ✕ Delete
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {end < rows.length - 1 && (
-            <div style={{ fontSize: '0.72em', color: '#9ca3af', padding: '2px 8px', background: '#f9fafb' }}>
-              ↓ {rows.length - 1 - end} row{rows.length - 1 - end !== 1 ? 's' : ''} below not shown
-            </div>
-          )}
-        </div>
-      ))}
+                        <button
+                          className="btn-secondary btn-sm"
+                          style={{ color: '#dc2626', borderColor: '#dc2626', padding: '1px 6px' }}
+                          title="Delete this layer row"
+                          onClick={() => onDelete(rowIdx)}
+                        >
+                          ✕ Delete
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      })}
     </div>
   )
 }
