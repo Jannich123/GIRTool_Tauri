@@ -4,30 +4,25 @@ import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { applyCoordinateSystem, normaliseEpsg } from '../lib/proj'
 
-// ── CPT data reduction (issue #180, M7 / plan §D1) ────────────────────────────
-function CptReduceSection({ datasheets, onDone }) {
+// ── CPT data reduction (issue #180, M7 / plan §D1; persisted config #196) ─────
+function CptReduceSection({ datasheets, cfg, onPatch, onDone }) {
   const names = datasheets.map(d => d.fname)
-  const [fname, setFname]       = useState(() => (names.includes('CPTData') ? 'CPTData' : (names[0] || '')))
-  const [windowCm, setWindowCm] = useState('2')
-  const [method, setMethod]     = useState('average')
-  const [busy, setBusy]         = useState(false)
-  const [msg, setMsg]           = useState(null)
-
-  // Keep the selection valid as the datasheet list changes.
-  useEffect(() => {
-    if (!names.includes(fname)) setFname(names.includes('CPTData') ? 'CPTData' : (names[0] || ''))
-  }, [datasheets]) // eslint-disable-line react-hooks/exhaustive-deps
+  const c = { fname: 'CPTData', window_cm: '2', method: 'average', auto_apply: false, ...(cfg || {}) }
+  // Offer the remembered fname even when the sheet has not been downloaded yet.
+  const options = [...new Set([c.fname, ...names])].filter(Boolean)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg]   = useState(null)
 
   async function run() {
     setMsg(null)
-    const w = parseFloat(String(windowCm).replace(',', '.'))
-    if (!fname) { setMsg({ ok: false, text: 'Pick a datasheet.' }); return }
+    const w = parseFloat(String(c.window_cm).replace(',', '.'))
+    if (!c.fname) { setMsg({ ok: false, text: 'Pick a datasheet.' }); return }
     if (!isFinite(w) || w <= 0) { setMsg({ ok: false, text: 'Window must be a positive number of centimetres.' }); return }
     setBusy(true)
     try {
-      const r = await invoke('reduce_cpt_data', { fname, windowCm: w, method })
+      const r = await invoke('reduce_cpt_data', { fname: c.fname, windowCm: w, method: c.method })
       setMsg({ ok: true, text: `${r.file}: ${r.rows_before} → ${r.rows_after} rows` })
-      onDone?.(fname)
+      onDone?.(c.fname)
     } catch (e) {
       setMsg({ ok: false, text: String(e).slice(0, 200) })
     } finally {
@@ -47,26 +42,38 @@ function CptReduceSection({ datasheets, onDone }) {
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
         <label>Datasheet</label>
-        <select value={fname} onChange={e => setFname(e.target.value)} style={{ maxWidth: 260 }}>
-          {names.map(n => <option key={n} value={n}>{n}</option>)}
+        <select value={c.fname} onChange={e => onPatch({ fname: e.target.value })} style={{ maxWidth: 260 }}>
+          {options.map(n => <option key={n} value={n}>{n}</option>)}
         </select>
         <label>Window</label>
         <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}>
           <input
-            type="text" inputMode="decimal" value={windowCm}
-            onChange={e => setWindowCm(e.target.value)}
+            type="text" inputMode="decimal" value={String(c.window_cm ?? '')}
+            onChange={e => onPatch({ window_cm: e.target.value })}
             style={{ width: 80 }}
           />
           <span className="hint" style={{ margin: 0 }}>cm (e.g. 2 or 10)</span>
         </div>
         <label>Method</label>
-        <select value={method} onChange={e => setMethod(e.target.value)} style={{ maxWidth: 260 }}>
+        <select value={c.method} onChange={e => onPatch({ method: e.target.value })} style={{ maxWidth: 260 }}>
           <option value="average">Moving average</option>
           <option value="median">Moving median</option>
         </select>
+        <label>Auto-apply</label>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            checked={!!c.auto_apply}
+            onChange={e => onPatch({ auto_apply: e.target.checked })}
+          />
+          Run this reduction automatically after Download / Append of <code>{c.fname}</code>
+        </label>
       </div>
+      <p className="hint" style={{ marginTop: '.5rem' }}>
+        These settings are saved in <code>GIRTool_settings.json</code> — they survive tab switches and restarts.
+      </p>
       <div style={{ marginTop: '.75rem', display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
-        <button className="btn-primary" onClick={run} disabled={busy || !fname}>
+        <button className="btn-primary" onClick={run} disabled={busy || !c.fname}>
           {busy ? 'Reducing…' : '🔬 Reduce data'}
         </button>
         {msg && <span className={`msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</span>}
@@ -111,6 +118,43 @@ export default function DataPage() {
       }
       return next
     })
+
+  // ── CPT reduction config (issue #196): persisted in GIRTool_settings.json ─
+  const [reduceCfg, setReduceCfg] = useState(null)
+  const reduceSaveTimer = useRef(null)
+  useEffect(() => {
+    if (!connection?.output_folder) return
+    invoke('get_cpt_reduction_config')
+      .then(c => setReduceCfg({ fname: 'CPTData', window_cm: '2', method: 'average', auto_apply: false, ...(c || {}) }))
+      .catch(() => setReduceCfg({ fname: 'CPTData', window_cm: '2', method: 'average', auto_apply: false }))
+  }, [connection?.output_folder])
+  function patchReduceCfg(patch) {
+    setReduceCfg(prev => {
+      const next = { ...(prev || {}), ...patch }
+      clearTimeout(reduceSaveTimer.current)
+      reduceSaveTimer.current = setTimeout(() => {
+        invoke('save_cpt_reduction_config', { config: next }).catch(() => {})
+      }, 400)
+      return next
+    })
+  }
+  // Auto-apply the reduction to `name` right after Download/Append wrote it.
+  async function maybeAutoReduce(name) {
+    const rc = reduceCfg
+    if (!rc?.auto_apply || name !== (rc.fname || 'CPTData')) return
+    const w = parseFloat(String(rc.window_cm).replace(',', '.'))
+    if (!isFinite(w) || w <= 0) return
+    markStatuses([name], { state: 'pending', text: '⏳ reducing…' })
+    try {
+      const r = await invoke('reduce_cpt_data', { fname: name, windowCm: w, method: rc.method || 'average' })
+      markStatuses([name], {
+        state: 'ok',
+        text: `✓ ${Number(r.rows_before).toLocaleString()} → ${Number(r.rows_after).toLocaleString()} rows (reduced)`,
+      })
+    } catch (e) {
+      markStatuses([name], { state: 'err', text: `reduction failed: ${String(e).slice(0, 60)}` })
+    }
+  }
 
   // ── Re-add Strata ─────────────────────────────────────────────────────────
   const [readdingStrata, setReaddingStrata] = useState(false)
@@ -307,6 +351,7 @@ export default function DataPage() {
         for (const f of (res?.saved ?? [])) agg.saved.push(f)
         for (const e of (res?.errors ?? [])) agg.errors.push(e)
         applyResultStatuses(res, f => `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
+        if ((res?.saved ?? []).length) await maybeAutoReduce(name)
       } catch (err) {
         console.error(err)
         agg.errors.push({ file: `${name}.xlsx`, error: String(err) })
@@ -339,6 +384,7 @@ export default function DataPage() {
         applyResultStatuses(res, f => (f.appended != null
           ? `✓ +${f.appended} · ${f.skipped ?? 0} skipped`
           : `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`))
+        if ((res?.saved ?? res?.results ?? []).length) await maybeAutoReduce(name)
       } catch (err) {
         console.error(err)
         agg.errors.push({ file: `${name}.xlsx`, error: String(err) })
@@ -518,6 +564,13 @@ export default function DataPage() {
                     {readdingStrata ? '⏳ Re-adding…' : '🪨 Re-add Strata'}
                   </button>
                 </div>
+                {reduceCfg?.auto_apply && (
+                  <p className="hint" style={{ marginTop: '.5rem' }}>
+                    🔬 Auto-reduction is <strong>ON</strong>: {reduceCfg.fname || 'CPTData'} will be reduced
+                    ({String(reduceCfg.window_cm)} cm {reduceCfg.method}) right after Download / Append.
+                    Configure under the <strong>CPT reduction</strong> tab.
+                  </p>
+                )}
               </>
             )}
 
@@ -603,6 +656,8 @@ export default function DataPage() {
       {viewTab === 'reduce' && (
         <CptReduceSection
           datasheets={datasheets}
+          cfg={reduceCfg}
+          onPatch={patchReduceCfg}
           onDone={(fname) => refreshDatasheets({ keepActive: true, invalidate: new Set([fname]) })}
         />
       )}

@@ -165,6 +165,9 @@ pub fn run() {
             // map addons (project-scoped overlay layers — M4.5)
             commands::session::get_map_addons,
             commands::session::save_map_addons,
+            // CPT reduction config (persisted + auto-apply — #196)
+            commands::session::get_cpt_reduction_config,
+            commands::session::save_cpt_reduction_config,
             // windows (multi-window pop-out)
             commands::windows::open_window,
         ])

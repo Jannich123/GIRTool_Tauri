@@ -284,6 +284,51 @@ pub async fn save_coordinate_system(
     .map_err(|e| format!("internal task error: {e}"))?
 }
 
+// ── CPT reduction config (project-scoped, top level — issue #196) ─────────────
+//
+// Stored under "cpt_reduction":
+//   { fname: "CPTData", window_cm: "10", method: "average"|"median",
+//     auto_apply: bool }
+// `auto_apply` makes Download / Append run the reduction on that datasheet
+// automatically right after it is written.
+
+/// Return the saved CPT-reduction config, or `{}` when none / no folder.
+#[tauri::command]
+pub async fn get_cpt_reduction_config(state: State<'_, AppState>) -> Result<Value, String> {
+    let folder = match state.output_folder() {
+        Some(f) => f,
+        None => return Ok(json!({})),
+    };
+
+    let cfg = tokio::task::spawn_blocking(move || {
+        read_settings(&folder)
+            .get("cpt_reduction")
+            .cloned()
+            .unwrap_or(json!({}))
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?;
+
+    Ok(cfg)
+}
+
+/// Persist the CPT-reduction config at the top level of GIRTool_settings.json.
+#[tauri::command]
+pub async fn save_cpt_reduction_config(
+    config: Value,
+    state:  State<'_, AppState>,
+) -> Result<(), String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+
+    tokio::task::spawn_blocking(move || {
+        let mut settings = read_settings(&folder);
+        settings.insert("cpt_reduction".to_string(), config);
+        write_settings(&folder, &settings)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
 // ── Map addons (project-scoped, top level) ──────────────────────────────────────
 //
 // Overlay layers shown on the project / selection maps, stored top-level under
