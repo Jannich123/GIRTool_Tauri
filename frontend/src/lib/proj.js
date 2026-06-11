@@ -50,6 +50,20 @@ export const CRS_LABELS = {
   'EPSG:3857':  'Web Mercator',
 }
 
+// Common CRS quick-pick list for UI dropdowns (file imports etc.) — same set as
+// the Coordinate system subtab's target list.
+export const COMMON_CRS_OPTIONS = [
+  { value: '25832', label: 'EPSG:25832 — ETRS89 / UTM 32N' },
+  { value: '25833', label: 'EPSG:25833 — ETRS89 / UTM 33N' },
+  { value: '4093',  label: 'EPSG:4093 — ETRS89 / DKTM1' },
+  { value: '4094',  label: 'EPSG:4094 — ETRS89 / DKTM2' },
+  { value: '4095',  label: 'EPSG:4095 — ETRS89 / DKTM3' },
+  { value: '4096',  label: 'EPSG:4096 — ETRS89 / DKTM4' },
+  { value: '23032', label: 'EPSG:23032 — ED50 / UTM 32N' },
+  { value: '4326',  label: 'EPSG:4326 — WGS 84 (lat/lon)' },
+  { value: '3857',  label: 'EPSG:3857 — Web Mercator' },
+]
+
 // Normalise a raw EPSG/Projection1 cell into the canonical `EPSG:NNNN` form
 // proj4 expects.  Accepts 25832 | "25832" | "EPSG:25832" | "epsg:25832".
 // Returns null for empty/missing values.
@@ -109,6 +123,27 @@ export function pointToLatLng(p, fallbackEpsg = 'EPSG:25832') {
   const own = normaliseEpsg(p?.Projection1 ?? p?.projection1)
   const src = own && isKnownCrs(own) ? own : fallbackEpsg
   return toLatLng(x, y, src)
+}
+
+// Reproject a whole GeoJSON object's coordinates from `fromEpsg` into WGS84
+// (what Leaflet's GeoJSON layer expects).  Walks nested coordinate arrays, so
+// it handles Point/Line/Polygon and their Multi* variants.  Unconvertible
+// coordinates are left as-is rather than guessed (M4.5b file addons).
+export function reprojectGeoJSON(gj, fromEpsg) {
+  const from = normaliseEpsg(String(fromEpsg ?? ''))
+  if (!gj || !from || from === 'EPSG:4326') return gj
+  const tx = (pos) => {
+    const out = reproject(Number(pos[0]), Number(pos[1]), from, 'EPSG:4326')
+    return out ? [out[0], out[1]] : pos // [lng, lat]
+  }
+  const walk = (coords) =>
+    Array.isArray(coords) && Array.isArray(coords[0]) ? coords.map(walk) : tx(coords)
+  const features = (gj.features || []).map(f =>
+    f?.geometry?.coordinates
+      ? { ...f, geometry: { ...f.geometry, coordinates: walk(f.geometry.coordinates) } }
+      : f,
+  )
+  return { ...gj, features }
 }
 
 const round2 = (n) =>

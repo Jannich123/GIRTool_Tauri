@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import { COMMON_CRS_OPTIONS } from '../lib/proj'
 
-// Issue #169 (M4.5a) — Map addons Settings subtab.
+// Issues #169 (M4.5a) + #171 (M4.5b) — Map addons Settings subtab.
 //
-// Manage overlay layers shown on the project / selection maps.  This slice
-// supports WMS overlays (URL + layer name + target maps); local-file
-// (shapefile / CSV / Excel → GeoJSON) addons arrive in M4.5b.
+// Manage overlay layers shown on the project / selection maps:
+//   • WMS services (Connect → pick a layer from GetCapabilities), and
+//   • local files (shapefile / CSV / Excel) converted to GeoJSON on import and
+//     cached under the project's `map addons/` folder (Q-A6).
 
 export default function MapAddonsTab() {
   const { mapAddons, saveMapAddons, connection } = useApp()
@@ -63,7 +65,84 @@ export default function MapAddonsTab() {
     const a = addons.find(x => x.id === id)
     if (a) update(id, { maps: { ...a.maps, [which]: !a.maps?.[which] } })
   }
-  const remove = (id) => saveMapAddons(addons.filter(a => a.id !== id))
+  const remove = (id) => {
+    // File addons also drop their cached GeoJSON (best-effort).
+    const a = addons.find(x => x.id === id)
+    if (a?.file) invoke('delete_addon_file', { file: a.file }).catch(() => {})
+    saveMapAddons(addons.filter(x => x.id !== id))
+  }
+
+  // ── Local-file import (M4.5b) ───────────────────────────────────────────────
+  const [ff, setFf] = useState({
+    path: '', name: '', epsg: '25832', xCol: '', yCol: '',
+    infoCols: [], project: true, selection: true,
+  })
+  const [preview, setPreview]     = useState(null)  // { kind, headers, rows }
+  const [importing, setImporting] = useState(false)
+  const [fileMsg, setFileMsg]     = useState(null)
+  const [editId, setEditId]       = useState(null)  // expanded addon editor row
+
+  async function browseFile() {
+    setFileMsg(null)
+    const r = await invoke('pick_addon_file').catch(() => null)
+    const path = r?.path
+    if (!path) return
+    const stem = path.split(/[\\/]/).pop().replace(/\.[^.]+$/, '')
+    try {
+      const pv = await invoke('addon_file_preview', { path })
+      const hs = pv?.headers || []
+      const guess = (cands) =>
+        hs.find(h => cands.includes(String(h).toLowerCase().trim())) || ''
+      setPreview(pv)
+      setFf(f => ({
+        ...f, path, name: stem, infoCols: [],
+        xCol: guess(['x', 'x1', 'easting', 'east', 'xcoord', 'x-koordinat', 'x_koordinat']) || hs[0] || '',
+        yCol: guess(['y', 'y1', 'northing', 'north', 'ycoord', 'y-koordinat', 'y_koordinat']) || hs[1] || '',
+      }))
+    } catch (e) {
+      setPreview(null)
+      setFf(f => ({ ...f, path }))
+      setFileMsg({ ok: false, text: String(e).slice(0, 160) })
+    }
+  }
+
+  const toggleInfoCol = (h) => setFf(f => ({
+    ...f,
+    infoCols: f.infoCols.includes(h) ? f.infoCols.filter(c => c !== h) : [...f.infoCols, h],
+  }))
+
+  async function importFile() {
+    setFileMsg(null)
+    if (!ff.path || !preview) { setFileMsg({ ok: false, text: 'Pick a file first.' }); return }
+    if (!ff.name.trim()) { setFileMsg({ ok: false, text: 'Give the addon a name.' }); return }
+    if (!ff.project && !ff.selection) { setFileMsg({ ok: false, text: 'Pick at least one target map.' }); return }
+    const isTable = preview.kind === 'table'
+    if (isTable && (!ff.xCol || !ff.yCol)) {
+      setFileMsg({ ok: false, text: 'Pick the X and Y columns.' }); return
+    }
+    setImporting(true)
+    try {
+      const entry = await invoke('import_addon_file', {
+        req: {
+          path: ff.path,
+          name: ff.name.trim(),
+          epsg: parseInt(ff.epsg, 10) || 25832,
+          x_col: isTable ? ff.xCol : null,
+          y_col: isTable ? ff.yCol : null,
+          info_cols: isTable ? ff.infoCols : [],
+          maps: { project: ff.project, selection: ff.selection },
+        },
+      })
+      saveMapAddons([...addons, entry])
+      setFileMsg({ ok: true, text: `Imported "${entry.name}" (${entry.feature_count} features).` })
+      setFf({ path: '', name: '', epsg: '25832', xCol: '', yCol: '', infoCols: [], project: true, selection: true })
+      setPreview(null)
+    } catch (e) {
+      setFileMsg({ ok: false, text: String(e).slice(0, 200) })
+    } finally {
+      setImporting(false)
+    }
+  }
 
   return (
     <div style={{ maxWidth: 920 }}>
@@ -75,7 +154,7 @@ export default function MapAddonsTab() {
 
       {/* Existing addons */}
       {userAddons.length === 0 ? (
-        <p className="hint">No WMS addons yet. (Background maps live in the map's top-right layer panel.)</p>
+        <p className="hint">No addons yet. (Background maps live in the map's top-right layer panel.)</p>
       ) : (
         <table className="data-table" style={{ maxWidth: 900, marginBottom: '1rem' }}>
           <thead>
@@ -89,23 +168,70 @@ export default function MapAddonsTab() {
           </thead>
           <tbody>
             {userAddons.map(a => (
-              <tr key={a.id}>
-                <td title={a.url}>{a.name}</td>
-                <td>{(a.type || 'wms').toUpperCase()}</td>
-                <td style={{ fontSize: '.8rem' }}>{a.layer || '—'}</td>
-                <td style={{ textAlign: 'center' }}>
-                  <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
-                </td>
-                <td>
-                  <button className="btn-secondary btn-sm" onClick={() => remove(a.id)}>Delete</button>
-                </td>
-              </tr>
+              <Fragment key={a.id}>
+                <tr>
+                  <td title={a.url || a.file}>
+                    {a.type === 'geojson' && (
+                      <span style={{
+                        display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
+                        background: a.color || '#7c3aed', marginRight: 6, verticalAlign: 'middle',
+                      }} />
+                    )}
+                    {a.name}
+                  </td>
+                  <td>{(a.type || 'wms').toUpperCase()}</td>
+                  <td style={{ fontSize: '.8rem' }}>{a.layer || '—'}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {a.type === 'geojson' && (
+                      <button
+                        className="btn-secondary btn-sm"
+                        onClick={() => setEditId(editId === a.id ? null : a.id)}
+                        style={{ marginRight: '.35rem' }}
+                      >
+                        {editId === a.id ? 'Close' : 'Edit'}
+                      </button>
+                    )}
+                    <button className="btn-secondary btn-sm" onClick={() => remove(a.id)}>Delete</button>
+                  </td>
+                </tr>
+                {editId === a.id && a.type === 'geojson' && (
+                  <tr>
+                    <td colSpan={7} style={{ background: '#f8fafc' }}>
+                      <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap', padding: '.3rem 0' }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
+                          Colour
+                          <input
+                            type="color"
+                            value={a.color || '#7c3aed'}
+                            onChange={e => update(a.id, { color: e.target.value })}
+                          />
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
+                          Render as
+                          <select value={a.render || ''} onChange={e => update(a.id, { render: e.target.value })}>
+                            <option value="">As imported</option>
+                            <option value="points">Scatter (points)</option>
+                            <option value="line">Line</option>
+                            <option value="polygon">Polygon</option>
+                          </select>
+                        </label>
+                        <span className="hint" style={{ margin: 0 }}>
+                          Line / Polygon connect the imported points in file order.
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -158,6 +284,100 @@ export default function MapAddonsTab() {
         <button className="btn-primary" onClick={addAddon} disabled={!hasFolder}>Add addon</button>
         {!hasFolder && <span className="hint">Connect a project folder first (Project selection tab).</span>}
         {msg && <span className={`msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</span>}
+      </div>
+
+      {/* ── Add local file (M4.5b) ── */}
+      <h4 style={{ margin: '1.5rem 0 .5rem' }}>Add local file (shapefile / CSV / Excel)</h4>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Converted to GeoJSON on import and cached in the project's <code>map addons/</code> folder.
+        CSV/Excel become points from your chosen X/Y columns (first sheet for Excel); shapefiles keep
+        the attributes they carry.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center', maxWidth: 720 }}>
+        <label>File</label>
+        <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center' }}>
+          <button className="btn-secondary" onClick={browseFile} disabled={importing}>Browse…</button>
+          <span className="hint" style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {ff.path || 'no file selected'}
+          </span>
+        </div>
+
+        <label>Name</label>
+        <input type="text" value={ff.name} onChange={e => setFf({ ...ff, name: e.target.value })} placeholder="layer name" />
+
+        <label>EPSG</label>
+        <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={COMMON_CRS_OPTIONS.some(o => o.value === ff.epsg) ? ff.epsg : ''}
+            onChange={e => { if (e.target.value) setFf({ ...ff, epsg: e.target.value }) }}
+            style={{ maxWidth: 280 }}
+          >
+            <option value="">— common systems —</option>
+            {COMMON_CRS_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <input
+            type="text" inputMode="numeric" value={ff.epsg}
+            onChange={e => setFf({ ...ff, epsg: e.target.value.replace(/[^\d]/g, '') })}
+            style={{ width: 100 }}
+            title="Coordinate system of the file — pick from the list or type any EPSG code"
+          />
+          <span className="hint" style={{ margin: 0 }}>coordinate system of the file</span>
+        </div>
+
+        {preview?.kind === 'table' && (
+          <>
+            <label>X column</label>
+            <select value={ff.xCol} onChange={e => setFf({ ...ff, xCol: e.target.value })} style={{ maxWidth: 280 }}>
+              <option value="">— pick —</option>
+              {(preview.headers || []).map(h => <option key={h} value={h}>{h}</option>)}
+            </select>
+
+            <label>Y column</label>
+            <select value={ff.yCol} onChange={e => setFf({ ...ff, yCol: e.target.value })} style={{ maxWidth: 280 }}>
+              <option value="">— pick —</option>
+              {(preview.headers || []).map(h => <option key={h} value={h}>{h}</option>)}
+            </select>
+
+            <label style={{ alignSelf: 'start' }}>Hover info</label>
+            <div style={{ display: 'flex', gap: '.35rem .9rem', flexWrap: 'wrap' }}>
+              {(preview.headers || []).filter(h => h !== ff.xCol && h !== ff.yCol).map(h => (
+                <label key={h} style={{ display: 'inline-flex', alignItems: 'center', gap: '.3rem', fontSize: '.82rem' }}>
+                  <input type="checkbox" checked={ff.infoCols.includes(h)} onChange={() => toggleInfoCol(h)} />
+                  {h}
+                </label>
+              ))}
+              <span className="hint" style={{ margin: 0 }}>(none ticked = all columns)</span>
+            </div>
+          </>
+        )}
+        {preview?.kind === 'shapefile' && (
+          <>
+            <label>Attributes</label>
+            <span className="hint" style={{ margin: 0 }}>
+              {(preview.headers || []).length
+                ? `carried as-is: ${(preview.headers || []).join(', ')}`
+                : 'no attribute table found — geometry only'}
+            </span>
+          </>
+        )}
+
+        <label>Show on</label>
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem' }}>
+            <input type="checkbox" checked={ff.project} onChange={e => setFf({ ...ff, project: e.target.checked })} /> Project map
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem' }}>
+            <input type="checkbox" checked={ff.selection} onChange={e => setFf({ ...ff, selection: e.target.checked })} /> Selection map
+          </label>
+        </div>
+      </div>
+      <div style={{ marginTop: '.75rem', display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn-primary" onClick={importFile} disabled={!hasFolder || importing || !ff.path}>
+          {importing ? 'Importing…' : 'Import file'}
+        </button>
+        {fileMsg && <span className={`msg ${fileMsg.ok ? 'ok' : 'err'}`}>{fileMsg.text}</span>}
       </div>
     </div>
   )
