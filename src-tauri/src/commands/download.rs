@@ -2568,6 +2568,151 @@ pub async fn readd_strata(
     }))
 }
 
+// ── CPT data reduction (issue #180, M7 / plan §D1, Q-D1..D4) ─────────────────
+
+fn value_key_str(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::Bool(b))   => b.to_string(),
+        _                      => String::new(),
+    }
+}
+
+fn median_of(nums: &mut [f64]) -> f64 {
+    nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = nums.len();
+    if n % 2 == 1 { nums[n / 2] } else { (nums[n / 2 - 1] + nums[n / 2]) / 2.0 }
+}
+
+/// Reduce a CPT datasheet IN PLACE (Q-D1): per borehole, bucket the rows into
+/// fixed `window_cm` depth windows starting from depth 0 (Q-D2, on the `Depth`
+/// column per Q-D4) and emit one aggregated row per non-empty window — moving
+/// average or median of every numeric column incl. Depth (Q-D3); non-numeric
+/// columns keep the window's first value.  Strata columns are re-applied
+/// afterwards from strata.xlsx.  Windows without rows produce no row (no
+/// interpolation).  User formulas do not survive (rows are aggregated away).
+#[tauri::command]
+pub async fn reduce_cpt_data(
+    fname: String,
+    window_cm: f64,
+    method: String, // "average" | "median"
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let path = datasheets_dir(&folder).join(format!("{fname}.xlsx"));
+    if !path.exists() {
+        return Err(format!("Datasheet not found: {fname}.xlsx"));
+    }
+    if !window_cm.is_finite() || window_cm <= 0.0 {
+        return Err("Window size must be a positive number of centimetres.".into());
+    }
+    let median = method.eq_ignore_ascii_case("median");
+    let strata_lookup = load_strata_lookup(&folder, "");
+
+    let fname_c = fname.clone();
+    let folder_c = folder.clone();
+    tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let Some((mut columns, rows, _formulas)) = read_existing_datasheet(&path) else {
+            return Err("Failed to read the datasheet.".into());
+        };
+        let n_before = rows.len();
+
+        let depth_idx = columns
+            .iter()
+            .position(|c| c.eq_ignore_ascii_case("depth"))
+            .ok_or("No 'Depth' column found — is this a CPT datasheet?")?;
+        let key_cols: Vec<usize> = ["db_id", "PointNo", "TestId", "PointId"]
+            .iter()
+            .filter_map(|n| columns.iter().position(|c| c.eq_ignore_ascii_case(n)))
+            .collect();
+        if key_cols.is_empty() {
+            return Err("No borehole identity columns (PointNo/TestId/PointId) found.".into());
+        }
+
+        let window_m = window_cm / 100.0;
+
+        // Group rows per borehole, preserving first-appearance order.
+        let mut order: Vec<String> = Vec::new();
+        let mut groups: HashMap<String, Vec<&Vec<Value>>> = HashMap::new();
+        for r in &rows {
+            let k = key_cols
+                .iter()
+                .map(|&i| value_key_str(r.get(i)))
+                .collect::<Vec<_>>()
+                .join("||");
+            if !groups.contains_key(&k) {
+                order.push(k.clone());
+            }
+            groups.entry(k).or_default().push(r);
+        }
+
+        let mut out_rows: Vec<Vec<Value>> = Vec::new();
+        for k in &order {
+            let g = &groups[k];
+            // Bucket by floor(Depth / window) — windows count from depth 0
+            // (Q-D2); rows without a numeric Depth are dropped.
+            let mut buckets: std::collections::BTreeMap<i64, Vec<&Vec<Value>>> =
+                std::collections::BTreeMap::new();
+            for r in g {
+                let Some(d) = r.get(depth_idx).and_then(|v| v.as_f64()) else { continue };
+                buckets.entry((d / window_m).floor() as i64).or_default().push(r);
+            }
+            for (_b, wrows) in buckets {
+                let mut out = Vec::with_capacity(columns.len());
+                for ci in 0..columns.len() {
+                    let mut nums: Vec<f64> = Vec::new();
+                    let mut all_numeric = true;
+                    let mut first_nonnull: Option<Value> = None;
+                    for r in &wrows {
+                        match r.get(ci) {
+                            Some(Value::Null) | None => {}
+                            Some(v @ Value::Number(_)) => {
+                                if first_nonnull.is_none() { first_nonnull = Some(v.clone()); }
+                                if let Some(f) = v.as_f64() { nums.push(f); }
+                            }
+                            Some(other) => {
+                                if first_nonnull.is_none() { first_nonnull = Some(other.clone()); }
+                                all_numeric = false;
+                            }
+                        }
+                    }
+                    let v = if all_numeric && !nums.is_empty() {
+                        let agg = if median {
+                            median_of(&mut nums)
+                        } else {
+                            nums.iter().sum::<f64>() / nums.len() as f64
+                        };
+                        let r4 = (agg * 10000.0).round() / 10000.0;
+                        serde_json::Number::from_f64(r4).map(Value::Number).unwrap_or(Value::Null)
+                    } else {
+                        first_nonnull.unwrap_or(Value::Null)
+                    };
+                    out.push(v);
+                }
+                out_rows.push(out);
+            }
+        }
+
+        // Q-D3: re-apply strata to the reduced rows (fresh Primary/Secondary
+        // Layer via the same (db_id, ProjectId, PointId, depth) lookup).
+        upsert_strata_columns(&mut columns, &mut out_rows, &strata_lookup);
+        let has_strata = columns.iter().any(|c| c.eq_ignore_ascii_case("primary layer"));
+
+        let n_after = out_rows.len();
+        write_datasheet(&path, &columns, &out_rows, None)?;
+        write_datasheet_cache(&folder_c, &fname_c, &columns, &out_rows, None);
+        persist_datasheet_meta(&folder_c, &fname_c, n_after, has_strata);
+        Ok(json!({
+            "file": format!("{fname_c}.xlsx"),
+            "rows_before": n_before,
+            "rows_after": n_after,
+        }))
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
 /// Persist the full application session state to GIRTool_settings.json.
 /// Preserves any existing "charts" key that may have been written separately.
 #[tauri::command]

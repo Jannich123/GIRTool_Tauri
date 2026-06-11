@@ -98,6 +98,7 @@ pub fn run() {
             commands::download::download_data,
             commands::download::append_data,
             commands::download::readd_strata,
+            commands::download::reduce_cpt_data,
             commands::download::list_datasheets,
             commands::download::read_datasheet,
             commands::download::save_session,
