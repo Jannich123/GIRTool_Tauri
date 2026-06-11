@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, CircleMarker, Polygon, Polyline, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
@@ -17,22 +17,36 @@ import AddonControl from '../components/AddonControl'
 // Later: M4.3b polygon draw; M4.4 red-ring selection (click a loaded point →
 // add it + its parent project to the Projects/Points subtabs).
 
-// GEUS Jupiter WFS — feature type jupiter_lithologi_over_10m_dybe (WFS 1.0.0,
-// geojson, EPSG:25832).  Fetched via wfs_proxy; bbox-bounded + capped; only at
-// zoom ≥ JUPITER_MIN_ZOOM so it never pulls all of Denmark.
-const JUPITER_WFS      = 'https://data.geus.dk/geusmap/ows/25832.jsp'
-const JUPITER_TYPENAME = 'jupiter_lithologi_over_10m_dybe'
-const JUPITER_MAX      = 2000
-const JUPITER_MIN_ZOOM = 11
+// Jupiter boreholes (#174) — the comprehensive jupiter_boringer_ws layer (all
+// Danish boreholes with owner / terrænkote / purpose / cyklogram / borerapport),
+// loaded PER REGION with the same Load buttons as the DB sources (view
+// rectangle or drawn polygon).  No auto-fetch on pan.  Only three purpose
+// categories are kept — everything else is dropped at load time (verified
+// `formaal` codes from live data; GEUS's vendor filter param is ignored
+// server-side, so filtering happens client-side after the bbox fetch).
+const JUPITER_WFS       = 'https://data.geus.dk/geusmap/ows/25832.jsp'
+const JUPITER_TYPENAME  = 'jupiter_boringer_ws'
+const JUPITER_FETCH_MAX = 10000
+
+const JUPITER_CATS = [
+  { key: 'geo',    label: 'Geoteknik', color: '#b45309', codes: ['G'] },
+  { key: 'vand',   label: 'Vand',      color: '#0369a1', codes: ['V', 'VV', 'VP', 'VM'] },
+  { key: 'miljoe', label: 'Miljø',     color: '#15803d', codes: ['L'] },
+]
+const JUPITER_CODE_TO_CAT = {}
+JUPITER_CATS.forEach(c => c.codes.forEach(code => { JUPITER_CODE_TO_CAT[code] = c.key }))
+const JUPITER_CAT_COLOR = Object.fromEntries(JUPITER_CATS.map(c => [c.key, c.color]))
 
 // Distinct colours for data sources (databases).  Assigned by the sorted db_id
-// set so DB1/DB2/… stay consistent across renders.  Jupiter is grey.
+// set so DB1/DB2/… stay consistent across renders.
 const SOURCE_PALETTE = ['#2563eb', '#16a34a', '#db2777', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#dc2626']
-const JUPITER_COLOR  = '#cbd5e1'
 
 // Session-scoped memory of the selection map so leaving Data Selection (or its
 // Map subtab) and returning restores the last view, loaded points, and toggles.
-const mapStore = { view: null, loaded: [], showJupiter: true, loadStatus: '', hiddenDbs: [] }
+const mapStore = {
+  view: null, loaded: [], loadStatus: '', hiddenDbs: [],
+  jupiter: [], jupiterCats: { geo: true, vand: true, miljoe: true },
+}
 
 // Ray-casting point-in-polygon for [lat, lng] coordinates (lng = x, lat = y).
 function pointInPolygonLatLng(ll, poly) {
@@ -101,90 +115,20 @@ function DrawHandler({ active, onVertex }) {
   return null
 }
 
-// Live Jupiter WFS reference layer: refetches the current view's boreholes on
-// pan/zoom (debounced), renders them as small grey markers under the DB points.
-function JupiterLayer({ whoami, enabled, onStatus }) {
-  const map = useMap()
-  const [features, setFeatures] = useState([])
-  const timer = useRef(null)
-  const reqId = useRef(0)
-
-  const fetchForBounds = useCallback(() => {
-    if (!enabled) { setFeatures([]); onStatus?.(''); return }
-    if (map.getZoom() < JUPITER_MIN_ZOOM) {
-      setFeatures([]); onStatus?.('zoom in to load Jupiter boreholes')
-      return
-    }
-    const b = map.getBounds()
-    const sw = reproject(b.getWest(), b.getSouth(), 'EPSG:4326', 'EPSG:25832')
-    const ne = reproject(b.getEast(), b.getNorth(), 'EPSG:4326', 'EPSG:25832')
-    if (!sw || !ne) return
-    const minx = Math.min(sw[0], ne[0]).toFixed(1), maxx = Math.max(sw[0], ne[0]).toFixed(1)
-    const miny = Math.min(sw[1], ne[1]).toFixed(1), maxy = Math.max(sw[1], ne[1]).toFixed(1)
-    const who = whoami ? `&whoami=${encodeURIComponent(whoami)}` : ''
-    const url =
-      `${JUPITER_WFS}?mapname=jupiter${who}` +
-      `&service=WFS&version=1.0.0&request=GetFeature` +
-      `&typename=${JUPITER_TYPENAME}&outputformat=geojson&srsname=EPSG:25832` +
-      `&maxfeatures=${JUPITER_MAX}&bbox=${minx},${miny},${maxx},${maxy}`
-
-    const myReq = ++reqId.current
-    onStatus?.('loading…')
-    invoke('wfs_proxy', { url })
-      .then(gj => {
-        if (myReq !== reqId.current) return
-        const feats = (gj?.features || []).map(f => {
-          const c = f.geometry?.coordinates
-          if (!Array.isArray(c)) return null
-          const latlng = toLatLng(Number(c[0]), Number(c[1]), 'EPSG:25832')
-          if (!latlng) return null
-          return { id: f.properties?.id_hidden ?? `${c[0]}_${c[1]}`, latlng, props: f.properties || {} }
-        }).filter(Boolean)
-        setFeatures(feats)
-        const capped = feats.length >= JUPITER_MAX ? '+ (zoom in for all)' : ''
-        onStatus?.(`${feats.length}${capped} borehole${feats.length === 1 ? '' : 's'} in view`)
-      })
-      .catch(err => {
-        if (myReq !== reqId.current) return
-        setFeatures([]); onStatus?.(`error: ${String(err).slice(0, 80)}`)
-      })
-  }, [map, enabled, whoami, onStatus])
-
-  useMapEvents({
-    moveend: () => { clearTimeout(timer.current); timer.current = setTimeout(fetchForBounds, 400) },
-  })
-
-  useEffect(() => {
-    fetchForBounds()
-    return () => clearTimeout(timer.current)
-  }, [fetchForBounds])
-
-  if (!enabled) return null
-  return features.map(f => (
-    <CircleMarker
-      key={`j_${f.id}`}
-      center={f.latlng}
-      radius={4}
-      pathOptions={{ color: '#475569', weight: 1, fillColor: '#cbd5e1', fillOpacity: 0.85 }}
-      eventHandlers={{
-        click: () => { if (f.props.borerapport) invoke('open_url', { url: f.props.borerapport }).catch(() => {}) },
-      }}
-    >
-      <Tooltip>
-        <span style={{ fontSize: '.75rem' }}>
-          DGU {f.props.dgunr || '?'}{f.props.boringsdybde ? ` · ${f.props.boringsdybde} m` : ''} · click → borerapport
-        </span>
-      </Tooltip>
-    </CircleMarker>
-  ))
-}
+// (The live per-view Jupiter WFS layer was replaced in #174 by per-region
+// loading of jupiter_boringer_ws via the same Load buttons as the DB sources —
+// see fetchJupiterRegion + the Jupiter render block in SelectionMap below.)
 
 export default function SelectionMap() {
   const { allPoints } = useFilter()
   const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects } = useApp()
   const [initials, setInitials] = useState('')
-  const [showJupiter, setShowJupiter] = useState(() => mapStore.showJupiter)
-  const [jupiterStatus, setJupiterStatus] = useState('')
+
+  // Jupiter boreholes (#174) — loaded per region; category show/hide toggles.
+  const [jupiter, setJupiter] = useState(() => mapStore.jupiter)
+  const [jupiterCats, setJupiterCats] = useState(() => ({ ...mapStore.jupiterCats }))
+  const toggleJupiterCat = (key) =>
+    setJupiterCats(prev => ({ ...prev, [key]: !prev[key] }))
 
   // M4.3 — available points loaded inside the current view via the spatial query.
   const [map, setMap] = useState(null)
@@ -200,7 +144,8 @@ export default function SelectionMap() {
   const [vertices, setVertices] = useState([]) // [[lat, lng], …]
 
   // Persist across unmount so returning to Data Selection restores this state.
-  useEffect(() => { mapStore.showJupiter = showJupiter }, [showJupiter])
+  useEffect(() => { mapStore.jupiter = jupiter }, [jupiter])
+  useEffect(() => { mapStore.jupiterCats = { ...jupiterCats } }, [jupiterCats])
   useEffect(() => { mapStore.loaded = loaded }, [loaded])
   useEffect(() => { mapStore.loadStatus = loadStatus }, [loadStatus])
   useEffect(() => { mapStore.hiddenDbs = [...hiddenDbs] }, [hiddenDbs])
@@ -215,6 +160,50 @@ export default function SelectionMap() {
     invoke('os_username').then(u => setInitials((u || '').trim())).catch(() => {})
   }, [])
   const whoami = initials ? `${initials}@cowi.com` : ''
+
+  // Fetch Jupiter boreholes (jupiter_boringer_ws, #174) inside the region —
+  // same trigger as the DB load.  BBOX WFS GetFeature → GeoJSON, then
+  // client-side polygon test + category filter (geo/vand/miljø only; the rest
+  // is never kept).  Dedups by borid across overlapping loads.
+  async function fetchJupiterRegion(points4326) {
+    const polyLatLng = points4326.map(([lng, lat]) => [lat, lng])
+    const proj = points4326.map(([lng, lat]) => reproject(lng, lat, 'EPSG:4326', 'EPSG:25832'))
+    if (proj.some(p => !p)) return { added: 0 }
+    const xs = proj.map(p => p[0]), ys = proj.map(p => p[1])
+    const bbox = `${Math.min(...xs).toFixed(1)},${Math.min(...ys).toFixed(1)},${Math.max(...xs).toFixed(1)},${Math.max(...ys).toFixed(1)}`
+    const who = whoami ? `&whoami=${encodeURIComponent(whoami)}` : ''
+    const url =
+      `${JUPITER_WFS}?mapname=jupiter${who}` +
+      `&service=WFS&version=1.0.0&request=GetFeature` +
+      `&typename=${JUPITER_TYPENAME}&outputformat=geojson&srsname=EPSG:25832` +
+      `&maxfeatures=${JUPITER_FETCH_MAX}&bbox=${bbox}`
+    const gj = await invoke('wfs_proxy', { url })
+    const fetched = (gj?.features || []).length
+    const seen = new Set(jupiter.map(f => f.borid))
+    const fresh = []
+    for (const f of (gj?.features || [])) {
+      const c = f.geometry?.coordinates
+      const p = f.properties || {}
+      if (!Array.isArray(c)) continue
+      const cat = JUPITER_CODE_TO_CAT[String(p.formaal ?? '').trim()]
+      if (!cat) continue // not geoteknik / vand / miljø — never loaded
+      const latlng = toLatLng(Number(c[0]), Number(c[1]), 'EPSG:25832')
+      if (!latlng) continue
+      if (!pointInPolygonLatLng(latlng, polyLatLng)) continue
+      const borid = String(p.borid ?? p.id ?? `${c[0]}_${c[1]}`)
+      if (seen.has(borid)) continue
+      seen.add(borid)
+      fresh.push({
+        borid, latlng, cat,
+        dgunr: p.dgunr || '', formaal: p.formaal_tekst || '',
+        ejer: p.dataejer || '', terraen: p.terraen_kote ?? '',
+        dybde: p.dybde || '', aar: p.aar || '', status: p.kode_tekst || '',
+        cyklogram: p.cyklogram || '', url: p.url || '',
+      })
+    }
+    if (fresh.length) setJupiter(prev => [...prev, ...fresh])
+    return { added: fresh.length, capped: fetched >= JUPITER_FETCH_MAX }
+  }
 
   const pts = useMemo(() => {
     if (!allPoints?.length) return []
@@ -313,13 +302,22 @@ export default function SelectionMap() {
     return { feats, skipped, noEpsg: false }
   }
 
-  // Load available points inside the region (orange), de-duped against the map.
+  // Load available points inside the region (de-duped against the map) AND the
+  // Jupiter boreholes for the same region (#174) — one button, both sources.
   async function loadInside(points) {
     if (!points || points.length < 3) return
-    setLoading(true); setLoadStatus('querying databases…')
+    setLoading(true); setLoadStatus('querying databases + Jupiter…')
     try {
-      const { feats, skipped, noEpsg } = await queryPointsInPolygon(points)
-      if (noEpsg) { setLoadStatus('no usable coordinate systems found in the configured databases'); return }
+      const [q, jup] = await Promise.all([
+        queryPointsInPolygon(points),
+        fetchJupiterRegion(points).catch(() => ({ added: 0 })),
+      ])
+      const jupBit = ` · ${jup.added} Jupiter borehole${jup.added === 1 ? '' : 's'}${jup.capped ? ' (area capped — load a smaller region for all)' : ''}`
+      if (q.noEpsg) {
+        setLoadStatus(`no usable coordinate systems found in the configured databases${jupBit}`)
+        return
+      }
+      const { feats, skipped } = q
       const onMap = new Set([...loaded.map(f => f.id), ...pts.map(f => f.id)])
       const fresh = feats.filter(f => !onMap.has(f.id))
       setLoaded(prev => {
@@ -328,7 +326,7 @@ export default function SelectionMap() {
       })
       const dup  = (feats.length - fresh.length) ? ` · ${feats.length - fresh.length} already on map` : ''
       const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
-      setLoadStatus(`${fresh.length} new point${fresh.length === 1 ? '' : 's'} loaded${dup}${skip}`)
+      setLoadStatus(`${fresh.length} new DB point${fresh.length === 1 ? '' : 's'}${dup}${skip}${jupBit}`)
     } catch (e) {
       setLoadStatus(`error: ${String(e).slice(0, 140)}`)
     } finally {
@@ -405,7 +403,9 @@ export default function SelectionMap() {
 
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
         <span className="hint" style={{ margin: 0 }}>
-          {showJupiter ? `Jupiter: ${jupiterStatus || '…'}` : 'Jupiter: off'}
+          Jupiter: {jupiter.length
+            ? `${jupiter.length} borehole${jupiter.length === 1 ? '' : 's'} loaded · hover = info + cyklogram · click = borerapport`
+            : 'none loaded — ⬇ Load in view or draw a polygon'}
           {pts.length ? ` · ${pts.length} selected-project point${pts.length === 1 ? '' : 's'}` : ''}
           {' · toggle sources in the map legend (bottom-left)'}
         </span>
@@ -420,8 +420,8 @@ export default function SelectionMap() {
             <button className="btn-secondary" onClick={loadInView} disabled={!map || loading}>
               {loading ? 'Loading…' : '⬇ Load in view'}
             </button>
-            {loaded.length > 0 && (
-              <button className="btn-secondary" onClick={() => { setLoaded([]); setLoadStatus('') }} disabled={loading}>
+            {(loaded.length > 0 || jupiter.length > 0) && (
+              <button className="btn-secondary" onClick={() => { setLoaded([]); setJupiter([]); setLoadStatus('') }} disabled={loading}>
                 Clear loaded
               </button>
             )}
@@ -478,8 +478,40 @@ export default function SelectionMap() {
           {/* Background maps + WMS addons — one unified layer list (M4.5a). */}
           <AddonLayers target="selection" />
 
-          {/* Jupiter reference — drawn first (under everything). */}
-          <JupiterLayer whoami={whoami} enabled={showJupiter} onStatus={setJupiterStatus} />
+          {/* Jupiter boreholes (#174) — loaded per region, coloured by category,
+              filtered by the legend's category toggles.  Hover = info +
+              cyklogram; click = borerapport. */}
+          {jupiter.filter(f => jupiterCats[f.cat]).map(f => (
+            <CircleMarker
+              key={`j_${f.borid}`}
+              center={f.latlng}
+              radius={4}
+              pathOptions={{ color: '#475569', weight: 1, fillColor: JUPITER_CAT_COLOR[f.cat], fillOpacity: 0.9 }}
+              eventHandlers={{
+                click: () => { if (f.url) invoke('open_url', { url: f.url }).catch(() => {}) },
+              }}
+            >
+              <Tooltip sticky>
+                <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 260 }}>
+                  <strong>DGU {f.dgunr || '?'}</strong>{f.formaal ? ` · ${f.formaal}` : ''}<br />
+                  {f.ejer ? <>Ejer: {f.ejer}<br /></> : null}
+                  {(f.terraen !== '' && f.terraen != null) ? <>Terræn: {f.terraen} m<br /></> : null}
+                  {f.dybde ? <>Dybde: {f.dybde}</> : null}
+                  {f.aar ? ` · ${f.aar}` : ''}
+                  {f.status ? ` · ${f.status}` : ''}
+                  {(f.dybde || f.aar || f.status) ? <br /> : null}
+                  {f.cyklogram ? (
+                    <img
+                      src={f.cyklogram}
+                      alt="cyklogram"
+                      style={{ maxHeight: 170, maxWidth: 240, marginTop: 4, display: 'block' }}
+                    />
+                  ) : null}
+                  <div style={{ opacity: 0.7, marginTop: 2 }}>click → borerapport</div>
+                </div>
+              </Tooltip>
+            </CircleMarker>
+          ))}
 
           {/* M4.3 available points loaded in view — orange (not selectable yet). */}
           {loaded.filter(f => !ptIdSet.has(f.id) && !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
@@ -552,11 +584,14 @@ export default function SelectionMap() {
               {id}
             </label>
           ))}
-          <label style={{ display: 'flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer' }}>
-            <input type="checkbox" checked={showJupiter} onChange={e => setShowJupiter(e.target.checked)} />
-            <span style={{ width: 11, height: 11, borderRadius: '50%', background: JUPITER_COLOR, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #475569', flex: '0 0 auto' }} />
-            Jupiter (GEUS)
-          </label>
+          <div style={{ fontWeight: 700, margin: '.3rem 0 .05rem' }}>Jupiter (GEUS)</div>
+          {JUPITER_CATS.map(c => (
+            <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!jupiterCats[c.key]} onChange={() => toggleJupiterCat(c.key)} />
+              <span style={{ width: 11, height: 11, borderRadius: '50%', background: c.color, boxShadow: '0 0 0 1px #fff, 0 0 0 2px #475569', flex: '0 0 auto' }} />
+              {c.label}
+            </label>
+          ))}
           {(pts.length > 0 || loaded.length > 0) && (
             <div className="hint" style={{ marginTop: '.3rem' }}>● in project · ○ available · ⭕ selected</div>
           )}
