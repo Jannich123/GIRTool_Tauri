@@ -5,7 +5,8 @@ import SelectionMap from './SelectionMap'
 
 // Session-scoped memory of the active subtab so leaving Data Selection and
 // returning reopens the same subtab (issue: restore where you left off).
-let savedSub = 'projects'
+// First open lands on the map (#202).
+let savedSub = 'map'
 
 // Issue #151 (M3) — Data Selection shell.  Merges the former top-level Projects
 // + Points tabs into one tab with subtabs [ Map | Projects | Points ] (#200).

@@ -8,7 +8,9 @@
 // All windows share the same AppState (database connection, output folder,
 // selection, etc.) since Tauri runs one backend process for the whole app.
 // Cross-window data sync (e.g. boundaries edits → live chart refresh) is
-// handled via Tauri events emitted from the affected command handlers.
+// handled via Tauri events emitted from the affected command handlers; the
+// point/project selection is mirrored window-to-window by frontend-emitted
+// `selection:*` events (AppContext, #203).
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
