@@ -111,6 +111,27 @@ export function pointToLatLng(p, fallbackEpsg = 'EPSG:25832') {
   return toLatLng(x, y, src)
 }
 
+// Reproject a whole GeoJSON object's coordinates from `fromEpsg` into WGS84
+// (what Leaflet's GeoJSON layer expects).  Walks nested coordinate arrays, so
+// it handles Point/Line/Polygon and their Multi* variants.  Unconvertible
+// coordinates are left as-is rather than guessed (M4.5b file addons).
+export function reprojectGeoJSON(gj, fromEpsg) {
+  const from = normaliseEpsg(String(fromEpsg ?? ''))
+  if (!gj || !from || from === 'EPSG:4326') return gj
+  const tx = (pos) => {
+    const out = reproject(Number(pos[0]), Number(pos[1]), from, 'EPSG:4326')
+    return out ? [out[0], out[1]] : pos // [lng, lat]
+  }
+  const walk = (coords) =>
+    Array.isArray(coords) && Array.isArray(coords[0]) ? coords.map(walk) : tx(coords)
+  const features = (gj.features || []).map(f =>
+    f?.geometry?.coordinates
+      ? { ...f, geometry: { ...f.geometry, coordinates: walk(f.geometry.coordinates) } }
+      : f,
+  )
+  return { ...gj, features }
+}
+
 const round2 = (n) =>
   (n == null || !isFinite(Number(n))) ? n : Math.round(Number(n) * 100) / 100
 

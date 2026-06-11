@@ -131,6 +131,12 @@ pub fn run() {
             // map polygon-load (M4.3)
             commands::map_query::map_distinct_epsgs,
             commands::map_query::map_polygon_points,
+            // map addons — local-file → GeoJSON (M4.5b)
+            commands::map_addons::pick_addon_file,
+            commands::map_addons::addon_file_preview,
+            commands::map_addons::import_addon_file,
+            commands::map_addons::load_addon_geojson,
+            commands::map_addons::delete_addon_file,
             // boundaries
             commands::boundaries::get_boundaries,
             commands::boundaries::save_boundaries,

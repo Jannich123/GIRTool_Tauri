@@ -45,6 +45,11 @@ calamine     = { version = "0.24", features = ["dates"] }
 # Excel writing
 rust_xlsxwriter = { version = "0.75", features = ["serde"] }
 
+# Map addons (M4.5b): local-file → GeoJSON conversion
+shapefile    = "0.6"   # .shp/.dbf reading
+csv          = "1"     # CSV parsing (delimiter-detected)
+encoding_rs  = "0.8"   # non-UTF8 (Windows-1252) CSV fallback; already in tree via reqwest
+
 # HTTP client (SharePoint / Graph API)
 reqwest      = { version = "0.12", features = ["json", "rustls-tls"] }
 

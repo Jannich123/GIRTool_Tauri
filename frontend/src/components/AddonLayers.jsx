@@ -1,5 +1,9 @@
-import { TileLayer, WMSTileLayer } from 'react-leaflet'
+import { useEffect, useRef, useState } from 'react'
+import { GeoJSON, TileLayer, WMSTileLayer } from 'react-leaflet'
+import L from 'leaflet'
+import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import { reprojectGeoJSON } from '../lib/proj'
 
 // Standard WMS operation params that Leaflet's WMSTileLayer adds itself.  If the
 // saved URL already carries them (e.g. a pasted GetCapabilities URL), they
@@ -26,14 +30,31 @@ function wmsBaseUrl(raw) {
   }
 }
 
-// Map addons (M4.5a) — renders the overlay layers targeted at `target`
-// ('project' | 'selection').  Must be a child of a react-leaflet <MapContainer>.
-//
-// Only WMS overlays are rendered here; WFS / local-file (GeoJSON) addons arrive
-// in M4.5b (they need per-service / per-format handling).  Unknown types are
-// skipped so a saved WFS addon simply doesn't draw yet.
+// Renders every visible map layer targeted at `target` ('project' |
+// 'selection'), in list order: XYZ tiles, WMS overlays, and (M4.5b) local-file
+// GeoJSON addons.  Must be a child of a react-leaflet <MapContainer>.
 export default function AddonLayers({ target }) {
   const { mapAddons } = useApp()
+
+  // GeoJSON cache: addon id → reprojected FeatureCollection.  Loaded once per
+  // addon (the file is immutable after import); the ref guards double-fetches.
+  const [geoCache, setGeoCache] = useState({})
+  const loadingRef = useRef(new Set())
+
+  useEffect(() => {
+    for (const a of (mapAddons || [])) {
+      if (!a || a.type !== 'geojson' || a.visible === false || !a.maps?.[target]) continue
+      if (geoCache[a.id] || loadingRef.current.has(a.id)) continue
+      loadingRef.current.add(a.id)
+      invoke('load_addon_geojson', { file: a.file })
+        .then(gj => {
+          setGeoCache(prev => ({ ...prev, [a.id]: reprojectGeoJSON(gj, a.epsg ?? 25832) }))
+        })
+        .catch(err => console.warn(`addon ${a.name}: failed to load GeoJSON:`, err))
+        .finally(() => loadingRef.current.delete(a.id))
+    }
+  }, [mapAddons, target]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (mapAddons || [])
     .filter(a => a && a.visible !== false && a.maps?.[target])
     .map((a, i) => {
@@ -50,6 +71,36 @@ export default function AddonLayers({ target }) {
             zIndex={zIndex}
             attribution={a.name}
             {...(a.maxZoom ? { maxZoom: a.maxZoom } : {})}
+          />
+        )
+      }
+
+      if (a.type === 'geojson') {
+        const data = geoCache[a.id]
+        if (!data) return null
+        const color = a.color || '#7c3aed'
+        return (
+          <GeoJSON
+            // Key includes opacity: react-leaflet doesn't re-style a mounted
+            // GeoJSON layer, so the slider remounts it with the new style.
+            key={`${a.id}_${opacity}`}
+            data={data}
+            style={() => ({ color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 })}
+            pointToLayer={(feat, latlng) =>
+              L.circleMarker(latlng, {
+                radius: 5, color: '#fff', weight: 1.2,
+                fillColor: color, fillOpacity: Math.min(0.95, opacity),
+              })
+            }
+            onEachFeature={(feature, layer) => {
+              const props = feature?.properties || {}
+              const keys = Object.keys(props).slice(0, 8)
+              if (!keys.length) return
+              const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+              const html = `<strong>${esc(a.name)}</strong><br/>` +
+                keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
+              layer.bindTooltip(html, { sticky: true })
+            }}
           />
         )
       }
