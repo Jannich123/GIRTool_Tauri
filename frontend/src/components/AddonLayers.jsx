@@ -30,14 +30,44 @@ function wmsBaseUrl(raw) {
   }
 }
 
+// Session-wide cache: addon id → reprojected FeatureCollection.  Module-level
+// so it survives unmount/remount (tab switches) — each imported file is read +
+// parsed + reprojected ONCE per app session, then map opens are instant.  Safe
+// because the cached .geojson is immutable after import (re-imports get a new
+// id); cleared only by an app restart.
+const geoFileCache = new Map()
+
+// Optional render-type override (Edit → "Render as"): connect a point-set into
+// a single Line / Polygon in file order.  Non-point features pass through; with
+// fewer than 2 points the input is returned unchanged.
+function applyRenderType(gj, render) {
+  if (!gj || !render || render === 'points') return gj
+  const pts = []
+  const others = []
+  for (const f of (gj.features || [])) {
+    if (f?.geometry?.type === 'Point') pts.push(f.geometry.coordinates)
+    else others.push(f)
+  }
+  if (pts.length < 2) return gj
+  let geometry
+  if (render === 'line') {
+    geometry = { type: 'LineString', coordinates: pts }
+  } else {
+    const ring = [...pts]
+    const [f0, l0] = [ring[0], ring[ring.length - 1]]
+    if (f0[0] !== l0[0] || f0[1] !== l0[1]) ring.push(f0)
+    geometry = { type: 'Polygon', coordinates: [ring] }
+  }
+  return { ...gj, features: [...others, { type: 'Feature', properties: {}, geometry }] }
+}
+
 // Renders every visible map layer targeted at `target` ('project' |
 // 'selection'), in list order: XYZ tiles, WMS overlays, and (M4.5b) local-file
 // GeoJSON addons.  Must be a child of a react-leaflet <MapContainer>.
 export default function AddonLayers({ target }) {
   const { mapAddons } = useApp()
 
-  // GeoJSON cache: addon id → reprojected FeatureCollection.  Loaded once per
-  // addon (the file is immutable after import); the ref guards double-fetches.
+  // Local mirror of the session cache (state, so loads trigger a re-render).
   const [geoCache, setGeoCache] = useState({})
   const loadingRef = useRef(new Set())
 
@@ -45,10 +75,16 @@ export default function AddonLayers({ target }) {
     for (const a of (mapAddons || [])) {
       if (!a || a.type !== 'geojson' || a.visible === false || !a.maps?.[target]) continue
       if (geoCache[a.id] || loadingRef.current.has(a.id)) continue
+      if (geoFileCache.has(a.id)) {
+        setGeoCache(prev => ({ ...prev, [a.id]: geoFileCache.get(a.id) }))
+        continue
+      }
       loadingRef.current.add(a.id)
       invoke('load_addon_geojson', { file: a.file })
         .then(gj => {
-          setGeoCache(prev => ({ ...prev, [a.id]: reprojectGeoJSON(gj, a.epsg ?? 25832) }))
+          const reprojected = reprojectGeoJSON(gj, a.epsg ?? 25832)
+          geoFileCache.set(a.id, reprojected)
+          setGeoCache(prev => ({ ...prev, [a.id]: reprojected }))
         })
         .catch(err => console.warn(`addon ${a.name}: failed to load GeoJSON:`, err))
         .finally(() => loadingRef.current.delete(a.id))
@@ -76,14 +112,15 @@ export default function AddonLayers({ target }) {
       }
 
       if (a.type === 'geojson') {
-        const data = geoCache[a.id]
-        if (!data) return null
+        const cached = geoCache[a.id]
+        if (!cached) return null
+        const data = applyRenderType(cached, a.render)
         const color = a.color || '#7c3aed'
         return (
           <GeoJSON
-            // Key includes opacity: react-leaflet doesn't re-style a mounted
-            // GeoJSON layer, so the slider remounts it with the new style.
-            key={`${a.id}_${opacity}`}
+            // Key includes opacity / colour / render type: react-leaflet doesn't
+            // re-style a mounted GeoJSON layer, so changes remount it.
+            key={`${a.id}_${opacity}_${color}_${a.render || 'native'}`}
             data={data}
             style={() => ({ color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 })}
             pointToLayer={(feat, latlng) =>
@@ -95,10 +132,11 @@ export default function AddonLayers({ target }) {
             onEachFeature={(feature, layer) => {
               const props = feature?.properties || {}
               const keys = Object.keys(props).slice(0, 8)
-              if (!keys.length) return
               const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
-              const html = `<strong>${esc(a.name)}</strong><br/>` +
-                keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
+              const html = keys.length
+                ? `<strong>${esc(a.name)}</strong><br/>` +
+                  keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
+                : `<strong>${esc(a.name)}</strong>`
               layer.bindTooltip(html, { sticky: true })
             }}
           />

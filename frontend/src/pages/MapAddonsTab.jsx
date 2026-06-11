@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import { COMMON_CRS_OPTIONS } from '../lib/proj'
 
 // Issues #169 (M4.5a) + #171 (M4.5b) — Map addons Settings subtab.
 //
@@ -79,6 +80,7 @@ export default function MapAddonsTab() {
   const [preview, setPreview]     = useState(null)  // { kind, headers, rows }
   const [importing, setImporting] = useState(false)
   const [fileMsg, setFileMsg]     = useState(null)
+  const [editId, setEditId]       = useState(null)  // expanded addon editor row
 
   async function browseFile() {
     setFileMsg(null)
@@ -166,23 +168,70 @@ export default function MapAddonsTab() {
           </thead>
           <tbody>
             {userAddons.map(a => (
-              <tr key={a.id}>
-                <td title={a.url}>{a.name}</td>
-                <td>{(a.type || 'wms').toUpperCase()}</td>
-                <td style={{ fontSize: '.8rem' }}>{a.layer || '—'}</td>
-                <td style={{ textAlign: 'center' }}>
-                  <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
-                </td>
-                <td>
-                  <button className="btn-secondary btn-sm" onClick={() => remove(a.id)}>Delete</button>
-                </td>
-              </tr>
+              <Fragment key={a.id}>
+                <tr>
+                  <td title={a.url || a.file}>
+                    {a.type === 'geojson' && (
+                      <span style={{
+                        display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
+                        background: a.color || '#7c3aed', marginRight: 6, verticalAlign: 'middle',
+                      }} />
+                    )}
+                    {a.name}
+                  </td>
+                  <td>{(a.type || 'wms').toUpperCase()}</td>
+                  <td style={{ fontSize: '.8rem' }}>{a.layer || '—'}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {a.type === 'geojson' && (
+                      <button
+                        className="btn-secondary btn-sm"
+                        onClick={() => setEditId(editId === a.id ? null : a.id)}
+                        style={{ marginRight: '.35rem' }}
+                      >
+                        {editId === a.id ? 'Close' : 'Edit'}
+                      </button>
+                    )}
+                    <button className="btn-secondary btn-sm" onClick={() => remove(a.id)}>Delete</button>
+                  </td>
+                </tr>
+                {editId === a.id && a.type === 'geojson' && (
+                  <tr>
+                    <td colSpan={7} style={{ background: '#f8fafc' }}>
+                      <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap', padding: '.3rem 0' }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
+                          Colour
+                          <input
+                            type="color"
+                            value={a.color || '#7c3aed'}
+                            onChange={e => update(a.id, { color: e.target.value })}
+                          />
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
+                          Render as
+                          <select value={a.render || ''} onChange={e => update(a.id, { render: e.target.value })}>
+                            <option value="">As imported</option>
+                            <option value="points">Scatter (points)</option>
+                            <option value="line">Line</option>
+                            <option value="polygon">Polygon</option>
+                          </select>
+                        </label>
+                        <span className="hint" style={{ margin: 0 }}>
+                          Line / Polygon connect the imported points in file order.
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -257,13 +306,24 @@ export default function MapAddonsTab() {
         <input type="text" value={ff.name} onChange={e => setFf({ ...ff, name: e.target.value })} placeholder="layer name" />
 
         <label>EPSG</label>
-        <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={COMMON_CRS_OPTIONS.some(o => o.value === ff.epsg) ? ff.epsg : ''}
+            onChange={e => { if (e.target.value) setFf({ ...ff, epsg: e.target.value }) }}
+            style={{ maxWidth: 280 }}
+          >
+            <option value="">— common systems —</option>
+            {COMMON_CRS_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
           <input
             type="text" inputMode="numeric" value={ff.epsg}
             onChange={e => setFf({ ...ff, epsg: e.target.value.replace(/[^\d]/g, '') })}
             style={{ width: 100 }}
+            title="Coordinate system of the file — pick from the list or type any EPSG code"
           />
-          <span className="hint" style={{ margin: 0 }}>coordinate system of the file (e.g. 25832)</span>
+          <span className="hint" style={{ margin: 0 }}>coordinate system of the file</span>
         </div>
 
         {preview?.kind === 'table' && (
