@@ -290,47 +290,68 @@ export default function DataPage() {
     }
   }
 
+  // Issue #194: Download runs ONE BACKEND CALL PER DATASHEET, sequentially —
+  // the per-sheet status badges tick over live and one failing sheet can't
+  // block the rest.  Results aggregate into the same summary box.
   async function handleSave() {
     setSavingData(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
-    markStatuses(queryNames, { state: 'pending', text: '⏳ downloading…' })
-    try {
-      const res = await invoke('download_data', { projectId, query: buildPayload(queryNames) })
-      setSaveResult(res)
-      applyResultStatuses(res, f => `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
-      // Issue #113: refresh subtab list + invalidate cache for files just rewritten.
-      const touched = new Set((res?.saved ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
-      await refreshDatasheets({ keepActive: true, invalidate: touched })
-      // Issue #115: jump to the preview so the user sees the result.
-      setViewTab('preview')
-      viewTabTouchedRef.current = true
-    } catch (err) {
-      console.error(err)
-      setError(err || 'Save failed — check the backend log.')
-      markStatuses(queryNames, { state: 'err', text: 'failed' })
-    } finally { setSavingData(false) }
+    markStatuses(queryNames, { state: 'pending', text: '⏳ queued…' })
+    const base = buildPayload([])
+    const agg = { folder: '', saved: [], errors: [] }
+    for (const name of queryNames) {
+      markStatuses([name], { state: 'pending', text: '⏳ downloading…' })
+      try {
+        const res = await invoke('download_data', { projectId, query: { ...base, query_names: [name] } })
+        agg.folder = res?.folder ?? agg.folder
+        for (const f of (res?.saved ?? [])) agg.saved.push(f)
+        for (const e of (res?.errors ?? [])) agg.errors.push(e)
+        applyResultStatuses(res, f => `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
+      } catch (err) {
+        console.error(err)
+        agg.errors.push({ file: `${name}.xlsx`, error: String(err) })
+        markStatuses([name], { state: 'err', text: String(err).slice(0, 80) })
+      }
+    }
+    setSaveResult(agg)
+    // Issue #113: refresh subtab list + invalidate cache for files just rewritten.
+    const touched = new Set(agg.saved.map(s => s.file.replace(/\.xlsx$/i, '')))
+    await refreshDatasheets({ keepActive: true, invalidate: touched })
+    // Issue #115: jump to the preview so the user sees the result.
+    setViewTab('preview')
+    viewTabTouchedRef.current = true
+    setSavingData(false)
   }
 
   async function handleAppend() {
     setAppending(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
-    markStatuses(queryNames, { state: 'pending', text: '⏳ appending…' })
-    try {
-      const res = await invoke('append_data', { projectId, query: buildPayload(queryNames) })
-      setAppendResult(res)
-      applyResultStatuses(res, f => (f.appended != null
-        ? `✓ +${f.appended} · ${f.skipped ?? 0} skipped`
-        : `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`))
-      const touched = new Set((res?.saved ?? res?.results ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
-      await refreshDatasheets({ keepActive: true, invalidate: touched })
-      // Issue #115: jump to the preview so the user sees the appended rows.
-      setViewTab('preview')
-      viewTabTouchedRef.current = true
-    } catch (err) {
-      console.error(err)
-      setError(err || 'Append failed — check the backend log.')
-      markStatuses(queryNames, { state: 'err', text: 'failed' })
-    } finally { setAppending(false) }
+    markStatuses(queryNames, { state: 'pending', text: '⏳ queued…' })
+    const base = buildPayload([])
+    const agg = { folder: '', results: [], errors: [] }
+    for (const name of queryNames) {
+      markStatuses([name], { state: 'pending', text: '⏳ appending…' })
+      try {
+        const res = await invoke('append_data', { projectId, query: { ...base, query_names: [name] } })
+        agg.folder = res?.folder ?? agg.folder
+        for (const f of (res?.saved ?? res?.results ?? [])) agg.results.push(f)
+        for (const e of (res?.errors ?? [])) agg.errors.push(e)
+        applyResultStatuses(res, f => (f.appended != null
+          ? `✓ +${f.appended} · ${f.skipped ?? 0} skipped`
+          : `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`))
+      } catch (err) {
+        console.error(err)
+        agg.errors.push({ file: `${name}.xlsx`, error: String(err) })
+        markStatuses([name], { state: 'err', text: String(err).slice(0, 80) })
+      }
+    }
+    setAppendResult(agg)
+    const touched = new Set(agg.results.map(s => s.file.replace(/\.xlsx$/i, '')))
+    await refreshDatasheets({ keepActive: true, invalidate: touched })
+    // Issue #115: jump to the preview so the user sees the appended rows.
+    setViewTab('preview')
+    viewTabTouchedRef.current = true
+    setAppending(false)
   }
 
   async function handleReaddStrata() {

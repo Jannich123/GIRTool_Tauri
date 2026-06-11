@@ -79,6 +79,13 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] Data preview: **📂 Open in Excel** opens the currently selected datasheet's xlsx.
 - [ ] Download / Append / Re-add Strata: each affected datasheet in the query list shows **⏳ … → ✓ rows / +appended·skipped / 🪨 ✓** (or the error) beside its name.
 
+### 6d. Bulk fetch + live progress (#194)
+
+- [ ] Large downloads are **dramatically faster** (the ODBC layer now fetches 1024-row batches instead of one call per cell).
+- [ ] Danish characters (æøå) still correct in downloaded text columns; numeric columns still sort numerically in previews/tables.
+- [ ] During ⬇ Download / ⊕ Append the per-datasheet badges now update **live, one sheet at a time** (⏳ queued… → ⏳ downloading… → ✓), and a failing sheet doesn't stop the rest.
+- [ ] `cd src-tauri && cargo test` still green (CPT oracle).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
