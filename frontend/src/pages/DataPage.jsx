@@ -4,6 +4,78 @@ import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { applyCoordinateSystem, normaliseEpsg } from '../lib/proj'
 
+// ── CPT data reduction (issue #180, M7 / plan §D1) ────────────────────────────
+function CptReduceSection({ datasheets, onDone }) {
+  const names = datasheets.map(d => d.fname)
+  const [fname, setFname]       = useState(() => (names.includes('CPTData') ? 'CPTData' : (names[0] || '')))
+  const [windowCm, setWindowCm] = useState('2')
+  const [method, setMethod]     = useState('average')
+  const [busy, setBusy]         = useState(false)
+  const [msg, setMsg]           = useState(null)
+
+  // Keep the selection valid as the datasheet list changes.
+  useEffect(() => {
+    if (!names.includes(fname)) setFname(names.includes('CPTData') ? 'CPTData' : (names[0] || ''))
+  }, [datasheets]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function run() {
+    setMsg(null)
+    const w = parseFloat(String(windowCm).replace(',', '.'))
+    if (!fname) { setMsg({ ok: false, text: 'Pick a datasheet.' }); return }
+    if (!isFinite(w) || w <= 0) { setMsg({ ok: false, text: 'Window must be a positive number of centimetres.' }); return }
+    setBusy(true)
+    try {
+      const r = await invoke('reduce_cpt_data', { fname, windowCm: w, method })
+      setMsg({ ok: true, text: `${r.file}: ${r.rows_before} → ${r.rows_after} rows` })
+      onDone?.(fname)
+    } catch (e) {
+      setMsg({ ok: false, text: String(e).slice(0, 200) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 680 }}>
+      <h3 className="section-title">CPT data reduction</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Reduces a CPT datasheet <strong>in place</strong>: per borehole, rows are bucketed into fixed
+        depth windows (from 0 m, on the <code>Depth</code> column) and each non-empty window becomes
+        one row — the average/median of every numeric column, incl. Depth. Strata columns are
+        re-applied afterwards. Empty windows produce no row. This overwrites the file — run
+        Download again to restore the raw data.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
+        <label>Datasheet</label>
+        <select value={fname} onChange={e => setFname(e.target.value)} style={{ maxWidth: 260 }}>
+          {names.map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <label>Window</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}>
+          <input
+            type="text" inputMode="decimal" value={windowCm}
+            onChange={e => setWindowCm(e.target.value)}
+            style={{ width: 80 }}
+          />
+          <span className="hint" style={{ margin: 0 }}>cm (e.g. 2 or 10)</span>
+        </div>
+        <label>Method</label>
+        <select value={method} onChange={e => setMethod(e.target.value)} style={{ maxWidth: 260 }}>
+          <option value="average">Moving average</option>
+          <option value="median">Moving median</option>
+        </select>
+      </div>
+      <div style={{ marginTop: '.75rem', display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn-primary" onClick={run} disabled={busy || !fname}>
+          {busy ? 'Reducing…' : '🔬 Reduce data'}
+        </button>
+        {msg && <span className={`msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</span>}
+      </div>
+      {names.length === 0 && <p className="hint" style={{ marginTop: '.6rem' }}>No datasheets yet — download data first.</p>}
+    </div>
+  )
+}
+
 export default function DataPage() {
   const { selectedProjects, selectedPoints, connection, coordinateSystem } = useApp()
   // allPoints = every point in the selected projects (issue #149).  Used to
@@ -287,6 +359,7 @@ export default function DataPage() {
         {[
           { key: 'download', label: '⬇ Download menu' },
           { key: 'preview',  label: `📊 Data preview${datasheets.length > 0 ? ` (${datasheets.length})` : ''}` },
+          { key: 'reduce',   label: '🔬 CPT reduction' },
         ].map(t => {
           const active = viewTab === t.key
           return (
@@ -455,6 +528,14 @@ export default function DataPage() {
       )}
 
       {/* ══ DATASHEET SUBTABS (issue #113) — gated by top view tab (#115) ═ */}
+      {/* ══ CPT REDUCTION VIEW (issue #180, M7) ════════════════════════════ */}
+      {viewTab === 'reduce' && (
+        <CptReduceSection
+          datasheets={datasheets}
+          onDone={(fname) => refreshDatasheets({ keepActive: true, invalidate: new Set([fname]) })}
+        />
+      )}
+
       {viewTab === 'preview' && datasheets.length === 0 && (
         <p className="hint">
           No downloaded datasheets in <code>{connection?.output_folder || '<output folder>'}/Datasheets/</code> yet.
