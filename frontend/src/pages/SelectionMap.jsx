@@ -51,9 +51,69 @@ const mapStore = {
 // Cyklogram summaries (#174): borid → 'loading' | null (no data) | [{label, pct}].
 // GEUS's cyklogram IMAGE is dead upstream (it redirects to the retired Google
 // Image Charts API), but the redirect URL carries the lithology data — fetched
-// lazily on first hover via cyklogram_summary and rendered as text.  Module-
-// level so results survive tab switches.
+// lazily on first hover via cyklogram_summary and drawn locally as a small SVG
+// pie.  Module-level so results survive tab switches.
 const cykCache = new Map()
+
+// Approximate Danish lithology colours for the locally-drawn cyklogram
+// (keyword match on the GEUS labels; first hit wins).
+const LITH_COLORS = [
+  ['tørv',  '#4a3b2a'], ['gytje', '#5d4a36'], ['muld', '#6d4c41'],
+  ['grus',  '#e67e22'], ['sten',  '#9e9e9e'], ['sand', '#f4d03f'],
+  ['silt',  '#d7bd8d'], ['kalk',  '#aee3e8'], ['kridt', '#cfeaed'],
+  ['ler',   '#8d6e63'], ['fyld',  '#b0bec5'], ['brønd', '#90a4ae'],
+]
+function lithColor(label) {
+  const l = String(label).toLowerCase()
+  for (const [kw, c] of LITH_COLORS) if (l.includes(kw)) return c
+  return '#b0a18f'
+}
+
+// Pie segment path: angles in radians from 12 o'clock, clockwise.
+function arcPath(cx, cy, r, a0, a1) {
+  const large = (a1 - a0) > Math.PI ? 1 : 0
+  const x0 = cx + r * Math.sin(a0), y0 = cy - r * Math.cos(a0)
+  const x1 = cx + r * Math.sin(a1), y1 = cy - r * Math.cos(a1)
+  return `M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`
+}
+
+// Locally-drawn cyklogram: SVG pie (segments ∝ layer share, top→bottom drawn
+// clockwise from 12 o'clock, GEUS-style) + a compact colour legend.
+function CyklogramFigure({ seq }) {
+  const total = seq.reduce((s, x) => s + x.pct, 0) || 1
+  let a = 0
+  const segs = seq.map(s => {
+    const a0 = a
+    a += (s.pct / total) * Math.PI * 2
+    return { ...s, a0, a1: a, color: lithColor(s.label) }
+  })
+  const shown = segs.slice(0, 8)
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 3 }}>
+      <svg width="64" height="64" viewBox="0 0 64 64" style={{ flex: '0 0 auto' }}>
+        {segs.length === 1 ? (
+          <circle cx="32" cy="32" r="30" fill={segs[0].color} />
+        ) : (
+          segs.map((s, i) => (
+            <path key={i} d={arcPath(32, 32, 30, s.a0, s.a1)} fill={s.color} stroke="#fff" strokeWidth="0.8" />
+          ))
+        )}
+        <circle cx="32" cy="32" r="30" fill="none" stroke="#64748b" strokeWidth="1" />
+      </svg>
+      <div style={{ fontSize: '.68rem', lineHeight: 1.4 }}>
+        {shown.map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 8, height: 8, background: s.color, border: '1px solid #94a3b8', flex: '0 0 auto' }} />
+            {s.label} {s.pct < 1 ? s.pct.toFixed(1) : Math.round(s.pct)}%
+          </div>
+        ))}
+        {segs.length > shown.length && (
+          <div style={{ opacity: 0.7 }}>+{segs.length - shown.length} more…</div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 // Ray-casting point-in-polygon for [lat, lng] coordinates (lng = x, lat = y).
 function pointInPolygonLatLng(ll, poly) {
@@ -541,8 +601,8 @@ export default function SelectionMap() {
                     if (cyk === 'loading') return <div style={small}>henter cyklogram…</div>
                     if (Array.isArray(cyk)) return (
                       <div style={{ marginTop: 2 }}>
-                        <strong>Cyklogram:</strong>{' '}
-                        {cyk.map(s => `${s.label} ${s.pct < 1 ? s.pct.toFixed(1) : Math.round(s.pct)}%`).join(' · ')}
+                        <strong>Cyklogram:</strong>
+                        <CyklogramFigure seq={cyk} />
                       </div>
                     )
                     if (cyk === null) return <div style={small}>Cyklogram: ingen data</div>
