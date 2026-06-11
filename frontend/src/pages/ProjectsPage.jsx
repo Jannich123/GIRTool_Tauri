@@ -177,10 +177,13 @@ export default function ProjectsPage({ setPage }) {
     setChecked(init)
   }, [selectedProjects])
 
-  async function fetchProjects() {
+  // Issue #185: list_projects is served from a per-session backend cache (the
+  // DB query runs once, then it's instant).  `force` re-queries — wired to the
+  // ↻ Refresh list button.
+  async function fetchProjects(force = false) {
     setLoading(true); setError('')
     try {
-      const res = await invoke('list_projects')
+      const res = await invoke('list_projects', { refresh: !!force })
       setProjects(res)
     } catch (err) {
       console.error(err)
@@ -424,7 +427,7 @@ export default function ProjectsPage({ setPage }) {
       <div className="page-header">
         <h2 className="page-title">Projects</h2>
         <div className="page-actions">
-          <button onClick={fetchProjects} className="btn-secondary btn-sm">↻ Refresh list</button>
+          <button onClick={() => fetchProjects(true)} className="btn-secondary btn-sm" title="Re-query the databases (otherwise the cached list is used)">↻ Refresh list</button>
           <button onClick={handleOpenXlsx} disabled={!connection?.output_folder}
                   className="btn-secondary btn-sm"
                   title={!connection?.output_folder

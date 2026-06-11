@@ -131,6 +131,11 @@ pub struct AppState {
     /// True once a successful connection has been established
     pub connected: Mutex<bool>,
 
+    /// Session cache of the project list (issue #185): `list_projects` runs the
+    /// multi-DB query once per session and serves this afterwards.  Cleared on
+    /// connect / database-config changes; bypassed with `refresh: true`.
+    pub projects_cache: Mutex<Option<Vec<serde_json::Value>>>,
+
     pub sp:        Mutex<SpState>,
 }
 
