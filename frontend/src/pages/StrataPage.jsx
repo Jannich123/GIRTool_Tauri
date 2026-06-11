@@ -640,6 +640,95 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
         const clusterIssues = cluster.rowIdxs.flatMap(idx => issueByRow[idx] || [])
         const nErr  = clusterIssues.filter(x => x.severity === 'error').length
         const nWarn = clusterIssues.filter(x => x.severity === 'warning').length
+
+        // Issue #192: show at most ±CONTEXT layers around each problem row —
+        // overlapping windows within the borehole merge into one segment;
+        // hidden stretches collapse into separator rows.
+        const CONTEXT = 2
+        const len = cluster.rowIdxs.length
+        const probs = cluster.rowIdxs
+          .map((ri, li) => (issueByRow[ri] ? li : -1))
+          .filter(li => li >= 0)
+        const segs = []
+        {
+          let i = 0
+          while (i < probs.length) {
+            let s = Math.max(0, probs[i] - CONTEXT)
+            let e = Math.min(len - 1, probs[i] + CONTEXT)
+            while (i + 1 < probs.length && probs[i + 1] - CONTEXT <= e + 1) {
+              i++
+              e = Math.min(len - 1, probs[i] + CONTEXT)
+            }
+            segs.push({ s, e })
+            i++
+          }
+        }
+        const sepRow = (key, text) => (
+          <tr key={key}>
+            <td colSpan={6} style={{ fontSize: '.72em', color: '#9ca3af', background: '#f9fafb', padding: '2px 8px' }}>
+              {text}
+            </td>
+          </tr>
+        )
+        const renderClusterRow = (rowIdx) => {
+          const row = rows[rowIdx]
+          if (!row) return null
+          const rowIssues = issueByRow[rowIdx] || []
+          const isError   = rowIssues.some(x => x.severity === 'error')
+          const isWarn    = rowIssues.some(x => x.severity === 'warning')
+          const bg = isError ? '#fee2e2' : isWarn ? '#fef9c3' : undefined
+          return (
+            <tr key={rowIdx} style={{ background: bg }}>
+              <td style={{ fontSize: '0.78em', lineHeight: 1.4 }}>
+                {rowIssues.map(iss => (
+                  <div key={iss.type} style={{ whiteSpace: 'nowrap' }}>
+                    {iss.type === ERR_NEG     && '🔴 K: Negative thickness'}
+                    {iss.type === ERR_OVERLAP && '🔴 J: Overlapping'}
+                    {iss.type === WARN_GAP    && '⚠ I: Gap in boundary'}
+                  </div>
+                ))}
+              </td>
+              <td style={{ textAlign: 'right' }}>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={row.From}
+                  onChange={e => onEdit(rowIdx, 'From', e.target.value)}
+                  style={{ width: 80, textAlign: 'right' }}
+                />
+              </td>
+              <td style={{ textAlign: 'right' }}>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={row.To}
+                  onChange={e => onEdit(rowIdx, 'To', e.target.value)}
+                  style={{ width: 80, textAlign: 'right' }}
+                />
+              </td>
+              <td>{row.Layer}</td>
+              <td>{row.Description}</td>
+              <td
+                style={{
+                  position: 'sticky',
+                  right: 0,
+                  background: bg ?? '#fff',
+                  zIndex: 1,
+                  boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
+                }}
+              >
+                <button
+                  className="btn-secondary btn-sm"
+                  style={{ color: '#dc2626', borderColor: '#dc2626', padding: '1px 6px' }}
+                  title="Delete this layer row"
+                  onClick={() => onDelete(rowIdx)}
+                >
+                  ✕ Delete
+                </button>
+              </td>
+            </tr>
+          )
+        }
         return (
           <div
             key={cluster.key}
@@ -692,65 +781,23 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
                 </tr>
               </thead>
               <tbody>
-                {cluster.rowIdxs.map(rowIdx => {
-                  const row = rows[rowIdx]
-                  if (!row) return null
-                  const rowIssues = issueByRow[rowIdx] || []
-                  const isError   = rowIssues.some(x => x.severity === 'error')
-                  const isWarn    = rowIssues.some(x => x.severity === 'warning')
-                  const bg = isError ? '#fee2e2' : isWarn ? '#fef9c3' : undefined
-
-                  return (
-                    <tr key={rowIdx} style={{ background: bg }}>
-                      <td style={{ fontSize: '0.78em', lineHeight: 1.4 }}>
-                        {rowIssues.map(iss => (
-                          <div key={iss.type} style={{ whiteSpace: 'nowrap' }}>
-                            {iss.type === ERR_NEG     && '🔴 K: Negative thickness'}
-                            {iss.type === ERR_OVERLAP && '🔴 J: Overlapping'}
-                            {iss.type === WARN_GAP    && '⚠ I: Gap in boundary'}
-                          </div>
-                        ))}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.From}
-                          onChange={e => onEdit(rowIdx, 'From', e.target.value)}
-                          style={{ width: 80, textAlign: 'right' }}
-                        />
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.To}
-                          onChange={e => onEdit(rowIdx, 'To', e.target.value)}
-                          style={{ width: 80, textAlign: 'right' }}
-                        />
-                      </td>
-                      <td>{row.Layer}</td>
-                      <td>{row.Description}</td>
-                      <td
-                        style={{
-                          position: 'sticky',
-                          right: 0,
-                          background: bg ?? '#fff',
-                          zIndex: 1,
-                          boxShadow: '-3px 0 4px rgba(0, 0, 0, 0.06)',
-                        }}
-                      >
-                        <button
-                          className="btn-secondary btn-sm"
-                          style={{ color: '#dc2626', borderColor: '#dc2626', padding: '1px 6px' }}
-                          title="Delete this layer row"
-                          onClick={() => onDelete(rowIdx)}
-                        >
-                          ✕ Delete
-                        </button>
-                      </td>
-                    </tr>
-                  )
+                {segs.flatMap((seg, si) => {
+                  const out = []
+                  if (si === 0 && seg.s > 0) {
+                    out.push(sepRow(`t${si}`, `↑ ${seg.s} layer${seg.s !== 1 ? 's' : ''} above not shown`))
+                  }
+                  if (si > 0) {
+                    const hidden = seg.s - segs[si - 1].e - 1
+                    if (hidden > 0) out.push(sepRow(`m${si}`, `⋯ ${hidden} layer${hidden !== 1 ? 's' : ''} hidden`))
+                  }
+                  for (let li = seg.s; li <= seg.e; li++) {
+                    out.push(renderClusterRow(cluster.rowIdxs[li]))
+                  }
+                  if (si === segs.length - 1 && seg.e < len - 1) {
+                    const below = len - 1 - seg.e
+                    out.push(sepRow(`b${si}`, `↓ ${below} layer${below !== 1 ? 's' : ''} below not shown`))
+                  }
+                  return out
                 })}
               </tbody>
             </table>

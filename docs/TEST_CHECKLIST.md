@@ -30,7 +30,7 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 ## 3. M6 — Strata error clustering (#178 / PR #179)
 
 - [ ] Strata → **Error Correction**: issues now appear as **whole-borehole clusters** — header shows DB pill + PointNo + per-borehole error/warning counts.
-- [ ] Each cluster lists **all layers of that borehole** (full context), problem rows highlighted red/yellow.
+- [ ] Each cluster shows **±2 layers around every issue** (windows merge when issues are close), with "⋯ N layers hidden / above / below" separators; problem rows highlighted red/yellow.
 - [ ] Boreholes without issues don't appear; **Errors only** filter hides warning-only boreholes.
 - [ ] From/To editing, ✕ Delete, save gating (no save while errors), and the tab badge all work as before.
 
@@ -72,6 +72,12 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] Ticking/dragging rows **auto-saves** to points.xlsx after ~0.3 s (banner confirms) — no 💾 button needed anymore.
 - [ ] **Second app start is instant**: the Projects list comes from `projects_list.csv` and the restored selection's points from `points_cache.json` — no DB wait. (`↻ Refresh list` / `↻ Refresh` / `↺ Refresh data` pull fresh from the DB.)
 - [ ] Map: selecting a point from a project you've loaded before (even in a past session) adds instantly — its points come from the cache.
+
+### 6c. Data tab polish (#192)
+
+- [ ] With >3 projects selected, the Data header shows "Projects: **N selected**" (full list on hover) instead of every name.
+- [ ] Data preview: **📂 Open in Excel** opens the currently selected datasheet's xlsx.
+- [ ] Download / Append / Re-add Strata: each affected datasheet in the query list shows **⏳ … → ✓ rows / +appended·skipped / 🪨 ✓** (or the error) beside its name.
 
 ## 7. Quick regression sweep
 

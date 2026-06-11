@@ -91,6 +91,26 @@ export default function DataPage() {
   const [selected, setSelected]     = useState({})   // fname -> bool
   const [savingData, setSavingData] = useState(false)
   const [saveResult, setSaveResult] = useState(null)
+  // Issue #192: per-datasheet status badges shown beside each query name
+  // during/after Download / Append / Re-add.  fname → { state, text }.
+  const [fileStatus, setFileStatus] = useState({})
+  const markStatuses = (names, st) =>
+    setFileStatus(prev => {
+      const next = { ...prev }
+      names.forEach(f => { next[f] = st })
+      return next
+    })
+  const applyResultStatuses = (res, okText) =>
+    setFileStatus(prev => {
+      const next = { ...prev }
+      for (const f of (res?.saved ?? res?.results ?? res?.updated ?? [])) {
+        next[String(f.file).replace(/\.xlsx$/i, '')] = { state: 'ok', text: okText(f) }
+      }
+      for (const e of (res?.errors ?? [])) {
+        next[String(e.file).replace(/\.xlsx$/i, '')] = { state: 'err', text: String(e.error).slice(0, 80) }
+      }
+      return next
+    })
 
   // ── Re-add Strata ─────────────────────────────────────────────────────────
   const [readdingStrata, setReaddingStrata] = useState(false)
@@ -273,9 +293,11 @@ export default function DataPage() {
   async function handleSave() {
     setSavingData(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
+    markStatuses(queryNames, { state: 'pending', text: '⏳ downloading…' })
     try {
       const res = await invoke('download_data', { projectId, query: buildPayload(queryNames) })
       setSaveResult(res)
+      applyResultStatuses(res, f => `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
       // Issue #113: refresh subtab list + invalidate cache for files just rewritten.
       const touched = new Set((res?.saved ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
       await refreshDatasheets({ keepActive: true, invalidate: touched })
@@ -285,15 +307,20 @@ export default function DataPage() {
     } catch (err) {
       console.error(err)
       setError(err || 'Save failed — check the backend log.')
+      markStatuses(queryNames, { state: 'err', text: 'failed' })
     } finally { setSavingData(false) }
   }
 
   async function handleAppend() {
     setAppending(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
+    markStatuses(queryNames, { state: 'pending', text: '⏳ appending…' })
     try {
       const res = await invoke('append_data', { projectId, query: buildPayload(queryNames) })
       setAppendResult(res)
+      applyResultStatuses(res, f => (f.appended != null
+        ? `✓ +${f.appended} · ${f.skipped ?? 0} skipped`
+        : `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`))
       const touched = new Set((res?.saved ?? res?.results ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
       await refreshDatasheets({ keepActive: true, invalidate: touched })
       // Issue #115: jump to the preview so the user sees the appended rows.
@@ -302,19 +329,24 @@ export default function DataPage() {
     } catch (err) {
       console.error(err)
       setError(err || 'Append failed — check the backend log.')
+      markStatuses(queryNames, { state: 'err', text: 'failed' })
     } finally { setAppending(false) }
   }
 
   async function handleReaddStrata() {
     setReaddingStrata(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
+    const strataNames = queries.filter(q => q.apply_strata === 'Yes').map(q => q.fname)
+    markStatuses(strataNames, { state: 'pending', text: '⏳ re-adding strata…' })
     try {
       const res = await invoke('readd_strata', { projectId, query: buildPayload([]) })
       setReaddResult(res)
+      applyResultStatuses(res, f => `🪨 ✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
       const touched = new Set((res?.updated ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
       await refreshDatasheets({ keepActive: true, invalidate: touched })
     } catch (err) {
       console.error(err)
       setError(err || 'Re-add strata failed — check the backend log.')
+      markStatuses(strataNames, { state: 'err', text: 'failed' })
     } finally { setReaddingStrata(false) }
   }
 
@@ -342,8 +374,14 @@ export default function DataPage() {
         */}
       </div>
 
-      <p className="hint" style={{ marginBottom: '1.25rem' }}>
-        Project: <strong>{selectedProjects.map(p => p.ProjectNo).join(', ')}</strong>
+      <p
+        className="hint"
+        style={{ marginBottom: '1.25rem' }}
+        title={selectedProjects.map(p => p.ProjectNo).join(', ')}
+      >
+        {selectedProjects.length > 3
+          ? <>Projects: <strong>{selectedProjects.length} selected</strong> (hover for the list)</>
+          : <>Project{selectedProjects.length > 1 ? 's' : ''}: <strong>{selectedProjects.map(p => p.ProjectNo).join(', ')}</strong></>}
         {selectedPoints.length > 0
           ? <> · <strong>{selectedPoints.length} point{selectedPoints.length > 1 ? 's' : ''}</strong> selected</>
           : <> · <em>all points</em></>}
@@ -415,6 +453,18 @@ export default function DataPage() {
                   <span className={`strata-badge ${q.apply_strata === 'Yes' ? 'yes' : 'no'}`}>
                     {q.apply_strata === 'Yes' ? 'Strata' : 'No strata'}
                   </span>
+                  {fileStatus[q.fname] && (
+                    <span
+                      style={{
+                        marginLeft: 'auto', fontSize: '.75rem', whiteSpace: 'nowrap',
+                        color: fileStatus[q.fname].state === 'ok' ? '#15803d'
+                          : fileStatus[q.fname].state === 'err' ? '#b91c1c' : '#b45309',
+                      }}
+                      title={fileStatus[q.fname].text}
+                    >
+                      {fileStatus[q.fname].text}
+                    </span>
+                  )}
                 </label>
               ))}
             </div>
@@ -556,6 +606,15 @@ export default function DataPage() {
               style={{ marginRight: '.3rem' }}
             >
               {preloading ? '⏳ Loading…' : '↻ Reload data'}
+            </button>
+            <button
+              onClick={() => activeTab && invoke('open_datasheet', { path: activeTab }).catch(err => setError(String(err)))}
+              disabled={!activeTab}
+              className="btn-secondary btn-sm"
+              title={activeTab ? `Open ${activeTab}.xlsx in Excel` : 'Select a datasheet first'}
+              style={{ marginRight: '.3rem' }}
+            >
+              📂 Open in Excel
             </button>
             {datasheets.map(ds => {
               const active = ds.fname === activeTab
