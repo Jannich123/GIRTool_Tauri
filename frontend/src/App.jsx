@@ -17,6 +17,7 @@ import GroupingPage    from './pages/GroupingPage'
 import ColorsPage      from './pages/ColorsPage'
 import MapPage         from './pages/MapPage'
 import BoundariesPage  from './pages/BoundariesPage'
+import CptCalcPage    from './pages/CptCalcPage'
 import './index.css'
 
 function Placeholder({ title }) {
@@ -144,6 +145,7 @@ function Shell() {
       case 'points':   return <PointsPage   setPage={setPage} />
       case 'strata':   return <StrataPage />
       case 'data':     return <DataPage />
+      case 'cpt':      return <CptCalcPage />
       case 'grouping':    return <GroupingPage />
       case 'colors':      return <ColorsPage />
       case 'boundaries':  return <BoundariesPage />

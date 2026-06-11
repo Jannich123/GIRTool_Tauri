@@ -132,7 +132,7 @@ fn settings_path(folder: &str) -> PathBuf {
     PathBuf::from(folder).join("GIRTool_settings.json")
 }
 
-fn datasheets_dir(folder: &str) -> PathBuf {
+pub(crate) fn datasheets_dir(folder: &str) -> PathBuf {
     PathBuf::from(folder).join("Datasheets")
 }
 
@@ -167,7 +167,7 @@ pub(crate) type FormulaMap = HashMap<(usize, usize), String>;
 /// failure is swallowed (the next read just takes the slow path again).
 /// Formulas (when present) are stored sparsely as `"row,col" → "=…"`; values
 /// in `rows` stay the cached results, so previews/charts read values as before.
-fn write_datasheet_cache(
+pub(crate) fn write_datasheet_cache(
     folder: &str,
     fname: &str,
     columns: &[String],
@@ -211,7 +211,7 @@ fn read_datasheet_cached(folder: &str, fname: &str) -> Option<Value> {
 /// `list_datasheets` can return instantly without opening every xlsx.
 /// Settings shape:
 ///   "datasheets": { "CPTData": { "row_count": 1247, "has_strata": true }, ... }
-fn persist_datasheet_meta(folder: &str, fname: &str, row_count: usize, has_strata: bool) {
+pub(crate) fn persist_datasheet_meta(folder: &str, fname: &str, row_count: usize, has_strata: bool) {
     let path = settings_path(folder);
     let existing: Value = std::fs::read_to_string(&path)
         .ok()
@@ -499,7 +499,7 @@ pub(crate) fn apply_strata_columns(
 /// values in place** instead of always pushing new columns at the end.
 /// Used by `readd_strata` to re-apply strata to already-downloaded
 /// datasheets without changing the column order.
-fn upsert_strata_columns(
+pub(crate) fn upsert_strata_columns(
     columns: &mut Vec<String>,
     rows: &mut Vec<Vec<Value>>,
     strata_lookup: &std::collections::HashMap<(String, String, String), Vec<(f64, f64, String, String)>>,
@@ -627,7 +627,7 @@ fn apply_coord_conversion(
 
 // ── xlsx writing ──────────────────────────────────────────────────────────────
 
-fn write_datasheet(
+pub(crate) fn write_datasheet(
     path: &Path,
     columns: &[String],
     rows: &[Vec<Value>],
@@ -755,7 +755,7 @@ fn row_id_key(row: &[Value], indices: &[usize]) -> Vec<String> {
 /// the header row.  `formulas` (issue #176) maps `(data_row, col)` to the
 /// user-authored formula string for cells that carry one — aligned through
 /// the blank-row skipping below so positions match the returned `rows`.
-fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>, FormulaMap)> {
+pub(crate) fn read_existing_datasheet(path: &Path) -> Option<(Vec<String>, Vec<Vec<Value>>, FormulaMap)> {
     use calamine::{open_workbook_auto, Reader, Data};
     if !path.exists() {
         return None;
