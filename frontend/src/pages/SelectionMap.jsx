@@ -48,6 +48,13 @@ const mapStore = {
   jupiter: [], jupiterCats: { geo: true, vand: true, miljoe: true },
 }
 
+// Cyklogram summaries (#174): borid → 'loading' | null (no data) | [{label, pct}].
+// GEUS's cyklogram IMAGE is dead upstream (it redirects to the retired Google
+// Image Charts API), but the redirect URL carries the lithology data — fetched
+// lazily on first hover via cyklogram_summary and rendered as text.  Module-
+// level so results survive tab switches.
+const cykCache = new Map()
+
 // Ray-casting point-in-polygon for [lat, lng] coordinates (lng = x, lat = y).
 function pointInPolygonLatLng(ll, poly) {
   const px = ll[1], py = ll[0]
@@ -203,6 +210,31 @@ export default function SelectionMap() {
     }
     if (fresh.length) setJupiter(prev => [...prev, ...fresh])
     return { added: fresh.length, capped: fetched >= JUPITER_FETCH_MAX }
+  }
+
+  // Lazy cyklogram summary on first hover (#174).  Bumps a counter so the open
+  // tooltip re-renders when the result lands.
+  const [, setCykVersion] = useState(0)
+  function loadCyklogram(f) {
+    if (!f.cyklogram || cykCache.has(f.borid)) return
+    cykCache.set(f.borid, 'loading')
+    setCykVersion(v => v + 1)
+    invoke('cyklogram_summary', { url: f.cyklogram })
+      .then(r => {
+        let seq = null
+        if (Array.isArray(r?.groups) && Array.isArray(r?.labels)) {
+          // Google chl semantics: labels map to slices in order across all
+          // series; unlabeled slices are chart filler — keep labelled ones.
+          const flat = r.groups.flat()
+          seq = r.labels
+            .map((label, i) => ({ label: String(label).trim(), pct: Number(flat[i]) }))
+            .filter(s => s.label && isFinite(s.pct) && s.pct > 0)
+          if (!seq.length) seq = null
+        }
+        cykCache.set(f.borid, seq)
+      })
+      .catch(() => cykCache.set(f.borid, null))
+      .finally(() => setCykVersion(v => v + 1))
   }
 
   const pts = useMemo(() => {
@@ -489,10 +521,11 @@ export default function SelectionMap() {
               pathOptions={{ color: '#475569', weight: 1, fillColor: JUPITER_CAT_COLOR[f.cat], fillOpacity: 0.9 }}
               eventHandlers={{
                 click: () => { if (f.url) invoke('open_url', { url: f.url }).catch(() => {}) },
+                tooltipopen: () => loadCyklogram(f),
               }}
             >
               <Tooltip sticky>
-                <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 260 }}>
+                <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 280 }}>
                   <strong>DGU {f.dgunr || '?'}</strong>{f.formaal ? ` · ${f.formaal}` : ''}<br />
                   {f.ejer ? <>Ejer: {f.ejer}<br /></> : null}
                   {(f.terraen !== '' && f.terraen != null) ? <>Terræn: {f.terraen} m<br /></> : null}
@@ -500,13 +533,21 @@ export default function SelectionMap() {
                   {f.aar ? ` · ${f.aar}` : ''}
                   {f.status ? ` · ${f.status}` : ''}
                   {(f.dybde || f.aar || f.status) ? <br /> : null}
-                  {f.cyklogram ? (
-                    <img
-                      src={f.cyklogram}
-                      alt="cyklogram"
-                      style={{ maxHeight: 170, maxWidth: 240, marginTop: 4, display: 'block' }}
-                    />
-                  ) : null}
+                  {(() => {
+                    // Cyklogram as compact text (the GEUS image is dead upstream).
+                    const cyk = cykCache.get(f.borid)
+                    const small = { fontSize: '.7rem', opacity: 0.75, marginTop: 2 }
+                    if (!f.cyklogram) return null
+                    if (cyk === 'loading') return <div style={small}>henter cyklogram…</div>
+                    if (Array.isArray(cyk)) return (
+                      <div style={{ marginTop: 2 }}>
+                        <strong>Cyklogram:</strong>{' '}
+                        {cyk.map(s => `${s.label} ${s.pct < 1 ? s.pct.toFixed(1) : Math.round(s.pct)}%`).join(' · ')}
+                      </div>
+                    )
+                    if (cyk === null) return <div style={small}>Cyklogram: ingen data</div>
+                    return null // loads on hover (tooltipopen)
+                  })()}
                   <div style={{ opacity: 0.7, marginTop: 2 }}>click → borerapport</div>
                 </div>
               </Tooltip>

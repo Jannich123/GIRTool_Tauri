@@ -72,6 +72,66 @@ pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to open URL: {e}"))
 }
 
+/// Cyklogram summary (#174).  GEUS's get_cyklogram.jsp redirects to the retired
+/// Google Image Charts API (dead — 404s for everyone), so the image itself can
+/// never load.  The redirect URL still carries the lithology data (`chd`
+/// percentages + `chl` labels), so we fetch WITHOUT following the redirect,
+/// read the Location header, and return the parsed groups/labels for a text
+/// rendering in the tooltip.
+#[tauri::command]
+pub async fn cyklogram_summary(url: String) -> Result<Value, String> {
+    let lower = url.to_lowercase();
+    if !lower.starts_with("https://data.geus.dk/") && !lower.starts_with("http://data.geus.dk/") {
+        return Err("Not a GEUS cyklogram URL.".into());
+    }
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("HTTP client build failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Cyklogram request failed: {e}"))?;
+
+    let Some(loc) = resp
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+    else {
+        return Ok(json!({ "none": true }));
+    };
+    let Ok(parsed) = reqwest::Url::parse(&loc) else {
+        return Ok(json!({ "none": true }));
+    };
+
+    let mut chd: Option<String> = None;
+    let mut chl: Option<String> = None;
+    for (k, v) in parsed.query_pairs() {
+        match k.as_ref() {
+            "chd" => chd = Some(v.into_owned()),
+            "chl" => chl = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    let (Some(chd), Some(chl)) = (chd, chl) else {
+        return Ok(json!({ "none": true }));
+    };
+
+    // chd = "t:100|96.8,3,.2,0|17.2,…" → groups of slice percentages;
+    // chl = "||sand|tørv|…" → labels assigned to slices in order (Google
+    // semantics: left-aligned across all series; unlabeled slices are filler).
+    let groups: Vec<Vec<f64>> = chd
+        .trim_start_matches("t:")
+        .split('|')
+        .map(|g| g.split(',').filter_map(|s| s.trim().parse::<f64>().ok()).collect())
+        .collect();
+    let labels: Vec<String> = chl.split('|').map(|s| s.trim().to_string()).collect();
+    Ok(json!({ "groups": groups, "labels": labels }))
+}
+
 /// Strip any namespace prefix from a qualified XML name (`wms:Layer` → `Layer`).
 fn local_name(qname: &[u8]) -> String {
     let s = String::from_utf8_lossy(qname);
