@@ -134,7 +134,7 @@ export default function PointsPage({ setPage }) {
 
   function selectAll() {
     const all = {}
-    filtered.forEach(p => { all[ptKey(p)] = true })
+    availableRows.forEach(p => { all[ptKey(p)] = true })
     setChecked(prev => ({ ...prev, ...all }))
   }
   function clearAll() { setChecked({}) }
@@ -258,15 +258,10 @@ export default function PointsPage({ setPage }) {
     [points, coordinateSystem],
   )
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    const rows = !q ? viewPoints : viewPoints.filter(p =>
-      p.PointNo?.toLowerCase().includes(q)   ||
-      p.PointType?.toLowerCase().includes(q) ||
-      p.ProjectNo?.toLowerCase().includes(q) ||
-      p.db_id?.toLowerCase().includes(q)
-    )
-    return [...rows].sort((a, b) => {
+  // Issue #187: Projects-style split — Selected table (top, never hidden by
+  // search) and Available table (bottom: search + sort + pagination).
+  const sorted = useMemo(() => {
+    return [...viewPoints].sort((a, b) => {
       const av = a[sortCol] ?? ''
       const bv = b[sortCol] ?? ''
       const cmp = typeof av === 'number'
@@ -274,21 +269,36 @@ export default function PointsPage({ setPage }) {
         : String(av).localeCompare(String(bv))
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [viewPoints, search, sortCol, sortDir])
+  }, [viewPoints, sortCol, sortDir])
 
-  // Issue #89: only render the first N rows of the (sorted, search-filtered)
-  // points list.  Reset to PAGE_STEP whenever the filter / sort changes so
-  // the user always starts at the top of the new result set.
+  const selectedRows = useMemo(
+    () => sorted.filter(p => checked[ptKey(p)]),
+    [sorted, checked],
+  )
+  const availableRows = useMemo(() => {
+    const rest = sorted.filter(p => !checked[ptKey(p)])
+    const q = search.toLowerCase()
+    if (!q) return rest
+    return rest.filter(p =>
+      p.PointNo?.toLowerCase().includes(q)   ||
+      p.PointType?.toLowerCase().includes(q) ||
+      p.ProjectNo?.toLowerCase().includes(q) ||
+      p.db_id?.toLowerCase().includes(q)
+    )
+  }, [sorted, checked, search])
+
+  // Issue #89: only render the first N available rows.  Reset to PAGE_STEP
+  // whenever the filter / sort changes so the user starts at the top.
   const [visibleCount, setVisibleCount] = useState(PAGE_STEP)
   useEffect(() => {
     setVisibleCount(PAGE_STEP)
   }, [search, sortCol, sortDir, points])
 
   const visibleSlice = useMemo(
-    () => filtered.slice(0, visibleCount),
-    [filtered, visibleCount],
+    () => availableRows.slice(0, visibleCount),
+    [availableRows, visibleCount],
   )
-  const hasMore = filtered.length > visibleSlice.length
+  const hasMore = availableRows.length > visibleSlice.length
 
   // Drag-select is bound to the visible slice so dragging only touches rows
   // the user can actually see — matches the Available table on Projects.
@@ -305,7 +315,7 @@ export default function PointsPage({ setPage }) {
     if (!hasMore) return
     const el = e.currentTarget
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
-      setVisibleCount(c => Math.min(c + PAGE_STEP, filtered.length))
+      setVisibleCount(c => Math.min(c + PAGE_STEP, availableRows.length))
     }
   }
 
@@ -367,11 +377,80 @@ export default function PointsPage({ setPage }) {
         <p className="hint">Loading…</p>
       ) : (
         <>
-          {/* Row-count + "scroll for more" hint above the scroll container
-              so it doesn't jiggle inside the scroll area. */}
+          {/* ── Selected points (issue #187) ── */}
+          <h3 className="section-title" style={{ margin: '0 0 .35rem 0' }}>
+            Selected points ({selectedRows.length})
+          </h3>
+          {selectedRows.length === 0 ? (
+            <p className="hint" style={{ margin: '0 0 .9rem 0' }}>
+              No points selected — tick rows in the Available table below (or ↻ Reload from Excel).
+            </p>
+          ) : (
+            <div className="table-wrap" style={{ maxHeight: '28vh', overflowY: 'auto', marginBottom: '1rem' }}>
+              <table className="data-table">
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff' }}>
+                  <tr>
+                    <th style={{ width: 44 }} />
+                    <th style={{ width: 10 }} />
+                    <th style={{ width: 110 }}>DB</th>
+                    <th>Point No</th>
+                    <th>Type</th>
+                    <th>Project</th>
+                    <th style={{ textAlign: 'right' }}>X</th>
+                    <th style={{ textAlign: 'right' }}>Y</th>
+                    <th style={{ textAlign: 'right' }}>Z</th>
+                    <th style={{ textAlign: 'right' }}>Top</th>
+                    <th style={{ textAlign: 'right' }}>Bottom</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRows.map(p => {
+                    const k = ptKey(p)
+                    return (
+                      <tr key={k} className="selected">
+                        <td>
+                          <button
+                            className="btn-secondary btn-sm"
+                            style={{ padding: '0 6px', color: '#dc2626', borderColor: '#dc2626' }}
+                            title="Remove from selection"
+                            onClick={() => toggle(k)}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                        <td>
+                          <span
+                            style={{
+                              display: 'inline-block', width: 8, height: 8,
+                              borderRadius: '50%', background: typeColor(p.PointType),
+                            }}
+                          />
+                        </td>
+                        <td><DbIdPill id={p.db_id} /></td>
+                        <td>{p.PointNo}</td>
+                        <td>{p.PointType}</td>
+                        <td>{p.ProjectNo}</td>
+                        <td style={{ textAlign: 'right' }}>{p.X1}</td>
+                        <td style={{ textAlign: 'right' }}>{p.Y1}</td>
+                        <td style={{ textAlign: 'right' }}>{p.Z1}</td>
+                        <td style={{ textAlign: 'right' }}>{p.Top}</td>
+                        <td style={{ textAlign: 'right' }}>{p.Bottom}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── Available points ── */}
+          <h3 className="section-title" style={{ margin: '0 0 .35rem 0' }}>
+            Available points ({availableRows.length})
+          </h3>
           <p className="hint" style={{ margin: '0 0 .35rem 0', fontSize: '.78rem' }}>
-            Showing {visibleSlice.length} of {filtered.length} row{filtered.length === 1 ? '' : 's'}
+            Showing {visibleSlice.length} of {availableRows.length} row{availableRows.length === 1 ? '' : 's'}
             {hasMore && ' · scroll for more'}
+            {' · tick / drag to select'}
             {(() => {
               const t = normaliseEpsg(coordinateSystem?.target_epsg)
               if (!t) return null
@@ -381,7 +460,7 @@ export default function PointsPage({ setPage }) {
           </p>
         <div
           className="table-wrap"
-          style={{ maxHeight: '62vh', overflowY: 'auto' }}
+          style={{ maxHeight: '48vh', overflowY: 'auto' }}
           onScroll={handleTableScroll}
         >
           <table className="data-table">
@@ -390,9 +469,9 @@ export default function PointsPage({ setPage }) {
                 <th style={{ width: 40 }}>
                   <input
                     type="checkbox"
-                    checked={filtered.length > 0 && filtered.every(p => checked[ptKey(p)])}
-                    onChange={e => e.target.checked ? selectAll() : clearAll()}
-                    title="Select / deselect all visible"
+                    checked={false}
+                    onChange={() => selectAll()}
+                    title="Select all visible available rows"
                   />
                 </th>
                 <th style={{ width: 10 }} />
@@ -431,7 +510,6 @@ export default function PointsPage({ setPage }) {
                 return (
                   <tr
                     key={k}
-                    className={checked[k] ? 'selected' : ''}
                     {...dragRowProps(p, idx)}
                   >
                     <td>
@@ -462,13 +540,17 @@ export default function PointsPage({ setPage }) {
                   </tr>
                 )
               })}
-              {filtered.length === 0 && (
-                <tr><td colSpan={11} className="no-data">No points found</td></tr>
+              {availableRows.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="no-data">
+                    {sorted.length > 0 ? 'All points are selected (or hidden by the search).' : 'No points found'}
+                  </td>
+                </tr>
               )}
               {hasMore && (
                 <tr>
                   <td colSpan={11} className="no-data" style={{ fontStyle: 'italic', textAlign: 'center' }}>
-                    {filtered.length - visibleSlice.length} more row(s) — keep scrolling…
+                    {availableRows.length - visibleSlice.length} more row(s) — keep scrolling…
                   </td>
                 </tr>
               )}
