@@ -404,10 +404,27 @@ export function AppProvider({ children }) {
   }, [connected])
 
   // Persist + update map addons in one call (used by the Settings subtab).
+  // #211: also mirrored to every other window over the event bus — colour /
+  // opacity / visibility edits and added or removed layers show up live on
+  // all open maps, not just the window where the edit was made.
   const saveMapAddons = useCallback((next) => {
     setMapAddons(next)
     invoke('save_map_addons', { addons: next }).catch(() => {})
-  }, [])
+    emit('mapaddons:updated', { src: winLabel, addons: next })
+  }, [winLabel])
+
+  // Receive addon edits from other windows.  Applied directly (the sender's
+  // list is the full unified list, builtins included) and never re-saved or
+  // re-emitted, so there is no echo.
+  useEffect(() => {
+    let off = null
+    listen('mapaddons:updated', (e) => {
+      const p = e?.payload
+      if (!p || p.src === winLabel || !Array.isArray(p.addons)) return
+      setMapAddons(p.addons)
+    }).then(fn => { off = fn })
+    return () => { if (typeof off === 'function') off() }
+  }, [])  // eslint-disable-line
 
   return (
     <AppContext.Provider value={{

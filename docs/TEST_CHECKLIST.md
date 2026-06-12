@@ -122,6 +122,12 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] Clicking a different addon polygon while one is staged switches the boundary; Cancel clears it.
 - [ ] Project map (top-level Map page): addon polygons unchanged — tooltip only.
 
+### 6i. Map-addon edits sync across windows (#211)
+
+- [ ] With a map open in another window, change an addon's **color** in Settings → Map addons → the other window's layer restyles immediately (no reconnect).
+- [ ] Same for **opacity** slider and the **on/off** toggle.
+- [ ] **Add** a new layer (WMS or file) → it appears on the other window's map; **remove** it → it disappears there.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
