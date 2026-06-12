@@ -193,7 +193,10 @@ export default function AddonLayers({ target, onPolygonClick }) {
           url={wmsBaseUrl(a.url)}
           layers={a.layer || ''}
           format={a.format || 'image/png'}
-          transparent={a.transparent !== false}
+          // #226: WMS-spec spelling is TRUE/FALSE — Dataforsyningen rejects
+          // Leaflet's lowercase boolean serialisation ("TRANSPARENT must be
+          // either TRUE or FALSE"), which blanked every layer it served.
+          transparent={a.transparent !== false ? 'TRUE' : 'FALSE'}
           version={a.version || '1.3.0'}
           opacity={opacity}
           zIndex={zIndex}

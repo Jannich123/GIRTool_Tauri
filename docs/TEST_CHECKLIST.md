@@ -183,6 +183,11 @@ Performance (load a few thousand points first):
 - [ ] Add WMS overlay: new **Token** field — used for Connect (GetCapabilities) and stored on the addon; tiles from api.dataforsyningen.dk render with a valid token.
 - [ ] Existing WMS rows: **Edit** opens a panel with Token + Layer inputs (typing is throttled, no lag).
 
+### 6o. WMS transparent-case fix (#226)
+
+- [ ] Dataforsyningen WMS layers (built-in Orthophoto/Topo AND user-added with token) now actually **render tiles** — the service was rejecting every request over lowercase `transparent=true`.
+- [ ] Other WMS addons (e.g. GEUS) still render (uppercase TRUE/FALSE is the WMS-spec spelling, universally accepted).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
