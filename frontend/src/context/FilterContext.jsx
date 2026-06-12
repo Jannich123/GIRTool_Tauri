@@ -309,6 +309,31 @@ export function FilterProvider({ children }) {
   const selectAllPts    = useCallback(() => setCheckedPtIds(null),        [])
   const deselectAllPts  = useCallback(() => setCheckedPtIds(new Set()),   [])
 
+  // ── Exact-set setters (#268 — Excel-slicer interaction) ───────────────────
+  // Replace the whole selection in one go; normalised back to null (= no
+  // filter) when every item ends up selected.
+  const setPtSelection = useCallback((keys) => {
+    const allIds = new Set(allPoints.map(p => String(p.PointId)))
+    setCheckedPtIds(!keys || keys.size >= allIds.size ? null : new Set(keys))
+  }, [allPoints])
+
+  const setGroupSelection = useCallback((systemId, names) => {
+    setCheckedGroups(prev => {
+      const allNames = new Set(
+        groupSystems.find(s => s.id === systemId)?.groups.map(g => g.name) ?? []
+      )
+      const val = (!names || names.size >= allNames.size) ? null : new Set(names)
+      return { ...prev, [systemId]: val }
+    })
+  }, [groupSystems])
+
+  const setStrataSelection = useCallback((kind, values) => {
+    const all = new Set(kind === 'primary' ? strataLayers.primary : strataLayers.secondary)
+    const val = (!values || values.size >= all.size) ? null : new Set(values)
+    if (kind === 'primary') setCheckedStrataPrimary(val)
+    else setCheckedStrataSecondary(val)
+  }, [strataLayers])
+
   // ── Group toggle helpers ──────────────────────────────────────────────────
 
   const getAllGroupNames = useCallback((systemId) => {
@@ -402,6 +427,7 @@ export function FilterProvider({ children }) {
       checkedPtIds, checkedGroups,
       filteredPtIds,
       togglePt, selectAllPts, deselectAllPts,
+      setPtSelection, setGroupSelection, setStrataSelection,
       toggleGroup, selectAllGroups, deselectAllGroups,
       getAllGroupNames,
       resetFilters,

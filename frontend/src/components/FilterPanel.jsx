@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useFilter } from '../context/FilterContext'
-import { useDragSelect } from '../hooks/useDragSelect'
 
 // ── Type colours (matches MapPage / PointsPage) ───────────────────────────────
 
@@ -9,7 +8,7 @@ function typeColor(t) { return TYPE_COLORS[t?.toUpperCase()] || '#7f8c8d' }
 
 // ── Reusable scrollable list tab ──────────────────────────────────────────────
 
-function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onToggle, onAdd, onSelectAll, onDeselectAll }) {
+function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onToggle, onSetExact, onSelectAll, onDeselectAll }) {
   const [search,  setSearch]  = useState('')
   const [sortDir, setSortDir] = useState('asc')
 
@@ -22,12 +21,33 @@ function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onTog
     })
   }, [items, search, sortDir])
 
-  const { rowProps: dragRowProps, tbodyStyle } = useDragSelect({
-    items:    visible,
-    getKey,
-    onAdd,
-    onToggle,
-  })
+  // ── Excel-slicer interaction (#268) ──────────────────────────────────────
+  // Plain click → ONLY that item.  Ctrl/Cmd+click → toggle it in/out.
+  // Shift+click → the whole range from the last clicked row (visible order);
+  // Ctrl+Shift adds the range to the current selection.  The checkbox stays
+  // an explicit additive toggle.
+  const anchorRef = useRef(null)
+  const handleRowClick = useCallback((e, idx) => {
+    const keys = visible.map(getKey)
+    const key  = keys[idx]
+    if (e.shiftKey && anchorRef.current != null) {
+      const [a, b] = [Math.min(anchorRef.current, idx), Math.max(anchorRef.current, idx)]
+      const range = keys.slice(a, b + 1)
+      const base = (e.ctrlKey || e.metaKey)
+        ? new Set(items.map(getKey).filter(k => isChecked(k)))
+        : new Set()
+      range.forEach(k => base.add(k))
+      onSetExact(base)
+      return // anchor stays for follow-up shift-clicks
+    }
+    if (e.ctrlKey || e.metaKey) {
+      onToggle(key)
+    } else {
+      onSetExact(new Set([key]))
+    }
+    anchorRef.current = idx
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, items, isChecked, onToggle, onSetExact])
 
   // ── Master checkbox state ────────────────────────────────────────────────
   // State is computed from the *currently visible* (post-search) items so the
@@ -123,7 +143,11 @@ function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onTog
         </span>
       </label>
 
-      <div className="fp-list" style={tbodyStyle}>
+      <p className="fp-empty" style={{ margin: '.2rem 0', fontSize: '.7rem' }}>
+        Click = only this · Ctrl = add/remove · Shift = range
+      </p>
+
+      <div className="fp-list" style={{ userSelect: 'none' }}>
         {visible.map((item, idx) => {
           const key     = getKey(item)
           const checked = isChecked(key)
@@ -131,11 +155,12 @@ function FilterTab({ items, getKey, getLabel, getDot, isChecked, isDimmed, onTog
           const dot     = getDot?.(item)
           return (
             <label key={key} className={`fp-item${dim ? ' fp-dim' : ''}`}
-              {...dragRowProps(item, idx)}>
+              onClick={(e) => { e.preventDefault(); handleRowClick(e, idx) }}>
               <input
                 type="checkbox"
                 checked={checked}
-                readOnly   /* controlled by drag/mousedown, not onChange */
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => { onToggle(key); anchorRef.current = idx }}
               />
               {dot && <span className="fp-dot" style={{ background: dot }} />}
               <span className="fp-label">{getLabel(item)}</span>
@@ -157,6 +182,7 @@ export default function FilterPanel({ page }) {
     checkedPtIds, checkedGroups,
     filteredPtIds,
     togglePt, selectAllPts, deselectAllPts,
+    setPtSelection, setGroupSelection, setStrataSelection,
     toggleGroup, selectAllGroups, deselectAllGroups,
     resetFilters,
     groupDimmedPtIds, isGroupDimmed,
@@ -244,7 +270,7 @@ export default function FilterPanel({ page }) {
           isChecked={ptId => checkedPtIds === null || checkedPtIds.has(ptId)}
           isDimmed={ptId => groupDimmedPtIds.has(ptId)}
           onToggle={ptId => togglePt(ptId)}
-          onAdd={keys => keys.forEach(k => togglePt(k))}
+          onSetExact={keys => setPtSelection(keys)}
           onSelectAll={selectAllPts}
           onDeselectAll={deselectAllPts}
         />
@@ -263,7 +289,7 @@ export default function FilterPanel({ page }) {
           }}
           isDimmed={name => isGroupDimmed(gs.id, name)}
           onToggle={name => toggleGroup(gs.id, name)}
-          onAdd={names => names.forEach(n => toggleGroup(gs.id, n))}
+          onSetExact={names => setGroupSelection(gs.id, names)}
           onSelectAll={() => selectAllGroups(gs.id)}
           onDeselectAll={() => deselectAllGroups(gs.id)}
         />
@@ -279,7 +305,7 @@ export default function FilterPanel({ page }) {
           isChecked={v => checkedStrataPrimary === null || checkedStrataPrimary.has(v)}
           isDimmed={null}
           onToggle={v => toggleStrataPrimary(v)}
-          onAdd={keys => keys.forEach(k => toggleStrataPrimary(k))}
+          onSetExact={values => setStrataSelection('primary', values)}
           onSelectAll={selectAllStrataPrimary}
           onDeselectAll={deselectAllStrataPrimary}
         />
@@ -295,7 +321,7 @@ export default function FilterPanel({ page }) {
           isChecked={v => checkedStrataSecondary === null || checkedStrataSecondary.has(v)}
           isDimmed={null}
           onToggle={v => toggleStrataSecondary(v)}
-          onAdd={keys => keys.forEach(k => toggleStrataSecondary(k))}
+          onSetExact={values => setStrataSelection('secondary', values)}
           onSelectAll={selectAllStrataSecondary}
           onDeselectAll={deselectAllStrataSecondary}
         />
