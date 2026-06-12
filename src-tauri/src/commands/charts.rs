@@ -160,7 +160,10 @@ fn build_chart_sql(
     Ok(sql)
 }
 
-const MAX_CHART_ROWS: usize = 10_000;
+// #266: raised 10k -> 100k.  The UI renders big traces with WebGL
+// (scattergl) and charts sharing a query reuse ONE result, so 100k rows per
+// datasheet are fine end-to-end.  The `truncated` flag still guards beyond.
+const MAX_CHART_ROWS: usize = 100_000;
 
 /// Run a named query and return columnar data: { columns, rows, truncated }.
 ///
