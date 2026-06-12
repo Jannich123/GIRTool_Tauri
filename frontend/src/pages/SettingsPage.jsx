@@ -186,10 +186,42 @@ export default function SettingsPage({ setPage }) {
     dbRows.filter(r => r.id && !ID_RE.test(r.id)).map(r => r.id),
   )
 
+  // #215: per-row expand/collapse (keyed by id).  Collapsed rows show only
+  // ID / Type / summary / Test; the editable fields live in the expanded
+  // panel.  Per-window view state — deliberately not synced.
+  const [openDbRows, setOpenDbRows] = useState(() => new Set())
+  const toggleDbRow = (id) => setOpenDbRows(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+
+  // One-line read-only summary for the collapsed row.
+  const rowSummary = (row) => row.type === 'access'
+    ? (row.file_path ? row.file_path.split(/[\\/]/).pop() : 'no file chosen')
+    : ([row.server, row.database].filter(Boolean).join(' / ') || 'no server set')
+
   // Auto-generate the next available DB<N> id — gap-filling so deleting a
   // middle row and re-adding picks the freed number up again (issue #73).
   const addDbRow = () => {
-    setDbRows(prev => [...prev, { ...DEFAULT_DB_ROW(), id: nextDbId(prev) }])
+    const id = nextDbId(dbRows)
+    setDbRows(prev => [...prev, { ...DEFAULT_DB_ROW(), id }])
+    setOpenDbRows(prev => new Set([...prev, id])) // new rows open for editing
+  }
+
+  // #215: duplicate a connection (fresh auto-ID, status cleared) — for
+  // setups that differ only in e.g. the database name.  Lands right below
+  // the source row, expanded.
+  const copyDbRow = (idx) => {
+    const src = dbRows[idx]
+    if (!src) return
+    const id = nextDbId(dbRows)
+    setDbRows(prev => {
+      const next = [...prev]
+      next.splice(idx + 1, 0, { ...src, id })
+      return next
+    })
+    setOpenDbRows(prev => new Set([...prev, id]))
   }
 
   const removeDbRow = (idx) => {
@@ -541,21 +573,21 @@ export default function SettingsPage({ setPage }) {
           </p>
         )}
 
-        {/* Header row */}
+        {/* Header row (#215: compact list — details live in the expanded panel) */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '110px 90px 1fr 130px 110px 100px 90px 32px',
+          gridTemplateColumns: '24px 110px 90px 1fr 64px 64px 36px 28px',
           gap: '0.4rem', alignItems: 'center',
           padding: '0.25rem 0.5rem', fontWeight: 600, fontSize: '.78rem',
           color: '#374151', borderBottom: '1px solid #e5e7eb',
         }}>
+          <div></div>
           <div>ID</div>
           <div>Type</div>
           <div>Connection</div>
-          <div>Auth / user</div>
-          <div>Query type</div>
           <div>Status</div>
           <div>Test</div>
+          <div></div>
           <div></div>
         </div>
 
@@ -563,158 +595,219 @@ export default function SettingsPage({ setPage }) {
           const isDup = duplicateIds.has(row.id)
           const isBad = !!row.id && !ID_RE.test(row.id)
           const st    = dbStatus[row.id]
+          const open  = openDbRows.has(row.id)
+          const labelStyle = {
+            display: 'flex', flexDirection: 'column', gap: '0.2rem',
+            fontWeight: 600, fontSize: '.76rem', color: '#374151', marginBottom: 0,
+          }
           return (
-          <div key={idx} style={{
-            display: 'grid',
-            gridTemplateColumns: '110px 90px 1fr 130px 110px 100px 90px 32px',
-            gap: '0.4rem', alignItems: 'start',
-            padding: '0.4rem 0.5rem',
-            borderBottom: '1px solid #f1f5f9',
-            fontSize: '.82rem',
-          }}>
-            {/* Auto-generated read-only ID (issue #73) — DB1, DB2, …  Old
-                rows saved with custom ids (e.g. "primary") still display
-                their original value to preserve external references. */}
-            <input
-              value={row.id}
-              readOnly
+          <div key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+            {/* Collapsed row — tap anywhere to expand/collapse. */}
+            <div
+              onClick={() => toggleDbRow(row.id)}
+              title={open ? 'Collapse' : 'Tap to edit this connection'}
               style={{
-                marginBottom: 0,
-                background: '#f3f4f6',
-                color: '#374151',
-                cursor: 'default',
-                borderColor: isDup || isBad ? '#ef4444' : undefined,
+                display: 'grid',
+                gridTemplateColumns: '24px 110px 90px 1fr 64px 64px 36px 28px',
+                gap: '0.4rem', alignItems: 'center',
+                padding: '0.45rem 0.5rem', fontSize: '.82rem',
+                cursor: 'pointer',
+                background: open ? '#f8fafc' : undefined,
               }}
-              title={isDup ? 'Duplicate ID — should not happen with auto-numbering'
-                   : isBad ? 'Legacy ID outside the DB<N> format — kept for backwards compatibility'
-                   : 'Auto-generated identifier (read-only)'}
-            />
-            <select
-              value={row.type}
-              onChange={e => updateRow(idx, { type: e.target.value })}
-              style={{ marginBottom: 0 }}
             >
-              <option value="mssql">MSSQL</option>
-              <option value="access">Access</option>
-            </select>
+              <span style={{ color: '#64748b', fontSize: '.68rem' }}>{open ? '▼' : '▶'}</span>
+              {/* Auto-generated ID (issue #73); legacy custom ids kept. */}
+              <span
+                style={{ fontFamily: 'monospace', fontWeight: 600, color: isDup || isBad ? '#dc2626' : '#111827' }}
+                title={isDup ? 'Duplicate ID — should not happen with auto-numbering'
+                     : isBad ? 'Legacy ID outside the DB<N> format — kept for backwards compatibility'
+                     : undefined}
+              >
+                {row.id}
+              </span>
+              <span>{row.type === 'access' ? 'Access' : 'MSSQL'}</span>
+              <span style={{ color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {rowSummary(row)}
+              </span>
+              <span style={{ fontSize: '1.05rem', textAlign: 'center' }}>
+                {st === undefined ? '—' :
+                 st.ok === null    ? '…' :
+                 st.ok             ? <span title={st.message} style={{ color: '#16a34a' }}>✅</span>
+                                   : <span title={st.message} style={{ color: '#dc2626' }}>⚠️</span>}
+              </span>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={e => { e.stopPropagation(); testRow(idx) }}
+                style={{ padding: '0.2rem 0.5rem', fontSize: '.78rem' }}
+                title="Test this connection"
+              >
+                Test
+              </button>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); copyDbRow(idx) }}
+                title="Copy this connection (new ID, same settings) — handy when only e.g. the database name differs"
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: '#2563eb', fontSize: '.95rem', padding: 0,
+                }}
+              >
+                ⧉
+              </button>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); removeDbRow(idx) }}
+                title="Remove this database"
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: '#dc2626', fontSize: '1rem', padding: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
 
-            {/* Connection — different fields per type */}
-            {row.type === 'access' ? (
-              <div style={{ display: 'flex', gap: '0.25rem' }}>
-                <input
-                  value={row.file_path}
-                  onChange={e => updateRow(idx, { file_path: e.target.value })}
-                  placeholder="C:\Projects\fieldlab\local.accdb"
-                  style={{ flex: 1, marginBottom: 0 }}
-                />
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => pickAccessPath(idx)}
-                  title="Browse for .accdb / .mdb"
-                  style={{ flexShrink: 0 }}
-                >
-                  📁
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.25rem' }}>
-                <input
-                  value={row.server}
-                  onChange={e => updateRow(idx, { server: e.target.value })}
-                  placeholder="server"
-                  style={{ marginBottom: 0 }}
-                />
-                <input
-                  value={row.database}
-                  onChange={e => updateRow(idx, { database: e.target.value })}
-                  placeholder="database"
-                  style={{ marginBottom: 0 }}
-                />
-              </div>
-            )}
+            {/* Expanded edit panel — roomy labelled fields. */}
+            {open && (
+              <div
+                style={{
+                  background: '#f8fafc',
+                  padding: '0.6rem 0.75rem 0.85rem 2rem',
+                  display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem',
+                }}
+              >
+                <label style={labelStyle}>
+                  ID (auto-generated)
+                  <input
+                    value={row.id}
+                    readOnly
+                    style={{
+                      marginBottom: 0, background: '#f3f4f6', color: '#374151', cursor: 'default',
+                      borderColor: isDup || isBad ? '#ef4444' : undefined,
+                    }}
+                  />
+                </label>
+                <label style={labelStyle}>
+                  Type
+                  <select
+                    value={row.type}
+                    onChange={e => updateRow(idx, { type: e.target.value })}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <option value="mssql">MSSQL</option>
+                    <option value="access">Access</option>
+                  </select>
+                </label>
 
-            {/* Auth / user (MSSQL only) */}
-            {row.type === 'access' ? (
-              <div style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '.78rem' }}>
-                — file path —
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <select
-                  value={row.auth_method}
-                  onChange={e => updateRow(idx, { auth_method: e.target.value })}
-                  style={{ marginBottom: 0 }}
-                >
-                  <option value="windows">Windows</option>
-                  <option value="sql">SQL Server</option>
-                </select>
-                {row.auth_method === 'sql' && (
+                {row.type === 'access' ? (
+                  <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
+                    Access file (.accdb / .mdb)
+                    <div style={{ display: 'flex', gap: '0.25rem' }}>
+                      <input
+                        value={row.file_path}
+                        onChange={e => updateRow(idx, { file_path: e.target.value })}
+                        placeholder="C:\Projects\fieldlab\local.accdb"
+                        style={{ flex: 1, marginBottom: 0 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => pickAccessPath(idx)}
+                        title="Browse for .accdb / .mdb"
+                        style={{ flexShrink: 0 }}
+                      >
+                        📁
+                      </button>
+                    </div>
+                  </label>
+                ) : (
                   <>
-                    <input
-                      value={row.username}
-                      onChange={e => updateRow(idx, { username: e.target.value })}
-                      placeholder="username"
-                      style={{ marginBottom: 0 }}
-                    />
-                    <input
-                      type="password"
-                      value={row.password}
-                      onChange={e => updateRow(idx, { password: e.target.value })}
-                      placeholder="password"
-                      style={{ marginBottom: 0 }}
-                    />
+                    <label style={labelStyle}>
+                      Server
+                      <input
+                        value={row.server}
+                        onChange={e => updateRow(idx, { server: e.target.value })}
+                        placeholder="server"
+                        style={{ marginBottom: 0 }}
+                      />
+                    </label>
+                    <label style={labelStyle}>
+                      Database
+                      <input
+                        value={row.database}
+                        onChange={e => updateRow(idx, { database: e.target.value })}
+                        placeholder="database"
+                        style={{ marginBottom: 0 }}
+                      />
+                    </label>
+                    <label style={labelStyle}>
+                      Authentication
+                      <select
+                        value={row.auth_method}
+                        onChange={e => updateRow(idx, { auth_method: e.target.value })}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <option value="windows">Windows</option>
+                        <option value="sql">SQL Server</option>
+                      </select>
+                    </label>
+                    {row.auth_method === 'sql' && (
+                      <>
+                        <label style={labelStyle}>
+                          Username
+                          <input
+                            value={row.username}
+                            onChange={e => updateRow(idx, { username: e.target.value })}
+                            placeholder="username"
+                            style={{ marginBottom: 0 }}
+                          />
+                        </label>
+                        <label style={labelStyle}>
+                          Password
+                          <input
+                            type="password"
+                            value={row.password}
+                            onChange={e => updateRow(idx, { password: e.target.value })}
+                            placeholder="password"
+                            style={{ marginBottom: 0 }}
+                          />
+                        </label>
+                      </>
+                    )}
                   </>
+                )}
+
+                {/* Query Type dropdown — options come from get_query_configs
+                    (issue #62).  A saved query_type missing from the list is
+                    surfaced as an extra option so the select stays valid. */}
+                <label style={labelStyle}>
+                  Query type
+                  <select
+                    value={row.query_type || 'GeoGIS'}
+                    onChange={e => updateRow(idx, { query_type: e.target.value })}
+                    style={{ marginBottom: 0 }}
+                    title="Pick the SQL flavour for this database.  Add new flavours under Settings → Query Config."
+                  >
+                    {(availableQueryTypes.includes(row.query_type) || !row.query_type
+                      ? availableQueryTypes
+                      : [...availableQueryTypes, row.query_type]
+                    ).map(qt => (
+                      <option key={qt} value={qt}>{qt}</option>
+                    ))}
+                  </select>
+                </label>
+
+                {st?.message && (
+                  <div style={{
+                    gridColumn: '1 / -1', fontSize: '.78rem',
+                    color: st.ok ? '#16a34a' : st.ok === null ? '#6b7280' : '#dc2626',
+                  }}>
+                    {st.message}
+                  </div>
                 )}
               </div>
             )}
-
-            {/* Query Type dropdown — options come from get_query_configs
-                (issue #62).  If a row's saved query_type isn't in the list
-                yet (stale entry, mid-migration, etc.), surface it as an
-                extra option so the select stays valid. */}
-            <select
-              value={row.query_type || 'GeoGIS'}
-              onChange={e => updateRow(idx, { query_type: e.target.value })}
-              style={{ marginBottom: 0 }}
-              title="Pick the SQL flavour for this database.  Add new flavours under Settings → Query Config."
-            >
-              {(availableQueryTypes.includes(row.query_type) || !row.query_type
-                ? availableQueryTypes
-                : [...availableQueryTypes, row.query_type]
-              ).map(qt => (
-                <option key={qt} value={qt}>{qt}</option>
-              ))}
-            </select>
-
-            <div style={{ fontSize: '1.1rem', textAlign: 'center', lineHeight: '1.6' }}>
-              {st === undefined ? '—' :
-               st.ok === null    ? '…' :
-               st.ok             ? <span title={st.message} style={{ color: '#16a34a' }}>✅</span>
-                                 : <span title={st.message} style={{ color: '#dc2626' }}>⚠️</span>}
-            </div>
-
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => testRow(idx)}
-              style={{ padding: '0.25rem 0.5rem', fontSize: '.78rem' }}
-              title="Test this connection"
-            >
-              Test
-            </button>
-
-            <button
-              type="button"
-              onClick={() => removeDbRow(idx)}
-              title="Remove this database"
-              style={{
-                background: 'transparent', border: 'none', cursor: 'pointer',
-                color: '#dc2626', fontSize: '1rem', padding: 0,
-              }}
-            >
-              ×
-            </button>
           </div>
           )
         })}
