@@ -275,6 +275,16 @@ Performance (load a few thousand points first):
 - [ ] Selection, Round edits and the show-hidden toggle survive app restarts (per project folder) and sync to other windows ('cpt' domain).
 - [ ] `cargo test` still 2/2 (engine untouched — catalogue metadata only).
 
+### 6aa. Project-map grouping mode (#262)
+
+- [ ] With a group system as the colour mode, a **🏷 Assign groups** button appears in the map toolbar (absent in Type mode); entering shows the group dropdown (+ "Unknown (clear)").
+- [ ] Clicking individual points assigns the chosen group — markers recolour immediately; popups suppressed while in the mode.
+- [ ] **✏️ Draw polygon** → vertices → **🏷 Assign inside** assigns every visible point inside; Cancel aborts.
+- [ ] Clicking an **addon polygon** (shapefile etc.) stages it as the boundary → Assign inside works on it.
+- [ ] "Unknown (clear)" removes the assignment (points fall back to the Unknown colour).
+- [ ] Assignments persist (Grouping.xlsx / saved grouping) and show up in the Grouping page + other windows ('grouping' sync); cross-filter groups update.
+- [ ] Exiting the mode (or switching colour mode to Type) restores normal popups/behaviour.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
