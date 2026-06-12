@@ -285,6 +285,13 @@ Performance (load a few thousand points first):
 - [ ] Assignments persist (Grouping.xlsx / saved grouping) and show up in the Grouping page + other windows ('grouping' sync); cross-filter groups update.
 - [ ] Exiting the mode (or switching colour mode to Type) restores normal popups/behaviour.
 
+### 6ab. Grouping saves live-update + visible-only polygon select (#264)
+
+- [ ] Assign a group from the Project map (click or polygon) → markers **recolour immediately**; open the Grouping tab → the assignment is there; other windows follow.
+- [ ] Grouping.xlsx contains the change (incl. for points that never had a row before — PointNo/Type/Project filled).
+- [ ] Selection map ✚ **Select inside** only selects points actually VISIBLE on the map (loaded ∪ project points, hidden sources excluded) — nothing invisible gets selected, no parent projects of unseen points; status suggests ⬇ Load when the polygon contains none.
+- [ ] ⬇ Load still queries the databases (that's how points get onto the map).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

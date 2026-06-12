@@ -387,6 +387,20 @@ pub fn write_grouping_xlsx(
         existing.insert(pid, data);
     }
 
+    // #264: ALSO apply assignments to rows already in the workbook.  Callers
+    // that only change assignments (map grouping mode, Colors page) pass
+    // `points: []` - previously their assignment changes were silently
+    // dropped because only the loop above ever wrote group columns.
+    if let Some(all) = assignments.as_object() {
+        for (pid, asgn) in all {
+            let Some(asgn) = asgn.as_object() else { continue };
+            let Some(row) = existing.get_mut(pid) else { continue };
+            for (sid, gname) in asgn {
+                row.insert(sid.clone(), gname.clone());
+            }
+        }
+    }
+
     if existing.is_empty() {
         // Nothing to write — create an empty workbook.
         let mut wb = Workbook::new();
