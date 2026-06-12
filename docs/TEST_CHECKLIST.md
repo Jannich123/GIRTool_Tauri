@@ -321,6 +321,12 @@ Performance (load a few thousand points first):
 - [ ] Fresh install (no saved databases): the list seeds **GeoGIS2020** and **GeoGIS2020aalborg** (both DKLYDB08, Windows auth, GeoGIS query type).
 - [ ] ⚠ Renaming an ID changes the db_id tag on NEW data — existing cached/downloaded data keeps the old tag until refreshed/re-downloaded.
 
+### 6ag. New-project reset + CPT visible-only calc (#276)
+
+- [ ] 🆕 New project → the tool is a clean slate: no selected projects/points carried over (empty projects.xlsx/points.xlsx seeded in the new folder), filters reset, selection-map empty, charts refetch fresh; the OLD project's files are untouched.
+- [ ] ⧉ Copy project keeps its data (selection restores from the copied xlsx) — only New resets.
+- [ ] ▶ Run calculation writes ONLY the columns currently ticked AND visible in the picker — with "Show hidden" off, a stale hidden selection (old config) is not written.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

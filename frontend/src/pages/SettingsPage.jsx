@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
 import { invokeAndNotify, useDataChanged, notifyDataChanged } from '../lib/dataChanged'
+import { clearChartQueryCache } from './ChartsPage'
 import { useApp } from '../context/AppContext'
 import QueryConfigTab from './QueryConfigTab'
 import CoordinateSystemTab from './CoordinateSystemTab'
@@ -397,6 +398,15 @@ export default function SettingsPage({ setPage }) {
       if (!r?.path) return
       const path = await invoke('create_project', { path: r.path })
       await testFolder(path)
+      // #276: a NEW project starts from a clean slate — the empty folder has
+      // nothing to restore, so the previous project's in-memory selection
+      // would otherwise linger.  Clearing AFTER the folder switch makes the
+      // live-sync persistence seed fresh empty selection files in the new
+      // folder (never touching the old one); filters and the selection-map
+      // store reset automatically (selection-driven / folder-scoped).
+      setSelectedProjects([])
+      setSelectedPoints([])
+      clearChartQueryCache()
     } catch (err) {
       setFolderStatus('error')
       setFolderMsg(String(err || 'Could not create the project'))
