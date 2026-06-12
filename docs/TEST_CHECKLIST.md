@@ -149,6 +149,22 @@ With a pop-out open next to the main window:
 - [ ] + Add database opens the new row expanded.
 - [ ] Test / × still work from the collapsed row without expanding it.
 
+### 6l. CRS readout on maps + addon-edit performance (#217, #218)
+
+With a target coordinate system saved (Settings → Coordinate system):
+
+- [ ] Both maps show a **bottom-right cursor readout**: live X/Y in the target CRS, labelled with its name. No readout when no CRS is configured.
+- [ ] Selection map: point tooltips get an extra line "X · Y — <CRS name>".
+- [ ] Project map: point popups (click) get the same line.
+- [ ] Changing the coordinate system updates readout + tooltip numbers (dots do NOT move — same physical location).
+
+Performance (load a few thousand points first):
+
+- [ ] Dragging an addon's **transparency slider** (map layer panel) is smooth — layer updates ~4×/s while dragging, final value sticks.
+- [ ] Dragging the **colour picker** (Settings → Map addons) on a shapefile/GeoJSON layer restyles smoothly — no full-map stutter.
+- [ ] Selecting/deselecting points on the map is still instant (marker memoisation didn't break click handlers — tooltips' select/deselect wording still flips).
+- [ ] Jupiter hover tooltips + cyklogram still load; addon polygon click-as-boundary (#209) still works.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

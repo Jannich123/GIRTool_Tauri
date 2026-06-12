@@ -5,7 +5,8 @@ import proj4 from 'proj4'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
-import { PROJ_DEFS } from '../lib/proj'
+import { PROJ_DEFS, convertPoint, CRS_LABELS } from '../lib/proj'
+import CrsCursorReadout from '../components/CrsCursorReadout'
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 
@@ -325,7 +326,7 @@ function loadMapSettings() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MapPage() {
-  const { selectedProjects, typeStyles } = useApp()
+  const { selectedProjects, typeStyles, coordinateSystem } = useApp()
 
   // Get style for a type key (upper-cased), fall back to Other
   const typeStyle = t => typeStyles[(t || '').toUpperCase()] ?? typeStyles.Other ?? { color: '#7f8c8d', symbol: 'circle' }
@@ -521,6 +522,44 @@ export default function MapPage() {
     }
   }
 
+  // Memoised marker tree (#218): unrelated context churn (e.g. addon
+  // transparency drags) re-renders this component; a referentially stable
+  // marker array lets React skip reconciling every point marker.  Popups get
+  // an X/Y line in the project's target CRS (#217) — converted from the DB
+  // source rows via a one-pass lookup map.
+  const pointMarkers = useMemo(() => {
+    const epsg = normaliseEpsg(coordinateSystem?.target_epsg)
+    const srcById = epsg ? new Map(allPoints.map(p => [String(p.PointId), p])) : null
+    const crsTip = (pt) => {
+      const src = srcById?.get(String(pt.PointId))
+      if (!src) return null
+      const c = convertPoint(src, coordinateSystem)
+      if (c?.X1 == null || c?.Y1 == null || !isFinite(Number(c.X1)) || !isFinite(Number(c.Y1))) return null
+      return `${c.X1} · ${c.Y1} — ${CRS_LABELS[epsg] || epsg}`
+    }
+    return visiblePoints.map(pt => {
+      const { color, symbol } = getStyle(pt)
+      const crsLine = crsTip(pt)
+      return (
+        <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}>
+          <Popup>
+            <strong>{pt.PointNo}</strong><br />
+            Type: {pt.PointType}
+            {activeGroupSystem && (
+              <><br />
+                {activeGroupSystem.name}:{' '}
+                {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
+              </>
+            )}
+            {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
+            {crsLine && <><br />{crsLine}</>}
+          </Popup>
+        </PointMarker>
+      )
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem])
+
   // ── Legend entries derived from color mode ────────────────────────────────
 
   const legendEntries = useMemo(() => {
@@ -674,27 +713,13 @@ export default function MapPage() {
               built-in entries in the same list, managed in the top-right panel. */}
           <AddonLayers target="project" />
 
-          {visiblePoints.map(pt => {
-            const { color, symbol } = getStyle(pt)
-            return (
-              <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}>
-                <Popup>
-                  <strong>{pt.PointNo}</strong><br />
-                  Type: {pt.PointType}
-                  {activeGroupSystem && (
-                    <><br />
-                      {activeGroupSystem.name}:{' '}
-                      {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
-                    </>
-                  )}
-                  {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
-                </Popup>
-              </PointMarker>
-            )
-          })}
+          {pointMarkers}
 
           {basePoints.length > 0 && <FitBounds points={basePoints} />}
           <SavePosition projectId={projectId} mapCfgRef={mapCfgRef} />
+
+          {/* Live cursor X/Y in the project coordinate system (#217). */}
+          <CrsCursorReadout targetEpsg={coordinateSystem?.target_epsg} />
         </MapContainer>
 
         {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}
