@@ -277,6 +277,15 @@ export default function SettingsPage({ setPage }) {
       const next = {}
       ;(results || []).forEach(r => { next[r.id] = { ok: !!r.ok, message: r.message || '' } })
       setDbStatus(next)
+      // #242: a changed database set changes the project universe — the CSV
+      // cache list_projects serves is now stale.  Re-index from the databases
+      // in the background and announce again so open views (Projects page,
+      // map project index) swap to the fresh list.
+      if ((results || []).some(r => r && r.ok)) {
+        invoke('list_projects', { refresh: true })
+          .then(() => notifyDataChanged('databases'))
+          .catch(() => {})
+      }
       const failed = (results || []).filter(r => !r.ok)
       if (failed.length === 0) {
         setDbMsg({ ok: true, text: `Saved & connected to ${results.length} database${results.length === 1 ? '' : 's'}.` })

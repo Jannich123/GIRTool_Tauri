@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { invoke } from '../tauri-api'
+import { useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useDragSelect } from '../hooks/useDragSelect'
 
@@ -167,6 +168,13 @@ export default function ProjectsPage({ setPage }) {
   useEffect(() => {
     if (connected) fetchProjects()
   }, [connected])
+
+  // #242: the database set changed (added/removed DB, folder reconnect) —
+  // refetch so the visible list follows the background re-index without a
+  // manual ↻ Refresh.  Served from the refreshed cache, so this is cheap.
+  // includeSelf: the re-index announce can originate in THIS window (Settings
+  // → Save & connect all), and a pure refetch can't echo.
+  useDataChanged('databases', () => { if (connected) fetchProjects() }, { includeSelf: true })
 
   // Pre-tick already-selected projects whenever the upstream `selectedProjects`
   // changes (e.g. session restore).  Does NOT mark user interaction so it

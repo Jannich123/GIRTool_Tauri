@@ -408,7 +408,9 @@ export default function SelectionMap() {
   useEffect(() => { refetchProjIndex() }, [refetchProjIndex])
   // #238: database config / folder reconnects announce 'databases' — the
   // project index must follow, or parent-project lookups go stale.
-  useDataChanged('databases', refetchProjIndex)
+  // includeSelf (#242): the background re-index announce can originate in
+  // this window; a pure refetch can't echo.
+  useDataChanged('databases', refetchProjIndex, { includeSelf: true })
 
   // #238: folder switched WHILE this map is mounted (e.g. from another
   // window): wipe the module store AND the local copies seeded from it.
