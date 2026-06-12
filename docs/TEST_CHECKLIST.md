@@ -313,6 +313,14 @@ Performance (load a few thousand points first):
 - [ ] **⧉ Copy project to…** copies the CURRENT folder (all data) to a chosen empty location and switches to the copy; refuses a non-empty destination with a clear error.
 - [ ] Both appear in recent folders afterwards; the sidebar project name updates.
 
+### 6af. Editable DB IDs + named defaults + wider Project card (#274)
+
+- [ ] Project selection card is as wide as the Database / Query Config cards.
+- [ ] Expanded DB row: the **ID is editable** (e.g. rename DB1 → GeoGIS2020); duplicates / invalid characters / empty IDs turn the field red and **Save & connect all** refuses with a clear message; the expanded panel stays open through the rename.
+- [ ] Renamed IDs survive a restart (no auto-rewrite back to DB&lt;N&gt;); collapsed row + DB pills show the new name everywhere.
+- [ ] Fresh install (no saved databases): the list seeds **GeoGIS2020** and **GeoGIS2020aalborg** (both DKLYDB08, Windows auth, GeoGIS query type).
+- [ ] ⚠ Renaming an ID changes the db_id tag on NEW data — existing cached/downloaded data keeps the old tag until refreshed/re-downloaded.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
