@@ -327,6 +327,18 @@ Performance (load a few thousand points first):
 - [ ] ⧉ Copy project keeps its data (selection restores from the copied xlsx) — only New resets.
 - [ ] ▶ Run calculation writes ONLY the columns currently ticked AND visible in the picker — with "Show hidden" off, a stale hidden selection (old config) is not written.
 
+### 6ah. Data import wizard (#278)
+
+- [ ] Data -> **Import** tab: **Choose file...** opens a CSV/Excel picker, **Choose folder...** a folder picker; after picking, the matched file list + a preview grid of the FIRST file appear at the top.
+- [ ] Clicking a row number in the preview marks it as the header row (highlighted); rows above the first data row are dimmed; the header/data-row number inputs stay in sync.
+- [ ] Column mappings prefill from the header row (source column -> target name); rows can be added/removed/edited; **Reset from header row** re-derives them.
+- [ ] PointNo source offers **File name** and every column; when a header is literally `PointNo` that column is preselected.
+- [ ] Import into a NEW datasheet name creates `Datasheets/<name>.xlsx` with DB=`imported` + PointNo + mapped columns; import into an EXISTING sheet appends rows and unions new columns (old rows blank there); Data preview + charts pick the sheet up immediately (sidecar cache refreshed).
+- [ ] Folder import applies the same header/data-row + mapping to every CSV/Excel file inside (Excel `~$` lock files skipped); with PointNo = file name, each file becomes one point.
+- [ ] Rows whose PointNo cell is empty are skipped and reported; an all-empty trailing row is ignored silently.
+- [ ] points.xlsx upsert: brand-new PointNos appear as points with db `imported` (PointId `imported_<PointNo>`, X1/Y1/Z1/Projection1 from mapped columns when present); an EXISTING PointNo only gets its MISSING coordinate fields filled - never overwritten - and the live selection (all windows) reflects the change without a restart.
+- [ ] Danish CSVs import correctly: `;` delimiter and decimal commas parsed as numbers, ae/oe/aa intact (Windows-1252 fallback), leading-zero PointNos like `007` stay text.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

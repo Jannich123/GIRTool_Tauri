@@ -78,7 +78,7 @@ const COL_WIDTHS: [f64; 12] = [
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
-fn points_xlsx_path(output_folder: &str) -> PathBuf {
+pub(crate) fn points_xlsx_path(output_folder: &str) -> PathBuf {
     PathBuf::from(output_folder).join("points.xlsx")
 }
 
@@ -115,7 +115,7 @@ pub struct SelectedPoint {
 
 // ── Workbook builder ──────────────────────────────────────────────────────────
 
-fn write_workbook(path: &std::path::Path, rows: &[SelectedPoint]) -> Result<(), String> {
+pub(crate) fn write_workbook(path: &std::path::Path, rows: &[SelectedPoint]) -> Result<(), String> {
     let mut wb = Workbook::new();
     let ws = wb.add_worksheet();
     ws.set_name(SHEET_NAME)
@@ -199,7 +199,7 @@ fn cell_to_string(cell: Option<&Data>) -> String {
 
 /// Read `Points` sheet rows.  Skips rows where both `db_id` and `PointId` are
 /// blank.  Returns an empty Vec when the file or sheet is missing.
-fn read_rows(path: &std::path::Path) -> Vec<SelectedPoint> {
+pub(crate) fn read_rows(path: &std::path::Path) -> Vec<SelectedPoint> {
     let mut out = Vec::new();
     let mut wb = match open_workbook_auto(path) {
         Ok(w)  => w,

@@ -85,6 +85,278 @@ function CptReduceSection({ datasheets, cfg, onPatch, onDone }) {
   )
 }
 
+// ── Data import wizard (issue #278) ───────────────────────────────────────────
+// CSV / Excel file (or a folder of them) → an existing or new datasheet.
+// DB is always "imported"; PointNo comes from a column or the file name; new
+// points are upserted into points.xlsx, existing ones only get missing values
+// filled.
+
+const colLetter = (i) => {
+  let s = ''
+  for (let n = i; n >= 0; n = Math.floor(n / 26) - 1) s = String.fromCharCode(65 + (n % 26)) + s
+  return s
+}
+const cellText = (v) => (v == null ? '' : String(v))
+
+function ImportSection({ datasheets, onDone }) {
+  const { setSelectedPoints } = useApp()
+  const [path, setPath]           = useState('')
+  const [files, setFiles]         = useState([])
+  const [grid, setGrid]           = useState([])
+  const [totalRows, setTotalRows] = useState(0)
+  const [headerRow, setHeaderRow] = useState(1) // 1-based
+  const [dataRow, setDataRow]     = useState(2) // 1-based
+  const [fname, setFname]         = useState('')
+  const [pnSource, setPnSource]   = useState('filename')
+  const [mapping, setMapping]     = useState([]) // [{ target, source }]
+  const [busy, setBusy]           = useState(false)
+  const [msg, setMsg]             = useState(null)
+
+  const headers = grid[headerRow - 1] || []
+  const nCols = useMemo(() => grid.reduce((m, r) => Math.max(m, r.length), 0), [grid])
+  const sheetNames = [...new Set(datasheets.map(d => d.fname))]
+
+  function prefill(g, hr) {
+    const hdr = g[hr - 1] || []
+    setMapping(hdr.map((h, i) => ({ target: cellText(h).trim(), source: i })).filter(m => m.target))
+    const pnIdx = hdr.findIndex(h => cellText(h).trim().toLowerCase() === 'pointno')
+    setPnSource(pnIdx >= 0 ? `col:${pnIdx}` : 'filename')
+  }
+
+  async function pick(mode) {
+    setMsg(null)
+    try {
+      const p = await invoke('pick_import_path', { mode })
+      if (!p) return
+      setPath(p)
+      const r = await invoke('import_preview', { path: p })
+      setFiles(r.files || [])
+      setGrid(r.grid || [])
+      setTotalRows(r.total_rows ?? 0)
+      setHeaderRow(1)
+      setDataRow(2)
+      prefill(r.grid || [], 1)
+    } catch (e) {
+      setMsg({ ok: false, text: String(e).slice(0, 250) })
+      setFiles([]); setGrid([])
+    }
+  }
+
+  function setHeader(hrRaw) {
+    const hr = Math.max(1, Number(hrRaw) || 1)
+    setHeaderRow(hr)
+    setDataRow(d => (d <= hr ? hr + 1 : d))
+    prefill(grid, hr)
+  }
+
+  async function runImport() {
+    setMsg(null)
+    if (!path) { setMsg({ ok: false, text: 'Choose a file or folder first.' }); return }
+    if (!fname.trim()) { setMsg({ ok: false, text: 'Pick a target datasheet.' }); return }
+    setBusy(true)
+    try {
+      const req = {
+        path,
+        fname: fname.trim(),
+        data_row: Math.max(1, Number(dataRow) || 1),
+        point_no_source: pnSource,
+        mapping: mapping
+          .filter(m => m.target.trim())
+          .map(m => ({ target: m.target.trim(), source: m.source })),
+      }
+      const r = await invokeAndNotify('datasheets', 'import_data', { req })
+      // Merge upserted points back into the live selection — points.xlsx is
+      // rewritten from selection state on every change, so file-only rows
+      // would otherwise be lost on the next map click.
+      try {
+        const fileRows = await invoke('load_points_xlsx')
+        const key = p => `${p.db_id ?? ''}||${p.PointId ?? ''}`
+        const fill = (a, b) => ((a == null || a === '') && b != null && b !== '' ? b : a)
+        setSelectedPoints(prev => {
+          const have = new Set(prev.map(key))
+          const byKey = new Map((fileRows || []).map(p => [key(p), p]))
+          const merged = prev.map(p => {
+            const f = byKey.get(key(p))
+            if (!f) return p
+            return {
+              ...p,
+              PointNo: fill(p.PointNo, f.PointNo),
+              X1: fill(p.X1, f.X1), Y1: fill(p.Y1, f.Y1), Z1: fill(p.Z1, f.Z1),
+              Projection1: fill(p.Projection1, f.Projection1),
+              origin_X1: fill(p.origin_X1, f.origin_X1),
+              origin_Y1: fill(p.origin_Y1, f.origin_Y1),
+              origin_Z1: fill(p.origin_Z1, f.origin_Z1),
+              origin_Projection1: fill(p.origin_Projection1, f.origin_Projection1),
+            }
+          })
+          const added = (fileRows || []).filter(p => !have.has(key(p)))
+          return [...merged, ...added]
+        })
+      } catch { /* selection merge is best-effort */ }
+      const bits = [`${r.rows_added} rows from ${r.files} file(s) → ${r.fname}.xlsx`]
+      if (r.rows_skipped) bits.push(`${r.rows_skipped} skipped (no PointNo)`)
+      bits.push(`${r.points_added} new points, ${r.points_updated} updated`)
+      if (r.new_columns?.length) bits.push(`new columns: ${r.new_columns.join(', ')}`)
+      setMsg({ ok: true, text: bits.join(' · ') })
+      onDone?.(r.fname)
+    } catch (e) {
+      setMsg({ ok: false, text: String(e).slice(0, 250) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const srcLabel = (i) => {
+    const h = cellText(headers[i]).trim()
+    return h ? `${colLetter(i)} — ${h}` : colLetter(i)
+  }
+
+  return (
+    <div style={{ maxWidth: 980 }}>
+      <h3 className="section-title">Import data</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Append CSV / Excel data to a datasheet in <code>Datasheets/</code>. Pick a single file or a
+        folder (every CSV/Excel inside is imported with the same settings). <code>DB</code> is set
+        to <code>imported</code>; points missing from <code>points.xlsx</code> are added, existing
+        points only get their missing coordinates filled.
+      </p>
+
+      <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.75rem' }}>
+        <button className="btn-secondary" onClick={() => pick('file')} disabled={busy}>📄 Choose file…</button>
+        <button className="btn-secondary" onClick={() => pick('folder')} disabled={busy}>📁 Choose folder…</button>
+        {path && <code style={{ fontSize: '.8rem', wordBreak: 'break-all' }}>{path}</code>}
+      </div>
+      {files.length > 0 && (
+        <p className="hint" style={{ marginTop: 0 }}>
+          {files.length} file(s): {files.slice(0, 8).join(', ')}{files.length > 8 ? ` … +${files.length - 8} more` : ''}
+          {' — '}previewing <strong>{files[0]}</strong>{totalRows > grid.length ? ` (first ${grid.length} of ${totalRows} rows)` : ''}
+        </p>
+      )}
+
+      {/* ── Preview of the first file (top, per the issue) ─────────────── */}
+      {grid.length > 0 && (
+        <div style={{ overflow: 'auto', maxHeight: 300, border: '1px solid var(--border, #e5e7eb)', borderRadius: 6, marginBottom: '1rem' }}>
+          <table className="data-table" style={{ fontSize: '.78rem', whiteSpace: 'nowrap' }}>
+            <thead>
+              <tr>
+                <th></th>
+                {Array.from({ length: nCols }, (_, i) => <th key={i}>{colLetter(i)}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {grid.map((row, ri) => {
+                const r1 = ri + 1
+                const isHeader = r1 === headerRow
+                const isData = r1 >= dataRow
+                return (
+                  <tr key={ri} style={{
+                    background: isHeader ? '#dbeafe' : undefined,
+                    opacity: !isHeader && !isData ? 0.45 : 1,
+                  }}>
+                    <td
+                      onClick={() => setHeader(r1)}
+                      title="Click to use this row as the header row"
+                      style={{ cursor: 'pointer', fontWeight: 600, color: '#6b7280' }}
+                    >
+                      {r1}
+                    </td>
+                    {Array.from({ length: nCols }, (_, ci) => <td key={ci}>{cellText(row[ci])}</td>)}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {grid.length > 0 && (
+        <div className="card" style={{ maxWidth: 720, display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
+          <label>Header row</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}>
+            <input type="number" min="1" value={headerRow} onChange={e => setHeader(e.target.value)} style={{ width: 70 }} />
+            <span className="hint" style={{ margin: 0 }}>names the columns below (click a row number in the preview)</span>
+          </div>
+
+          <label>First data row</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}>
+            <input
+              type="number" min="1" value={dataRow}
+              onChange={e => setDataRow(Math.max(1, Number(e.target.value) || 1))}
+              style={{ width: 70 }}
+            />
+            <span className="hint" style={{ margin: 0 }}>rows above this are ignored in every file</span>
+          </div>
+
+          <label>Datasheet</label>
+          <div>
+            <input
+              list="import-sheet-options" value={fname} onChange={e => setFname(e.target.value)}
+              placeholder="e.g. CPTData — existing or new"
+              style={{ width: 260 }}
+            />
+            <datalist id="import-sheet-options">
+              {sheetNames.map(n => <option key={n} value={n} />)}
+            </datalist>
+          </div>
+
+          <label>PointNo from</label>
+          <select value={pnSource} onChange={e => setPnSource(e.target.value)} style={{ maxWidth: 300 }}>
+            <option value="filename">File name (one point per file)</option>
+            {Array.from({ length: nCols }, (_, i) => (
+              <option key={i} value={`col:${i}`}>Column {srcLabel(i)}</option>
+            ))}
+          </select>
+
+          <label style={{ alignSelf: 'start', paddingTop: '.3rem' }}>Columns</label>
+          <div>
+            {mapping.length === 0 && <p className="hint" style={{ margin: 0 }}>No columns mapped — add one below.</p>}
+            {mapping.map((m, i) => (
+              <div key={i} style={{ display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' }}>
+                <select
+                  value={m.source}
+                  onChange={e => setMapping(arr => arr.map((x, j) => (j === i ? { ...x, source: Number(e.target.value) } : x)))}
+                  style={{ width: 220 }}
+                >
+                  {Array.from({ length: nCols }, (_, c) => <option key={c} value={c}>{srcLabel(c)}</option>)}
+                </select>
+                <span style={{ color: '#6b7280' }}>→</span>
+                <input
+                  value={m.target}
+                  onChange={e => setMapping(arr => arr.map((x, j) => (j === i ? { ...x, target: e.target.value } : x)))}
+                  placeholder="datasheet column"
+                  style={{ width: 200 }}
+                />
+                <button
+                  className="btn-secondary btn-sm"
+                  title="Remove this column"
+                  onClick={() => setMapping(arr => arr.filter((_, j) => j !== i))}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: '.5rem', marginTop: '.4rem' }}>
+              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', source: 0 }])}>
+                + Add column
+              </button>
+              <button className="btn-secondary btn-sm" onClick={() => prefill(grid, headerRow)} title="Re-derive all mappings from the header row">
+                ↻ Reset from header row
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: '.85rem', display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn-primary" onClick={runImport} disabled={busy || !path || grid.length === 0}>
+          {busy ? 'Importing…' : '📥 Import'}
+        </button>
+        {msg && <span className={`msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</span>}
+      </div>
+    </div>
+  )
+}
+
 export default function DataPage() {
   const { selectedProjects, selectedPoints, connection, coordinateSystem } = useApp()
   // allPoints = every point in the selected projects (issue #149).  Used to
@@ -480,6 +752,7 @@ export default function DataPage() {
           { key: 'download', label: '⬇ Download menu' },
           { key: 'preview',  label: `📊 Data preview${datasheets.length > 0 ? ` (${datasheets.length})` : ''}` },
           { key: 'reduce',   label: '🔬 CPT reduction' },
+          { key: 'import',   label: '📥 Import' },
         ].map(t => {
           const active = viewTab === t.key
           return (
@@ -673,6 +946,14 @@ export default function DataPage() {
           datasheets={datasheets}
           cfg={reduceCfg}
           onPatch={patchReduceCfg}
+          onDone={(fname) => refreshDatasheets({ keepActive: true, invalidate: new Set([fname]) })}
+        />
+      )}
+
+      {/* ══ IMPORT VIEW (issue #278) ═══════════════════════════════════════ */}
+      {viewTab === 'import' && (
+        <ImportSection
+          datasheets={datasheets}
           onDone={(fname) => refreshDatasheets({ keepActive: true, invalidate: new Set([fname]) })}
         />
       )}
