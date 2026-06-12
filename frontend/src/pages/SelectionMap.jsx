@@ -224,11 +224,14 @@ function DrawHandler({ active, onVertex }) {
   // a Jupiter borerapport — and show a crosshair cursor.
   useEffect(() => {
     const pane = map.getPane('overlayPane')
+    const addonPane = map.getPane('addon-vectors') // #254: vector addons live here
     const container = map.getContainer()
     if (pane) pane.style.pointerEvents = active ? 'none' : ''
+    if (addonPane) addonPane.style.pointerEvents = active ? 'none' : ''
     if (container) container.style.cursor = active ? 'crosshair' : ''
     return () => {
       if (pane) pane.style.pointerEvents = ''
+      if (addonPane) addonPane.style.pointerEvents = ''
       if (container) container.style.cursor = ''
     }
   }, [active, map])

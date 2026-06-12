@@ -259,6 +259,12 @@ Performance (load a few thousand points first):
 - [ ] Dropdown closes on outside click / Escape; opening near the screen edge stays on screen; sort-by-header still works (the funnel doesn't trigger sorting).
 - [ ] (#250) The dropdown always renders ON TOP — e.g. the Selected table's filter is not covered by the Available table's sticky header below.
 
+### 6y. Points always above addon layers (#254)
+
+- [ ] Add a shapefile/CSV polygon or point addon overlapping your data points → DB points, Jupiter markers and selection rings render ON TOP of it, on both maps.
+- [ ] Restyle the addon (colour/opacity) and reload more layers → points stay on top (pane-based, not order-based).
+- [ ] Addon polygons remain hoverable (tooltip) + clickable as selection boundaries (#209); during hand-drawing, clicks still drop vertices over addon shapes.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
