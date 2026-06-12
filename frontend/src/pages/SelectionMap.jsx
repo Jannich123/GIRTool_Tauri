@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, CircleMarker, Polygon, Polyline, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { invoke } from '../tauri-api'
+import { useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { reproject, toLatLng, pointToLatLng, convertPoint, normaliseEpsg, CRS_LABELS } from '../lib/proj'
@@ -47,8 +48,24 @@ const SOURCE_PALETTE = ['#2563eb', '#16a34a', '#db2777', '#9333ea', '#ea580c', '
 // Session-scoped memory of the selection map so leaving Data Selection (or its
 // Map subtab) and returning restores the last view, loaded points, and toggles.
 const mapStore = {
+  folder: null, // #238: which output folder this state belongs to
   view: null, loaded: [], loadStatus: '', hiddenDbs: [],
   jupiter: [], jupiterCats: { geo: true, vand: true, miljoe: true },
+}
+
+// #238: the store is FOLDER-scoped.  Points loaded under another project
+// folder must not survive a folder switch — their (db_id, ProjectId)
+// identities belong to that folder's database list, so parent-project
+// lookups would silently miss.  Returns true when a switch wiped the store.
+function ensureMapStoreFolder(folder) {
+  if (!folder || mapStore.folder === folder) return false
+  mapStore.folder = folder
+  mapStore.view = null
+  mapStore.loaded = []
+  mapStore.loadStatus = ''
+  mapStore.hiddenDbs = []
+  mapStore.jupiter = []
+  return true
 }
 
 // Cyklogram summaries (#174): borid → 'loading' | null (no data) | [{label, pct}].
@@ -224,7 +241,12 @@ function DrawHandler({ active, onVertex }) {
 
 export default function SelectionMap() {
   const { allPoints } = useFilter()
-  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem, mapAddons } = useApp()
+  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem, mapAddons, connection } = useApp()
+
+  // #238: wipe folder-foreign session state BEFORE the useState initialisers
+  // below seed from mapStore (fresh mounts after a folder switch).
+  const folder = connection?.output_folder || ''
+  ensureMapStoreFolder(folder)
 
   // #234: dynamic tile grid — web-mercator while an XYZ world map (OSM/Esri)
   // is visible on this map, the Danish 25832 grid (WMTS builtins) otherwise.
@@ -373,7 +395,7 @@ export default function SelectionMap() {
   const projIndex = useRef({})
   // Version bump so memoised tooltips (#222) recompute once the index loads.
   const [projIndexVersion, setProjIndexVersion] = useState(0)
-  useEffect(() => {
+  const refetchProjIndex = useCallback(() => {
     invoke('list_projects')
       .then(rows => {
         const idx = {}
@@ -383,6 +405,24 @@ export default function SelectionMap() {
       })
       .catch(() => {})
   }, [])
+  useEffect(() => { refetchProjIndex() }, [refetchProjIndex])
+  // #238: database config / folder reconnects announce 'databases' — the
+  // project index must follow, or parent-project lookups go stale.
+  useDataChanged('databases', refetchProjIndex)
+
+  // #238: folder switched WHILE this map is mounted (e.g. from another
+  // window): wipe the module store AND the local copies seeded from it.
+  const prevFolderRef = useRef(folder)
+  useEffect(() => {
+    if (prevFolderRef.current === folder) return
+    prevFolderRef.current = folder
+    ensureMapStoreFolder(folder)
+    setJupiter([])
+    setLoaded([])
+    setLoadStatus(folder ? 'Project folder changed — loaded map points were cleared (⬇ Load in view to reload).' : '')
+    setHiddenDbs(new Set())
+    refetchProjIndex()
+  }, [folder, refetchProjIndex])
 
   const selectedIds = useMemo(
     () => new Set((selectedPoints || []).map(p => `${p.db_id ?? '?'}_${p.PointId}`)),
@@ -403,6 +443,10 @@ export default function SelectionMap() {
     const proj = projIndex.current[pk]
     if (proj && !(selectedProjects || []).some(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` === pk)) {
       setSelectedProjects([...(selectedProjects || []), proj])
+    } else if (!proj) {
+      // #238: loud instead of silent — typically stale points from another
+      // project folder / database set.
+      setLoadStatus(`Point selected, but project ${p.ProjectId} (${p.db_id ?? '?'}) is not in the current project list — if you switched project folder, re-load the map points (⬇ Load in view).`)
     }
   }
 
@@ -423,7 +467,8 @@ export default function SelectionMap() {
       return
     }
     if (!proj) {
-      setLoadStatus('Parent project not found in the project list')
+      // #238: typically stale points from another project folder / DB set.
+      setLoadStatus(`Project ${p.ProjectId} (${p.db_id ?? '?'}) is not in the current project list — if you switched project folder, re-load the map points (⬇ Load in view).`)
       return
     }
     setSelectedProjects(prev =>
