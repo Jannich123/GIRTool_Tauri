@@ -19,7 +19,11 @@ export default function MapAddonsTab() {
   const hasFolder = !!connection?.output_folder
   const userAddons = addons.filter(a => !a.builtin) // built-ins managed in the on-map panel
 
-  const [form, setForm] = useState({ name: '', url: '', layer: '', token: '', project: true, selection: true })
+  const [form, setForm] = useState({ service: 'wms', name: '', url: '', layer: '', token: '', project: true, selection: true })
+  // #230: full WMTS capabilities of the last Connect — layers carry formats /
+  // styles / matrix-set links; matrix_sets carry each grid's CRS so addAddon
+  // can pick a web-mercator one (or refuse with the grids it found).
+  const [wmtsInfo, setWmtsInfo] = useState(null)
 
   // #224: services like api.dataforsyningen.dk require a `token` query param —
   // append it for GetCapabilities probes when the user supplied one.
@@ -34,17 +38,50 @@ export default function MapAddonsTab() {
   const [connectMsg, setConnectMsg] = useState(null)
 
   async function connect() {
-    setConnectMsg(null); setConnecting(true)
+    setConnectMsg(null); setConnecting(true); setWmtsInfo(null)
     try {
-      const list = await invoke('wms_capabilities', { url: withToken(form.url.trim(), form.token) })
-      const arr = Array.isArray(list) ? list : []
-      setLayers(arr)
-      setConnectMsg({ ok: arr.length > 0, text: `${arr.length} layer${arr.length === 1 ? '' : 's'} found` })
+      if (form.service === 'wmts') {
+        const r = await invoke('wmts_capabilities', { url: withToken(form.url.trim(), form.token) })
+        const arr = Array.isArray(r?.layers) ? r.layers : []
+        setWmtsInfo(r || null)
+        setLayers(arr)
+        const merc = webMercatorSet(r)
+        setConnectMsg({
+          ok: arr.length > 0 && !!merc,
+          text: arr.length === 0
+            ? 'No layers found'
+            : merc
+              ? `${arr.length} layer${arr.length === 1 ? '' : 's'} found · web-mercator grid: ${merc}`
+              : `${arr.length} layer${arr.length === 1 ? '' : 's'} found, but NO web-mercator tile grid (found: ${gridSummary(r)}) — this WMTS can't be drawn on the map; use the service's WMS variant instead.`,
+        })
+      } else {
+        const list = await invoke('wms_capabilities', { url: withToken(form.url.trim(), form.token) })
+        const arr = Array.isArray(list) ? list : []
+        setLayers(arr)
+        setConnectMsg({ ok: arr.length > 0, text: `${arr.length} layer${arr.length === 1 ? '' : 's'} found` })
+      }
     } catch (e) {
       setLayers([]); setConnectMsg({ ok: false, text: String(e).slice(0, 160) })
     } finally {
       setConnecting(false)
     }
+  }
+
+  // #230: pick a web-mercator TileMatrixSet from WMTS capabilities — by CRS
+  // (3857 / 900913) or by conventional grid names.  Returns its id or null.
+  function webMercatorSet(info) {
+    const sets = Array.isArray(info?.matrix_sets) ? info.matrix_sets : []
+    const hit = sets.find(s =>
+      /3857|900913/.test(String(s.crs || '')) ||
+      /google|webmercator|web_mercator/i.test(String(s.id || '')))
+    return hit ? hit.id : null
+  }
+  function gridSummary(info) {
+    const sets = Array.isArray(info?.matrix_sets) ? info.matrix_sets : []
+    return sets.map(s => {
+      const epsg = String(s.crs || '').match(/EPSG:?:?(\d+)/i)?.[1]
+      return epsg ? `${s.id} — EPSG:${epsg}` : s.id
+    }).join(', ') || 'none'
   }
 
   function addAddon() {
@@ -60,15 +97,36 @@ export default function MapAddonsTab() {
     const addon = {
       id: `addon_${Date.now()}_${Math.floor(Math.random() * 1e4)}`,
       name: form.name.trim(),
-      type: 'wms',
+      type: form.service === 'wmts' ? 'wmts' : 'wms',
       url: form.url.trim(),
       layer: form.layer.trim(),
       token: form.token.trim(),
       maps: { project: form.project, selection: form.selection },
       visible: true,
     }
+    // #230: WMTS needs a chosen layer and a WEB-MERCATOR tile grid — raster
+    // tiles in another projection (e.g. the Danish EPSG:25832-only services)
+    // cannot be drawn on the web-mercator map; their WMS variant can.
+    if (addon.type === 'wmts') {
+      if (!addon.layer) {
+        setMsg({ ok: false, text: 'Pick a layer first (Connect, then choose from the list).' })
+        return
+      }
+      const tms = webMercatorSet(wmtsInfo)
+      if (!tms) {
+        setMsg({
+          ok: false,
+          text: `This WMTS has no web-mercator tile grid (found: ${gridSummary(wmtsInfo)}) — it cannot be drawn on the map. Use the service's WMS variant instead.`,
+        })
+        return
+      }
+      addon.tilematrixset = tms
+      const li = (wmtsInfo?.layers || []).find(l => l.name === addon.layer)
+      addon.format = li?.formats?.[0] || 'image/png'
+      addon.style  = li?.styles?.[0] || 'default'
+    }
     updateNow([...addons, addon])
-    setForm({ name: '', url: '', layer: '', token: '', project: true, selection: true })
+    setForm({ service: form.service, name: '', url: '', layer: '', token: '', project: true, selection: true })
     setMsg({ ok: true, text: `Added "${addon.name}".` })
   }
 
@@ -320,9 +378,25 @@ export default function MapAddonsTab() {
         </table>
       )}
 
-      {/* Add WMS addon */}
-      <h4 style={{ margin: '0 0 .5rem' }}>Add WMS overlay</h4>
+      {/* Add WMS / WMTS addon */}
+      <h4 style={{ margin: '0 0 .5rem' }}>Add WMS / WMTS overlay</h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center', maxWidth: 720 }}>
+        <label>Service</label>
+        <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={form.service}
+            onChange={e => { setForm({ ...form, service: e.target.value, layer: '' }); setLayers([]); setWmtsInfo(null); setConnectMsg(null) }}
+            style={{ maxWidth: 140 }}
+          >
+            <option value="wms">WMS</option>
+            <option value="wmts">WMTS</option>
+          </select>
+          {form.service === 'wmts' && (
+            <span className="hint" style={{ margin: 0 }}>
+              WMTS needs a web-mercator tile grid — Connect checks and refuses otherwise.
+            </span>
+          )}
+        </div>
         <label>Name</label>
         <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Cadastre" />
         <label>Service URL</label>

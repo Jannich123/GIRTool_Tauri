@@ -196,6 +196,13 @@ Performance (load a few thousand points first):
 - [ ] Selection map unchanged (still shows everything selectable).
 - [ ] Legacy datasheets without a DB column still light their points up (wildcard match).
 
+### 6q. WMTS addon support + layer selection (#230)
+
+- [ ] Settings → Map addons → Add overlay: new **Service** select (WMS / WMTS).
+- [ ] WMTS + Connect against `…/topo_skaermkort_wmts_DAF` (with token): finds the layers (`topo_skaermkort`, `topo_skaermkort_tls`) and **clearly states there is NO web-mercator grid** (View1 — EPSG:25832); Add addon refuses with the same message → use the WMS variant for these two Danish services (working since #227).
+- [ ] WMTS + Connect against a service WITH a GoogleMapsCompatible/3857 grid: layer dropdown lists multiple layers, Add stores layer/format/style/grid, tiles render on both maps (token supported).
+- [ ] WMS Connect flow unchanged (layer dropdown still works).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

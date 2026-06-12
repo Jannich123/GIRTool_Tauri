@@ -141,6 +141,7 @@ pub fn run() {
             commands::map::os_username,
             commands::map::open_url,
             commands::map::wms_capabilities,
+            commands::map::wmts_capabilities,
             commands::map::cyklogram_summary,
             // map polygon-load (M4.3)
             commands::map_query::map_distinct_epsgs,
