@@ -228,6 +228,12 @@ Performance (load a few thousand points first):
 - [ ] Clicking a point whose project genuinely isn't in the list shows the explanatory status line (not silent).
 - [ ] Normal single-folder sessions: tab away/back still restores view + loaded points as before.
 
+### 6u. Background project re-index on folder connect (#240)
+
+- [ ] Opening a project folder enters the app instantly (CSV-served list), while the DB re-index runs in the background — the Projects list reflects newly added DB projects shortly after open WITHOUT pressing ↻ Refresh list.
+- [ ] Same for the Settings → connect-folder flow.
+- [ ] Map parent-project lookups work for projects created since the last session (index refreshed via the 'databases' announce).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
