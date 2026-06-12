@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
-import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
+import { invokeAndNotify, useDataChanged, notifyDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import QueryConfigTab from './QueryConfigTab'
 import CoordinateSystemTab from './CoordinateSystemTab'
@@ -494,6 +494,15 @@ export default function SettingsPage({ setPage }) {
         : ''
       setFolderStatus(anyDbOk || !merged.server ? 'ok' : 'warn')
       setFolderMsg(`${folderRes.message} — ${dbBit}${multiBit}${restoredBit}`)
+
+      // #240: background project re-index (same as openProject) — refreshes
+      // projects_list.csv from the databases without blocking, then announces
+      // on the sync bus so open views (map project index) follow.
+      if (anyDbOk) {
+        invoke('list_projects', { refresh: true })
+          .then(() => notifyDataChanged('databases'))
+          .catch(() => {})
+      }
 
       // Issue #103: auto-navigate to the most relevant tab once selection
       // has been restored.  Strata if we restored points, Projects if only

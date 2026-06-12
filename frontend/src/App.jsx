@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from './tauri-api'
+import { notifyDataChanged } from './lib/dataChanged'
 import { AppProvider, useApp } from './context/AppContext'
 import { FilterProvider }     from './context/FilterContext'
 import Sidebar        from './components/Sidebar'
@@ -160,6 +161,16 @@ function Shell() {
           }
         }
       } catch (err) { console.warn('selection restore failed:', err) }
+    }
+
+    // #240: re-index projects from the databases in the BACKGROUND — the
+    // restore above used the instant CSV cache; this refreshes it without
+    // blocking app entry, then nudges open views (selection-map project
+    // index etc.) over the sync bus.
+    if (anyDbOk) {
+      invoke('list_projects', { refresh: true })
+        .then(() => notifyDataChanged('databases'))
+        .catch(() => {})
     }
 
     setPage('dataSelection')
