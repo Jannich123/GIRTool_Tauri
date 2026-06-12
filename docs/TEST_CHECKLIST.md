@@ -234,6 +234,12 @@ Performance (load a few thousand points first):
 - [ ] Same for the Settings → connect-folder flow.
 - [ ] Map parent-project lookups work for projects created since the last session (index refreshed via the 'databases' announce).
 
+### 6v. Project list follows database-set changes (#242)
+
+- [ ] Add a database (Settings → Database → ⧉/＋ → **Save & connect all**) → shortly after, the Projects list shows the new database's projects WITHOUT pressing ↻ Refresh (also when Projects is open in another window).
+- [ ] Remove a database + Save & connect all → its projects drop out of the list the same way.
+- [ ] Map parent-project selection works for points of the newly added database after the re-index lands.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
