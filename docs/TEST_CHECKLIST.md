@@ -259,11 +259,12 @@ Performance (load a few thousand points first):
 - [ ] Dropdown closes on outside click / Escape; opening near the screen edge stays on screen; sort-by-header still works (the funnel doesn't trigger sorting).
 - [ ] (#250) The dropdown always renders ON TOP — e.g. the Selected table's filter is not covered by the Available table's sticky header below.
 
-### 6y. Points always above addon layers (#254)
+### 6y. Points above addon layers + clickable addons + remove-projects action (#254, #256)
 
-- [ ] Add a shapefile/CSV polygon or point addon overlapping your data points → DB points, Jupiter markers and selection rings render ON TOP of it, on both maps.
-- [ ] Restyle the addon (colour/opacity) and reload more layers → points stay on top (pane-based, not order-based).
-- [ ] Addon polygons remain hoverable (tooltip) + clickable as selection boundaries (#209); during hand-drawing, clicks still drop vertices over addon shapes.
+- [ ] Add a shapefile/CSV polygon or point addon overlapping your data points → DB points, Jupiter markers and selection rings render ON TOP of it, on both maps; restyling/reloading the addon keeps them on top.
+- [ ] Addon polygons are hoverable (tooltip) and **clickable as selection boundaries** again (#209 regression from the first fix attempt).
+- [ ] During hand-drawing, clicks over addon shapes still drop vertices.
+- [ ] New **🗑 Remove projects** polygon action: every project with points inside the polygon leaves the selection together with ALL its points (status line reports the count); ⬇ Load / ✚ Select / ✖ Remove unchanged.
 
 ## 7. Quick regression sweep
 

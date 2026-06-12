@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GeoJSON, TileLayer, WMSTileLayer, useMap } from 'react-leaflet'
+import { GeoJSON, TileLayer, WMSTileLayer } from 'react-leaflet'
 import L from 'leaflet'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
@@ -39,23 +39,31 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
   const color = addon.color || '#7c3aed'
   const opacity = typeof addon.opacity === 'number' ? addon.opacity : 1
 
+  // #254/#256: keep every vector in the SHARED renderer (so canvas
+  // hit-testing, tooltips and the polygon-as-boundary clicks all work) and
+  // enforce points-above-addons via DRAW ORDER: send the addon to the back
+  // after mount and after every restyle.  Marker sets (re)mounted by the
+  // pages append to the canvas end, so they draw on top of addons anyway.
   useEffect(() => {
     const layer = layerRef.current
     if (!layer) return
     layer.setStyle((feat) => (feat?.geometry?.type === 'Point'
       ? { color: '#fff', weight: 1.2, fillColor: color, fillOpacity: Math.min(0.95, opacity) }
       : { color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 }))
+    try { layer.bringToBack() } catch { /* not on a map yet */ }
   }, [color, opacity])
+
+  useEffect(() => {
+    try { layerRef.current?.bringToBack() } catch { /* not on a map yet */ }
+  }, [data])
 
   return (
     <GeoJSON
       ref={layerRef}
-      pane={ADDON_VECTOR_PANE}
       data={data}
       style={() => ({ color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 })}
       pointToLayer={(feat, latlng) =>
         L.circleMarker(latlng, {
-          pane: ADDON_VECTOR_PANE,
           radius: 5, color: '#fff', weight: 1.2,
           fillColor: color, fillOpacity: Math.min(0.95, opacity),
         })
@@ -78,12 +86,6 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
     />
   )
 }
-
-// #254: vector addons render in their own LOW pane so the app's point
-// markers (default overlay pane, z-index 400) are above every addon layer by
-// construction — regardless of how many layers are added later or when they
-// restyle.  Raster addons (tile pane, z-index 200) sit below everything.
-export const ADDON_VECTOR_PANE = 'addon-vectors'
 
 // Session-wide cache: addon id → reprojected FeatureCollection.  Module-level
 // so it survives unmount/remount (tab switches) — each imported file is read +
@@ -130,14 +132,6 @@ function applyRenderType(gj, render) {
 // map uses it to stage the polygon as the active selection boundary.
 export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
   const { mapAddons } = useApp()
-
-  // #254: create the low addon pane once per map (idempotent) BEFORE any
-  // GeoJSON layer mounts into it.
-  const map = useMap()
-  if (!map.getPane(ADDON_VECTOR_PANE)) {
-    const pane = map.createPane(ADDON_VECTOR_PANE)
-    pane.style.zIndex = 350 // below overlayPane (400) → points always on top
-  }
 
   // Local mirror of the session cache (state, so loads trigger a re-render).
   const [geoCache, setGeoCache] = useState({})

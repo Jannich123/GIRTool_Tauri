@@ -224,14 +224,11 @@ function DrawHandler({ active, onVertex }) {
   // a Jupiter borerapport — and show a crosshair cursor.
   useEffect(() => {
     const pane = map.getPane('overlayPane')
-    const addonPane = map.getPane('addon-vectors') // #254: vector addons live here
     const container = map.getContainer()
     if (pane) pane.style.pointerEvents = active ? 'none' : ''
-    if (addonPane) addonPane.style.pointerEvents = active ? 'none' : ''
     if (container) container.style.cursor = active ? 'crosshair' : ''
     return () => {
       if (pane) pane.style.pointerEvents = ''
-      if (addonPane) addonPane.style.pointerEvents = ''
       if (container) container.style.cursor = ''
     }
   }, [active, map])
@@ -778,6 +775,25 @@ export default function SelectionMap() {
     setLoadStatus(`${before - kept.length} point${before - kept.length === 1 ? '' : 's'} removed from selection`)
   }
 
+  // #256: remove every project whose (selected-project) points fall inside
+  // the polygon — the project AND all its points leave the selection (bulk
+  // version of the double-click deselect).
+  function removeProjectsInside(polyLatLng) {
+    const insideKeys = new Set()
+    for (const f of pts) {
+      if (pointInPolygonLatLng(f.latlng, polyLatLng)) {
+        insideKeys.add(`${f.p.db_id ?? '?'}||${f.p.ProjectId}`)
+      }
+    }
+    if (!insideKeys.size) {
+      setLoadStatus('No project points inside the polygon')
+      return
+    }
+    setSelectedProjects(prev => (prev || []).filter(sp => !insideKeys.has(`${sp.db_id ?? '?'}||${sp.ProjectId}`)))
+    setSelectedPoints(prev => (prev || []).filter(pt => !insideKeys.has(`${pt.db_id ?? '?'}||${pt.ProjectId}`)))
+    setLoadStatus(`Removed ${insideKeys.size} project${insideKeys.size === 1 ? '' : 's'} and all their points from the selection`)
+  }
+
   // Quick load: every available point inside the current view rectangle.
   function loadInView() {
     if (!map) return
@@ -801,6 +817,7 @@ export default function SelectionMap() {
     if (action === 'load') loadInside(ring4326)
     else if (action === 'select') selectInside(ring4326)
     else if (action === 'remove') removeInside(polyLatLng)
+    else if (action === 'removeProjects') removeProjectsInside(polyLatLng)
   }
 
   // #209: clicking a polygon from a map addon stages it as the active
@@ -858,6 +875,14 @@ export default function SelectionMap() {
             </button>
             <button className="btn-secondary" onClick={() => applyPolygon('remove')} disabled={vertices.length < 3 || loading}>
               ✖ Remove inside
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => applyPolygon('removeProjects')}
+              disabled={vertices.length < 3 || loading}
+              title="Remove every project with points inside the polygon — the projects AND all their points leave the selection"
+            >
+              🗑 Remove projects
             </button>
             <button className="btn-secondary" onClick={() => { setDrawing(false); setVertices([]); setPolyFromAddon(null) }} disabled={loading}>
               Cancel
