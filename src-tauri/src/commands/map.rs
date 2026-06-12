@@ -236,3 +236,149 @@ pub async fn wms_capabilities(url: String) -> Result<Value, String> {
         .map(|(name, title)| json!({ "name": name, "title": title }))
         .collect::<Vec<_>>()))
 }
+
+// ── WMTS capabilities (#230) ─────────────────────────────────────────────────
+
+#[derive(Default)]
+struct WmtsLayerInfo {
+    id:      Option<String>,
+    title:   Option<String>,
+    formats: Vec<String>,
+    styles:  Vec<String>,
+    tms:     Vec<String>,
+}
+
+/// Parse a WMTS 1.0.0 GetCapabilities: per-layer identifier/title/formats/
+/// styles/matrix-set links, plus the Contents-level TileMatrixSet definitions
+/// with their CRS (needed to find a web-mercator grid).  Namespace prefixes
+/// (ows:) are stripped by `local_name`.
+fn parse_wmts_capabilities(xml: &str) -> (Vec<WmtsLayerInfo>, Vec<(String, String)>) {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut layers: Vec<WmtsLayerInfo> = Vec::new();
+    let mut in_layer = false;
+    // Contents-level TileMatrixSet definition currently open: (id, crs).
+    let mut tms_frame: Option<(Option<String>, Option<String>)> = None;
+    let mut sets: Vec<(String, String)> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let n = local_name(e.name().as_ref());
+                let parent = stack.last().map(String::as_str).unwrap_or("");
+                if n == "Layer" && parent == "Contents" {
+                    layers.push(WmtsLayerInfo::default());
+                    in_layer = true;
+                } else if n == "TileMatrixSet" && parent == "Contents" {
+                    tms_frame = Some((None, None));
+                }
+                stack.push(n);
+            }
+            Ok(Event::Text(t)) => {
+                let txt = t.unescape().unwrap_or_default().trim().to_string();
+                if txt.is_empty() {
+                    buf.clear();
+                    continue;
+                }
+                let len = stack.len();
+                let tail = stack.last().map(String::as_str).unwrap_or("");
+                let parent = if len >= 2 { stack[len - 2].as_str() } else { "" };
+                let grand = if len >= 3 { stack[len - 3].as_str() } else { "" };
+                if in_layer {
+                    if let Some(layer) = layers.last_mut() {
+                        match (tail, parent, grand) {
+                            ("Identifier", "Layer", _) => layer.id = Some(txt),
+                            ("Title", "Layer", _) => layer.title = Some(txt),
+                            ("Format", "Layer", _) => layer.formats.push(txt),
+                            ("Identifier", "Style", "Layer") => layer.styles.push(txt),
+                            ("TileMatrixSet", "TileMatrixSetLink", _) => layer.tms.push(txt),
+                            _ => {}
+                        }
+                    }
+                } else if let Some(frame) = tms_frame.as_mut() {
+                    // Direct children of the Contents-level TileMatrixSet only —
+                    // TileMatrix children carry their own Identifier (zoom level).
+                    match (tail, parent) {
+                        ("Identifier", "TileMatrixSet") => frame.0 = Some(txt),
+                        ("SupportedCRS", "TileMatrixSet") => frame.1 = Some(txt),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let n = local_name(e.name().as_ref());
+                stack.pop();
+                let parent = stack.last().map(String::as_str).unwrap_or("");
+                if n == "Layer" && parent == "Contents" {
+                    in_layer = false;
+                } else if n == "TileMatrixSet" && parent == "Contents" {
+                    if let Some((Some(id), crs)) = tms_frame.take() {
+                        sets.push((id, crs.unwrap_or_default()));
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    layers.retain(|l| l.id.is_some());
+    (layers, sets)
+}
+
+/// #230: fetch a WMTS GetCapabilities and return its layers (identifier,
+/// title, formats, styles, matrix-set links) plus every TileMatrixSet with
+/// its CRS — the Settings tab uses the CRS to pick a web-mercator grid (and
+/// to refuse clearly when none exists, e.g. the EPSG:25832-only Danish
+/// services).
+#[tauri::command]
+pub async fn wmts_capabilities(url: String) -> Result<Value, String> {
+    let mut u = url.trim().to_string();
+    if u.is_empty() {
+        return Err("Enter a WMTS service URL first.".into());
+    }
+    let lower = u.to_lowercase();
+    let sep = if u.contains('?') { '&' } else { '?' };
+    let mut extra: Vec<&str> = Vec::new();
+    if !lower.contains("service=") { extra.push("SERVICE=WMTS"); }
+    if !lower.contains("request=") { extra.push("REQUEST=GetCapabilities"); }
+    if !lower.contains("version=") { extra.push("VERSION=1.0.0"); }
+    if !extra.is_empty() {
+        u.push(sep);
+        u.push_str(&extra.join("&"));
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client build failed: {e}"))?;
+    let resp = client
+        .get(&u)
+        .send()
+        .await
+        .map_err(|e| format!("WMTS request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("WMTS server returned HTTP {}", resp.status()));
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read WMTS response: {e}"))?;
+
+    let (layers, sets) = parse_wmts_capabilities(&body);
+    if layers.is_empty() {
+        let preview: String = body.chars().take(160).collect();
+        return Err(format!("No WMTS layers found (is this a WMTS endpoint?). Response began: {preview}"));
+    }
+    Ok(json!({
+        "layers": layers.into_iter().map(|l| json!({
+            "name":    l.id.unwrap_or_default(),
+            "title":   l.title.unwrap_or_default(),
+            "formats": l.formats,
+            "styles":  l.styles,
+            "tms":     l.tms,
+        })).collect::<Vec<_>>(),
+        "matrix_sets": sets.into_iter().map(|(id, crs)| json!({ "id": id, "crs": crs })).collect::<Vec<_>>(),
+    }))
+}

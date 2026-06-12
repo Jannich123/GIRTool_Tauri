@@ -182,6 +182,44 @@ export default function AddonLayers({ target, onPolygonClick }) {
         )
       }
 
+      // WMTS (#230): rendered as a plain TileLayer over the KVP GetTile
+      // endpoint — only usable when the service publishes a web-mercator
+      // tile grid (the Settings tab enforces that on add).  Vendor query
+      // params already in the saved URL are preserved.
+      if (a.type === 'wmts') {
+        const base = httpsUrl.split('?')[0]
+        const qp = new URLSearchParams()
+        qp.set('service', 'WMTS')
+        qp.set('request', 'GetTile')
+        qp.set('version', '1.0.0')
+        qp.set('layer', a.layer || '')
+        qp.set('style', a.style || 'default')
+        qp.set('format', a.format || 'image/png')
+        qp.set('tilematrixset', a.tilematrixset || 'GoogleMapsCompatible')
+        if (a.token) qp.set('token', a.token)
+        try {
+          const orig = new URL(httpsUrl)
+          for (const [k, v] of orig.searchParams) {
+            const kl = k.toLowerCase()
+            if (!['service', 'request', 'version', 'layer', 'style', 'format',
+                  'tilematrixset', 'tilematrix', 'tilerow', 'tilecol'].includes(kl) && !qp.has(k)) {
+              qp.set(k, v)
+            }
+          }
+        } catch { /* keep the computed params */ }
+        const wmtsTileUrl = `${base}?${qp.toString()}&tilematrix={z}&tilerow={y}&tilecol={x}`
+        return (
+          <TileLayer
+            key={`${a.id}_${a.layer || ''}_${a.tilematrixset || ''}`}
+            url={wmtsTileUrl}
+            opacity={opacity}
+            zIndex={zIndex}
+            attribution={a.name}
+            {...(a.maxZoom ? { maxZoom: a.maxZoom } : {})}
+          />
+        )
+      }
+
       // WMS (user addons + Danish base maps).  Extra vendor props (token,
       // maxZoom) are only passed when present.
       const extra = {}
