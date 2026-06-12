@@ -42,6 +42,9 @@ pub struct CatEntry {
     pub unit: &'static str,
     pub round: i32, // default decimals; -1 = text column (no rounding)
     pub default_selected: bool,
+    /// #258: not part of the calculation-selection sheet — hidden in the
+    /// picker by default (engine still computes it when explicitly selected).
+    pub hidden: bool,
     /// Calculation reference (formula + source) shown in the picker — mirrors
     /// the reference spreadsheet's "Calculation reference" column (issue #198).
     pub reference: &'static str,
@@ -49,86 +52,108 @@ pub struct CatEntry {
 
 macro_rules! cat {
     ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr, $f:expr) => {
-        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: false, reference: $f }
+        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: false, hidden: false, reference: $f }
     };
     ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr, $f:expr, sel) => {
-        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: true, reference: $f }
+        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: true, hidden: false, reference: $f }
+    };
+    // #258: intermediate/QA columns not in the calculation-selection sheet —
+    // hidden in the picker by default, selectable only after "Show hidden".
+    ($g:expr, $n:expr, $d:expr, $u:expr, $r:expr, $f:expr, hid) => {
+        CatEntry { group: $g, name: $n, desc: $d, unit: $u, round: $r, default_selected: false, hidden: true, reference: $f }
     };
 }
 
+// #258: the catalogue mirrors the calculation-selection sheet — same groups
+// (Basic / Normalized / Estimation Plots 1–8), same row order, descriptions,
+// units, rounding and CPT Guide 2022 page references.  Green sheet rows
+// (Selected = TRUE) carry `sel` and form the first-open default selection.
+// Engine column NAMES are oracle-pinned and unchanged — note the sheet labels
+// its "Overconsolidated Ratio qt<20 (Robertson 2009)" row OCR_2013 and its
+// "St<15 (Robertson 2013)" row OCR_2019; those are the engine's OCR_2009 and
+// OCR_2013 respectively.  Columns NOT on the sheet (intermediates / QA flags)
+// carry `hid`: hidden in the picker until "Show hidden columns" is ticked.
 pub static CATALOG: &[CatEntry] = &[
-    // ── Basic Plots ──
-    cat!("Basic Plots", "Water Level", "Groundwater table elevation mapped per point", "m", 2, "User input (CPT point data)"),
-    cat!("Basic Plots", "Corr_Depth", "Depth corrected to ground/seabed level", "m", 3, "GSB − Level (or Depth)"),
-    cat!("Basic Plots", "qc/Pa", "Cone resistance normalised by atmospheric pressure", "-", 3, "qc / Pa, Pa = 100 kPa"),
-    cat!("Basic Plots", "u0", "Hydrostatic pore pressure", "kPa", 2, "(WL − Level)·γw below the water table"),
-    cat!("Basic Plots", "qt", "Corrected cone resistance", "MPa", 4, "qt = qc + u2·(1−a) — CPT Guide 2022"),
-    cat!("Basic Plots", "Rf", "Friction ratio fs/qt", "%", 2, "Rf = fs/qt·100"),
-    cat!("Basic Plots", "UW", "Unit weight (manual per layer or Robertson correlation)", "kN/m³", 2, "γ/γw = 0.27·logRf + 0.36·log(qt/Pa) + 1.236 — Robertson & Cabal (2010)", sel),
-    cat!("Basic Plots", "UW_eff", "Per-interval effective overburden contribution", "kPa", 3, "ΔLevel · γ' per interval"),
-    cat!("Basic Plots", "Sigma_eff_v0", "Effective vertical stress (cumulative)", "kPa", 2, "σ'v0 = Σ UW_eff per borehole"),
-    cat!("Basic Plots", "Sigma_t_v0", "Total vertical stress", "kPa", 2, "σv0 = σ'v0 + u0"),
-    cat!("Basic Plots", "Stress_Ratio", "σv0 / σ'v0", "-", 3, "σv0 / σ'v0"),
-    cat!("Basic Plots", "Delta_u", "Excess pore pressure u2 − u0", "kPa", 2, "Δu = u2 − u0"),
-    cat!("Basic Plots", "qn", "Net cone resistance qt − σv0", "kPa", 2, "qn = qt − σv0"),
-    // ── Normalized Plots ──
-    cat!("Normalized Plots", "Qt_n", "Normalised cone resistance (n = 1)", "-", 2, "Qt = (qt − σv0)/σ'v0 — Robertson (1990)"),
-    cat!("Normalized Plots", "Fr", "Normalised friction ratio", "%", 3, "Fr = fs/(qt − σv0)·100 — Robertson (1990)"),
-    cat!("Normalized Plots", "Bq", "Pore pressure parameter", "-", 3, "Bq = Δu/qn — Robertson (1990)"),
-    cat!("Normalized Plots", "n", "Stress exponent (iterative)", "-", 3, "n = 0.381·Ic + 0.05·(σ'v0/Pa) − 0.15 ≤ 1 — Robertson (2009)"),
-    cat!("Normalized Plots", "Cn", "Stress normalisation factor", "-", 3, "Cn = (Pa/σ'v0)^n — Robertson (2009)"),
-    cat!("Normalized Plots", "Qtn", "Normalised cone resistance (iterative n)", "-", 2, "Qtn = ((qt − σv0)/Pa)·Cn — Robertson (2009)"),
-    cat!("Normalized Plots", "Ic", "Soil behaviour type index (iterative)", "-", 3, "Ic = √[(3.47 − logQtn)² + (logFr + 1.22)²] — Robertson (2009)"),
-    cat!("Normalized Plots", "Ligne", "Robertson 2010 Qt–Fr grid row", "-", 0, "Robertson (2010) Qt–Fr chart lookup"),
-    cat!("Normalized Plots", "Colonne", "Robertson 2010 Qt–Fr grid column", "-", 0, "Robertson (2010) Qt–Fr chart lookup"),
-    cat!("Normalized Plots", "Zone", "Robertson 2010 Qt–Fr zone (1–9)", "-", 0, "Robertson (2010) SBTn zones"),
-    cat!("Normalized Plots", "SBTn", "Soil behaviour type (Qt–Fr)", "text", -1, "Robertson (2010) zone description"),
-    cat!("Normalized Plots", "Ligne_2", "Robertson 2010 Qt–Bq grid row", "-", 0, "Robertson (2010) Qt–Bq chart lookup"),
-    cat!("Normalized Plots", "Colonne_2", "Robertson 2010 Qt–Bq grid column", "-", 0, "Robertson (2010) Qt–Bq chart lookup"),
-    cat!("Normalized Plots", "Zone_2", "Robertson 2010 Qt–Bq zone (1–9)", "-", 0, "Robertson (2010) SBTn zones"),
-    cat!("Normalized Plots", "Type_2", "Soil behaviour type (Qt–Bq)", "text", -1, "Robertson (2010) zone description"),
-    cat!("Normalized Plots", "Robertson 2010", "Outside Robertson 2010 graph? 0 = no, 1 = yes", "-", 0, "0.1 ≤ Fr ≤ 10 and 1 ≤ Qtn ≤ 1000"),
-    cat!("Normalized Plots", "Robertson 1986", "Outside Robertson 1986 graph? 0 = no, 1 = yes", "-", 0, "0 ≤ Rf ≤ 8 and 0.1 ≤ qc ≤ 100"),
-    cat!("Normalized Plots", "Schmertmann 1978", "Outside Schmertmann 1978 graph? 0 = no, 1 = yes", "-", 0, "0 ≤ Rf ≤ 7 and 0.1 ≤ qc ≤ 100"),
-    // ── Estimation Plots ──
-    cat!("Estimation Plots", "Nkt", "Cone factor (manual per layer or selected method)", "-", 2, "Mayne & Peuchen (2022): Nkt = 10.5 − 4.6·ln(Bq + 0.1) · Robertson (2012): Nkt = 10.5 + 7·logFr", sel),
-    cat!("Estimation Plots", "su_qt", "Undrained shear strength from qt and Nkt", "kPa", 2, "su = (qt − σv0)/Nkt"),
-    cat!("Estimation Plots", "N_Delta_u", "Nkt·Bq", "-", 2, "NΔu = Nkt·Bq"),
-    cat!("Estimation Plots", "Su_Delta_u", "Undrained shear strength from Δu", "kPa", 2, "su = Δu/NΔu"),
-    cat!("Estimation Plots", "su(Rem)", "Remoulded shear strength (= fs)", "kPa", 2, "su(rem) ≈ fs — CPT Guide 2022"),
-    cat!("Estimation Plots", "St", "Sensitivity su/su(rem) for Ic < 2.6", "-", 2, "St = su/su(rem) — CPT Guide 2022"),
-    cat!("Estimation Plots", "su_Ratio", "Undrained strength ratio", "-", 3, "σ'v0·Qt/Nkt ratio form"),
-    cat!("Estimation Plots", "su(Rem)_Ratio", "Remoulded strength ratio", "-", 3, "su(rem)/σ'v0"),
-    cat!("Estimation Plots", "OCR_2013", "Overconsolidation ratio (Robertson 2013)", "-", 2, "OCR = (2.625 + 1.75·logFr)^−1.25 · Qt^1.25 — Robertson (2013)"),
-    cat!("Estimation Plots", "OCR_2009", "Overconsolidation ratio (Robertson 2009)", "-", 2, "OCR = 0.25·Qt^1.25 — Robertson (2009)"),
-    cat!("Estimation Plots", "m", "Yield stress exponent (Mayne)", "-", 3, "m = 1 − 0.28/(1 + (Ic/2.65)^25)… — Mayne et al. (2009)"),
-    cat!("Estimation Plots", "sigma_eff_p", "Preconsolidation stress (Mayne 1992)", "kPa", 2, "σ'p = 0.33·(qt − σv0)^m — Mayne (1992)"),
-    cat!("Estimation Plots", "OCR_1992", "Overconsolidation ratio (Mayne 1992)", "-", 2, "OCR = σ'p/σ'v0 — Mayne (1992)"),
-    cat!("Estimation Plots", "alpha_E", "Young's modulus factor", "-", 3, "αE = 0.015·10^(0.55·Ic + 1.68) — Robertson (2009)"),
-    cat!("Estimation Plots", "Es", "Drained Young's modulus (sands)", "MPa", 2, "E = αE·(qt − σv0) — Robertson (2009)"),
-    cat!("Estimation Plots", "alpha_M", "Constrained modulus factor", "-", 3, "αM per Ic/Qt — Robertson (2009)"),
-    cat!("Estimation Plots", "Ms", "1D constrained modulus", "MPa", 2, "M = αM·(qt − σv0) — Robertson (2009)"),
-    cat!("Estimation Plots", "Ms/qc", "Constrained modulus over qc", "-", 2, "M/qc"),
-    cat!("Estimation Plots", "Dr (Baldi, 1986)", "Relative density (Baldi 1986)", "-", 3, "Dr = (1/2.41)·ln(Qtn/15.7) — Baldi et al. (1986)"),
-    cat!("Estimation Plots", "Dr (Kulhawy & Mayne, 1990)", "Relative density (Kulhawy & Mayne 1990)", "-", 3, "Dr = √(Qtn/350) — Kulhawy & Mayne (1990)"),
-    cat!("Estimation Plots", "Dr (Bray and Olaya, 2022)", "Relative density (Bray & Olaya 2022)", "-", 3, "Dr = √(Qtn·Ic^3.5/1500) for 1.6 < Ic ≤ 2.6 — Bray & Olaya (2022)"),
-    cat!("Estimation Plots", "K_c", "Grain characteristic correction (Robertson 2022)", "-", 2, "Kc = 15 − 14/(1 + (Ic/2.95)^11) — Robertson (2022)"),
-    cat!("Estimation Plots", "Qtn,cs", "Clean-sand equivalent normalised resistance", "-", 2, "Qtn,cs = Kc·Qtn — Robertson & Wride (1998)"),
-    cat!("Estimation Plots", "Psi", "State parameter", "-", 3, "ψ = 0.56 − 0.33·log(Qtn,cs) — Robertson (2010)"),
-    cat!("Estimation Plots", "Phi_Rob_Cam", "Peak friction angle (Robertson & Campanella)", "°", 1, "tanφ' = (1/2.68)·[log(qc/σ'v0) + 0.29] — Robertson & Campanella (1983)"),
-    cat!("Estimation Plots", "Phi_Kul_May", "Peak friction angle (Kulhawy & Mayne)", "°", 1, "φ' = 17.6 + 11·log(Qtn) — Kulhawy & Mayne (1990)"),
-    cat!("Estimation Plots", "Phi_Jeff_Been", "Peak friction angle (Jefferies & Been)", "°", 1, "φ' = 3 + 15.84·log(Qtn,cs) − 26.88 — Jefferies & Been (2006)"),
-    cat!("Estimation Plots", "Phi_Mayne_2006", "Friction angle clays/silts (Mayne 2006)", "°", 1, "φ' = 29.5·Bq^0.121·(0.256 + 0.336·Bq + logQt) — Mayne (2006)"),
-    cat!("Estimation Plots", "K_0_OCR_2013", "In-situ stress ratio from OCR 2013", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — Mayne & Kulhawy (1982)"),
-    cat!("Estimation Plots", "K_0_OCR_2009", "In-situ stress ratio from OCR 2009", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — Mayne & Kulhawy (1982)"),
-    cat!("Estimation Plots", "K_0_OCR_1992", "In-situ stress ratio from OCR 1992", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — Mayne & Kulhawy (1982)"),
-    cat!("Estimation Plots", "alpha_vs", "Shear-wave velocity factor", "-", 2, "αvs = 10^(0.55·Ic + 1.68) — Robertson (2009)"),
-    cat!("Estimation Plots", "Vs", "Shear wave velocity", "m/s", 1, "Vs = √(αvs·(qt − σv0)/100) — Robertson (2009)"),
-    cat!("Estimation Plots", "Vs1", "Stress-normalised shear wave velocity", "m/s", 1, "Vs1 = Vs·(100/σ'v0)^0.25"),
-    cat!("Estimation Plots", "G_0", "Small-strain shear modulus", "MPa", 2, "G0 = ρ·Vs² — CPT Guide 2022"),
-    cat!("Estimation Plots", "K_G", "Small-strain rigidity index", "-", 1, "KG = (G0/qn)·Qtn^0.75 — Robertson (2016)"),
-    cat!("Estimation Plots", "k", "Hydraulic conductivity (from Ic)", "m/s", 8, "k = 10^(0.952 − 3.04·Ic) for 1 < Ic ≤ 3.27 — Robertson (2010)"),
-    cat!("Estimation Plots", "N60", "SPT N60 equivalent (Robertson 2012)", "-", 1, "(qt/Pa)/(10^(1.1268 − 0.2817·Ic)) — Robertson (2012)"),
+    // ── Basic Plots (sheet: all selected) ──
+    cat!("Basic Plots", "Corr_Depth", "Corrected depth according to ground/seabed level", "m", 2, "GSB − Level (or Depth) — CPT Guide 2022 p. 23", sel),
+    cat!("Basic Plots", "qc/Pa", "Cone resistance divided by atmospheric pressure (100 kPa)", "-", 3, "qc / Pa, Pa = 100 kPa", sel),
+    cat!("Basic Plots", "qt", "Corrected cone resistance", "MPa", 3, "qt = qc + u2·(1−a) — CPT Guide 2022 p. 23", sel),
+    cat!("Basic Plots", "Rf", "Friction ratio", "%", 4, "Rf = fs/qt·100 — CPT Guide 2022 p. 27", sel),
+    cat!("Basic Plots", "u0", "Hydrostatic pore water pressure", "kPa", 2, "(WL − Level)·γw below the water table", sel),
+    // ── Normalized Plots (sheet: all selected) ──
+    cat!("Normalized Plots", "Qt_n", "Qt normalised initial estimate according to Wroth (1984)", "kPa", 2, "Qt = (qt − σv0)/σ'v0 — CPT Guide 2022 p. 28", sel),
+    cat!("Normalized Plots", "Qtn", "Qt normalised iterated according to Robertson and Wride (R&W, 1998)", "kPa", 2, "Qtn = ((qt − σv0)/Pa)·Cn — CPT Guide 2022 p. 116", sel),
+    cat!("Normalized Plots", "Fr", "Normalised friction ratio", "%", 3, "Fr = fs/(qt − σv0)·100 — CPT Guide 2022 p. 28", sel),
+    cat!("Normalized Plots", "Bq", "Normalised pore pressure ratio", "-", 3, "Bq = Δu/qn — CPT Guide 2022 p. 31", sel),
+    cat!("Normalized Plots", "Ic", "Normalised soil behaviour type index", "-", 1, "Ic = √[(3.47 − logQtn)² + (logFr + 1.22)²] — CPT Guide 2022 p. 32", sel),
+    cat!("Normalized Plots", "SBTn", "Normalised soil behaviour type", "text", -1, "Robertson (2010) zone description — CPT Guide 2022 p. 32", sel),
+    // ── Estimation Plots 1 (sheet: selected) ──
+    cat!("Estimation Plots 1", "UW", "Soil unit weight (manual per layer or Robertson correlation)", "kN/m³", 2, "γ/γw = 0.27·logRf + 0.36·log(qt/Pa) + 1.236 — CPT Guide 2022 p. 39", sel),
+    cat!("Estimation Plots 1", "k", "Permeability", "m/s", 8, "k = 10^(0.952 − 3.04·Ic) for 1 < Ic ≤ 3.27 — CPT Guide 2022 p. 60", sel),
+    cat!("Estimation Plots 1", "N60", "N60 SPT equivalent, Robertson (2012)", "blows/30cm", 1, "(qt/Pa)/(10^(1.1268 − 0.2817·Ic)) — CPT Guide 2022 p. 39", sel),
+    cat!("Estimation Plots 1", "Es", "Young's modulus", "MPa", 2, "E = αE·(qt − σv0) — CPT Guide 2022 p. 78", sel),
+    cat!("Estimation Plots 1", "Dr (Baldi, 1986)", "Dr — relative density", "%", 3, "Dr = (1/2.41)·ln(Qtn/15.7) — CPT Guide 2022 p. 49", sel),
+    cat!("Estimation Plots 1", "Dr (Kulhawy & Mayne, 1990)", "Dr — relative density", "%", 3, "Dr = √(Qtn/350) — CPT Guide 2022 p. 49", sel),
+    // ── Estimation Plots 2 (sheet: selected) ──
+    cat!("Estimation Plots 2", "Phi_Rob_Cam", "Peak friction angle in sands, Robertson & Campanella", "Degrees", 2, "tanφ' = (1/2.68)·[log(qc/σ'v0) + 0.29] — CPT Guide 2022 p. 53", sel),
+    cat!("Estimation Plots 2", "Phi_Kul_May", "Peak friction angle in sands, Kulhawy & Mayne", "Degrees", 2, "φ' = 17.6 + 11·log(Qtn) — CPT Guide 2022 p. 53", sel),
+    cat!("Estimation Plots 2", "Phi_Jeff_Been", "Peak friction angle in sands, Jefferies & Been", "Degrees", 2, "φ' = 3 + 15.84·log(Qtn,cs) − 26.88 — CPT Guide 2022 p. 53", sel),
+    cat!("Estimation Plots 2", "Phi_Mayne_2006", "Peak friction angle in clays/silts, Mayne 2006", "Degrees", 2, "φ' = 29.5·Bq^0.121·(0.256 + 0.336·Bq + logQt) — CPT Guide 2022 p. 54", sel),
+    // ── Estimation Plots 3 (sheet: selected) ──
+    cat!("Estimation Plots 3", "Nkt", "Nkt set manually or estimated according to Robertson (2012) or Mayne and Peuchen (2022)", "-", 2, "Mayne & Peuchen (2022): Nkt = 10.5 − 4.6·ln(Bq + 0.1) · Robertson (2012): Nkt = 10.5 + 7·logFr — CPT Guide 2022 p. 41", sel),
+    cat!("Estimation Plots 3", "su_qt", "Undrained shear strength based on qt", "kPa", 2, "su = (qt − σv0)/Nkt — CPT Guide 2022 p. 41", sel),
+    cat!("Estimation Plots 3", "N_Delta_u", "Nkt·Bq", "-", 2, "NΔu = Nkt·Bq — CPT Guide 2022 p. 42", sel),
+    cat!("Estimation Plots 3", "Su_Delta_u", "Undrained shear strength based on Δu", "kPa", 2, "su = Δu/NΔu — CPT Guide 2022 p. 42", sel),
+    cat!("Estimation Plots 3", "Stress_Ratio", "Stress ratio σ_v0/σ'v0", "-", 3, "σv0 / σ'v0", sel),
+    // ── Estimation Plots 4 (sheet: not selected) ──
+    cat!("Estimation Plots 4", "St", "Soil sensitivity", "-", 2, "St = su/su(rem) — CPT Guide 2022 p. 43"),
+    cat!("Estimation Plots 4", "su(Rem)", "Remoulded undrained shear strength", "kPa", 2, "su(rem) ≈ fs — CPT Guide 2022 p. 43"),
+    cat!("Estimation Plots 4", "su_Ratio", "Undrained strength ratio — su/σ'v0", "-", 3, "su/σ'v0 — CPT Guide 2022 p. 43"),
+    cat!("Estimation Plots 4", "su(Rem)_Ratio", "Remoulded undrained strength ratio — su(Rem)/σ'v0", "-", 3, "su(rem)/σ'v0 — CPT Guide 2022 p. 43"),
+    // ── Estimation Plots 5 (sheet: not selected) ──
+    cat!("Estimation Plots 5", "OCR_1992", "Overconsolidated ratio, based on Mayne, 1992", "-", 2, "OCR = σ'p/σ'v0 — CPT Guide 2022 p. 44"),
+    cat!("Estimation Plots 5", "OCR_2009", "Overconsolidated ratio qt < 20, based on Robertson, 2009 (sheet: OCR_2013)", "-", 2, "OCR = 0.25·Qt^1.25 — CPT Guide 2022 p. 44"),
+    cat!("Estimation Plots 5", "OCR_2013", "Overconsolidated ratio St < 15, based on Robertson, 2013 (sheet: OCR_2019)", "-", 2, "OCR = (2.625 + 1.75·logFr)^−1.25 · Qt^1.25 — CPT Guide 2022 p. 44"),
+    cat!("Estimation Plots 5", "m", "Yield stress exponent (Mayne)", "-", 3, "m = 1 − 0.28/(1 + (Ic/2.65)^25)… — CPT Guide 2022 p. 45"),
+    cat!("Estimation Plots 5", "sigma_eff_p", "Maximum past effective consolidation stress", "kPa", 2, "σ'p = 0.33·(qt − σv0)^m — CPT Guide 2022 p. 45"),
+    // ── Estimation Plots 6 (sheet: not selected) ──
+    cat!("Estimation Plots 6", "alpha_M", "1D constrained modulus, factor", "-", 3, "αM per Ic/Qt — CPT Guide 2022 p. 67"),
+    cat!("Estimation Plots 6", "Ms", "1D constrained modulus", "MPa", 2, "M = αM·(qt − σv0) — CPT Guide 2022 p. 67"),
+    cat!("Estimation Plots 6", "Ms/qc", "1D constrained modulus / cone penetration tip resistance", "-", 2, "M/qc — CPT Guide 2022 p. 67"),
+    // ── Estimation Plots 7 (sheet: not selected) ──
+    cat!("Estimation Plots 7", "K_c", "Correction factor, Robertson 2022", "-", 2, "Kc = 15 − 14/(1 + (Ic/2.95)^11) — CPT Guide 2022 p. 116"),
+    cat!("Estimation Plots 7", "K_0_OCR_1992", "In-situ stress ratio, based on Mayne 1992", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — CPT Guide 2022 p. 47"),
+    cat!("Estimation Plots 7", "K_0_OCR_2009", "In-situ stress ratio, based on Robertson 2009", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — CPT Guide 2022 p. 47"),
+    cat!("Estimation Plots 7", "K_0_OCR_2013", "In-situ stress ratio, based on Robertson 2013", "-", 3, "K0 = (1 − sinφ')·OCR^sinφ' — CPT Guide 2022 p. 47"),
+    cat!("Estimation Plots 7", "Qtn,cs", "Normalised clean sand cone resistance equivalent", "MPa", 2, "Qtn,cs = Kc·Qtn — CPT Guide 2022 p. 115"),
+    cat!("Estimation Plots 7", "Psi", "State parameter", "-", 3, "ψ = 0.56 − 0.33·log(Qtn,cs) — CPT Guide 2022 p. 138"),
+    // ── Estimation Plots 8 (sheet: not selected) ──
+    cat!("Estimation Plots 8", "alpha_vs", "Shear-wave velocity factor", "-", 2, "αvs = 10^(0.55·Ic + 1.68) — CPT Guide 2022 p. 57"),
+    cat!("Estimation Plots 8", "Vs", "Shear wave velocity", "m/s", 1, "Vs = √(αvs·(qt − σv0)/100) — CPT Guide 2022 p. 57"),
+    cat!("Estimation Plots 8", "Vs1", "Normalised shear wave velocity, for uncemented Holocene & Pleistocene age soils", "m/s", 1, "Vs1 = Vs·(100/σ'v0)^0.25 — CPT Guide 2022 p. 57"),
+    cat!("Estimation Plots 8", "G_0", "Small strain shear modulus", "MPa", 2, "G0 = ρ·Vs² — CPT Guide 2022 p. 56"),
+    cat!("Estimation Plots 8", "K_G", "Small strain bulk modulus", "MPa", 1, "KG = (G0/qn)·Qtn^0.75 — CPT Guide 2022 p. 59"),
+    // ── Intermediates / QA flags — not on the selection sheet (hidden, #258) ──
+    cat!("Basic Plots", "Water Level", "Groundwater table elevation mapped per point", "m", 2, "User input (CPT point data)", hid),
+    cat!("Basic Plots", "UW_eff", "Per-interval effective overburden contribution", "kPa", 3, "ΔLevel · γ' per interval", hid),
+    cat!("Basic Plots", "Sigma_eff_v0", "Effective vertical stress (cumulative)", "kPa", 2, "σ'v0 = Σ UW_eff per borehole", hid),
+    cat!("Basic Plots", "Sigma_t_v0", "Total vertical stress", "kPa", 2, "σv0 = σ'v0 + u0", hid),
+    cat!("Basic Plots", "Delta_u", "Excess pore pressure u2 − u0", "kPa", 2, "Δu = u2 − u0", hid),
+    cat!("Basic Plots", "qn", "Net cone resistance qt − σv0", "kPa", 2, "qn = qt − σv0", hid),
+    cat!("Normalized Plots", "n", "Stress exponent (iterative)", "-", 3, "n = 0.381·Ic + 0.05·(σ'v0/Pa) − 0.15 ≤ 1 — Robertson (2009)", hid),
+    cat!("Normalized Plots", "Cn", "Stress normalisation factor", "-", 3, "Cn = (Pa/σ'v0)^n — Robertson (2009)", hid),
+    cat!("Normalized Plots", "Ligne", "Robertson 2010 Qt–Fr grid row", "-", 0, "Robertson (2010) Qt–Fr chart lookup", hid),
+    cat!("Normalized Plots", "Colonne", "Robertson 2010 Qt–Fr grid column", "-", 0, "Robertson (2010) Qt–Fr chart lookup", hid),
+    cat!("Normalized Plots", "Zone", "Robertson 2010 Qt–Fr zone (1–9)", "-", 0, "Robertson (2010) SBTn zones", hid),
+    cat!("Normalized Plots", "Ligne_2", "Robertson 2010 Qt–Bq grid row", "-", 0, "Robertson (2010) Qt–Bq chart lookup", hid),
+    cat!("Normalized Plots", "Colonne_2", "Robertson 2010 Qt–Bq grid column", "-", 0, "Robertson (2010) Qt–Bq chart lookup", hid),
+    cat!("Normalized Plots", "Zone_2", "Robertson 2010 Qt–Bq zone (1–9)", "-", 0, "Robertson (2010) SBTn zones", hid),
+    cat!("Normalized Plots", "Type_2", "Soil behaviour type (Qt–Bq)", "text", -1, "Robertson (2010) zone description", hid),
+    cat!("Normalized Plots", "Robertson 2010", "Outside Robertson 2010 graph? 0 = no, 1 = yes", "-", 0, "0.1 ≤ Fr ≤ 10 and 1 ≤ Qtn ≤ 1000", hid),
+    cat!("Normalized Plots", "Robertson 1986", "Outside Robertson 1986 graph? 0 = no, 1 = yes", "-", 0, "0 ≤ Rf ≤ 8 and 0.1 ≤ qc ≤ 100", hid),
+    cat!("Normalized Plots", "Schmertmann 1978", "Outside Schmertmann 1978 graph? 0 = no, 1 = yes", "-", 0, "0 ≤ Rf ≤ 7 and 0.1 ≤ qc ≤ 100", hid),
+    cat!("Estimation Plots", "alpha_E", "Young's modulus factor", "-", 3, "αE = 0.015·10^(0.55·Ic + 1.68) — Robertson (2009)", hid),
+    cat!("Estimation Plots", "Dr (Bray and Olaya, 2022)", "Relative density (Bray & Olaya 2022)", "-", 3, "Dr = √(Qtn·Ic^3.5/1500) for 1.6 < Ic ≤ 2.6 — Bray & Olaya (2022)", hid),
 ];
 
 // ── Robertson 2010 grids (embedded; identical files to the python oracle) ─────
@@ -971,6 +996,7 @@ pub fn get_cpt_catalog() -> Value {
         .map(|c| json!({
             "group": c.group, "name": c.name, "desc": c.desc,
             "unit": c.unit, "round": c.round, "default_selected": c.default_selected,
+            "hidden": c.hidden,
             "reference": c.reference,
         }))
         .collect::<Vec<_>>())

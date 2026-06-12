@@ -253,15 +253,20 @@ export default function CptCalcPage() {
     />
   )
 
-  // Group the catalogue for Subtab 1.
+  // Group the catalogue for Subtab 1.  Hidden columns (#258 — not on the
+  // calculation-selection sheet) only appear when "Show hidden" is on, and
+  // are therefore not selectable by default.
+  const showHidden = !!config?.show_hidden
+  const hiddenCount = useMemo(() => catalog.filter(c => c.hidden).length, [catalog])
   const groups = useMemo(() => {
     const m = new Map()
     for (const c of catalog) {
+      if (c.hidden && !showHidden) continue
       if (!m.has(c.group)) m.set(c.group, [])
       m.get(c.group).push(c)
     }
-    return [...m.entries()]
-  }, [catalog])
+    return [...m.entries()].filter(([, entries]) => entries.length > 0)
+  }, [catalog, showHidden])
 
   return (
     <div className="page page-wide">
@@ -295,8 +300,18 @@ export default function CptCalcPage() {
           </div>
           <p className="hint" style={{ marginTop: 0 }}>
             Ticked columns are computed and written into the <code>{fname}.xlsx</code> datasheet
-            (existing calc columns are overwritten in place). Defaults: UW + Nkt.
+            (existing calc columns are overwritten in place). First-open defaults follow the
+            calculation-selection sheet (green rows); your changes are saved per project.
             Inputs come from the <strong>CPT point data</strong> / <strong>CPT layer data</strong> subtabs.
+            {' '}
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={showHidden}
+                onChange={e => patchConfig({ show_hidden: e.target.checked })}
+              />
+              Show hidden columns ({hiddenCount})
+            </label>
           </p>
 
           {groups.map(([g, entries]) => {
@@ -304,26 +319,31 @@ export default function CptCalcPage() {
             const someSel = entries.some(c => selectedSet.has(c.name))
             return (
             <div key={g} style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem', margin: '0 0 .35rem', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={allSel}
-                  ref={el => { if (el) el.indeterminate = !allSel && someSel }}
-                  onChange={e => toggleGroup(entries, e.target.checked)}
-                  title={`Select / deselect all ${g} columns`}
-                />
-                <h4 style={{ margin: 0 }}>{g}</h4>
-                <span className="hint" style={{ fontWeight: 400 }}>
-                  ({entries.filter(c => selectedSet.has(c.name)).length}/{entries.length} selected)
-                </span>
-              </label>
               <table className="data-table" style={{ maxWidth: 1280 }}>
                 <thead>
+                  {/* #258: the group select-all tick lives IN the header. */}
+                  <tr>
+                    <th colSpan={6} style={{ background: '#f1f5f9' }}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer', margin: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={allSel}
+                          ref={el => { if (el) el.indeterminate = !allSel && someSel }}
+                          onChange={e => toggleGroup(entries, e.target.checked)}
+                          title={`Select / deselect all ${g} columns`}
+                        />
+                        <strong>{g}</strong>
+                        <span className="hint" style={{ fontWeight: 400, margin: 0 }}>
+                          ({entries.filter(c => selectedSet.has(c.name)).length}/{entries.length} selected)
+                        </span>
+                      </label>
+                    </th>
+                  </tr>
                   <tr>
                     <th style={{ width: 36 }} />
                     <th style={{ width: 220 }}>Column</th>
                     <th>Description</th>
-                    <th style={{ width: 64 }}>Unit</th>
+                    <th style={{ width: 90 }}>Unit</th>
                     <th style={{ width: 64 }}>Round</th>
                     <th style={{ width: 360 }}>Calculation reference</th>
                   </tr>
@@ -334,7 +354,8 @@ export default function CptCalcPage() {
                       key={c.name}
                       onClick={() => toggleCol(c.name)}
                       className={selectedSet.has(c.name) ? 'selected' : ''}
-                      style={{ cursor: 'pointer' }}
+                      style={{ cursor: 'pointer', ...(c.hidden ? { background: '#fdf2f2' } : {}) }}
+                      title={c.hidden ? 'Hidden column — not on the calculation-selection sheet' : undefined}
                     >
                       <td style={{ textAlign: 'center' }}>
                         <input
