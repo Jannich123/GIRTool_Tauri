@@ -231,21 +231,6 @@ fn load_query_configs_with_migration(output_folder: &str) -> Value {
 
 // ── pub(crate) lookup used by command modules ─────────────────────────────────
 
-/// Return the query_type for the active primary database.
-///
-/// As of issue #47 every primary DB uses `DEFAULT_QUERY_TYPE` ("GeoGIS"
-/// post-#52).  Issue #46 adds a per-database `query_type` field that this
-/// function will read from once both PRs have landed.  Until then this
-/// just returns the constant.
-pub(crate) fn current_query_type(_state: &AppState) -> String {
-    // Defensive: when both #46 and #47 are merged the call site will be:
-    //   state.db.lock().unwrap().as_ref()
-    //     .map(|c| c.query_type.clone())
-    //     .filter(|s| !s.is_empty())
-    //     .unwrap_or_else(|| DEFAULT_QUERY_TYPE.to_string())
-    DEFAULT_QUERY_TYPE.to_string()
-}
-
 /// Look up a SQL override by `(section, query_type)`.
 ///
 /// Returns `None` when the file, section, or per-type entry is missing —

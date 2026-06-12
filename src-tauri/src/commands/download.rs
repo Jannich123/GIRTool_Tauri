@@ -1013,20 +1013,6 @@ pub(crate) fn objects_to_columnar(rows: Vec<Value>) -> (Vec<String>, Vec<Vec<Val
     (columns, data)
 }
 
-/// Inverse of [`objects_to_columnar`].  Rebuild row-objects from a parallel
-/// `columns` slice and a positional `rows` matrix.
-pub(crate) fn columnar_to_objects(columns: &[String], rows: Vec<Vec<Value>>) -> Vec<Value> {
-    rows.into_iter()
-        .map(|r| {
-            let mut obj = serde_json::Map::new();
-            for (i, col) in columns.iter().enumerate() {
-                obj.insert(col.clone(), r.get(i).cloned().unwrap_or(Value::Null));
-            }
-            Value::Object(obj)
-        })
-        .collect()
-}
-
 /// Convert a calamine `Data` cell to a plain `String` (or empty for null/error).
 fn data_str(cell: &Data) -> String {
     match cell {
@@ -1038,31 +1024,6 @@ fn data_str(cell: &Data) -> String {
         Data::Bool(b)     => b.to_string(),
         Data::DateTime(d) => d.to_string(),
         _                 => String::new(),
-    }
-}
-
-/// Convert a calamine `Data` cell into a `serde_json::Value` (preserves type
-/// where reasonable so the frontend gets numbers as numbers, not strings).
-///
-/// Strings that look like locale-formatted numbers (`"1,5"`, `"1.234,56"`, …)
-/// are parsed via `parse_number_locale` so chart axes treat them as numeric.
-fn data_to_value(cell: &Data) -> Value {
-    match cell {
-        Data::String(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                Value::Null
-            } else if let Some(n) = parse_number_locale(trimmed) {
-                json!(n)
-            } else {
-                Value::String(s.clone())
-            }
-        }
-        Data::Float(f)    => json!(f),
-        Data::Int(i)      => json!(i),
-        Data::Bool(b)     => Value::Bool(*b),
-        Data::DateTime(d) => Value::String(d.to_string()),
-        Data::Empty | Data::Error(_) | Data::DateTimeIso(_) | Data::DurationIso(_) => Value::Null,
     }
 }
 
@@ -1093,17 +1054,6 @@ fn col_letters_to_idx(s: &str) -> Option<usize> {
         idx = idx.checked_mul(26)?.checked_add((c as usize) - ('A' as usize) + 1)?;
     }
     Some(idx - 1)
-}
-
-/// Convert a calamine cell to f64 for arithmetic.  Returns None for non-numeric.
-fn cell_to_f64(cell: &Data) -> Option<f64> {
-    match cell {
-        Data::Float(f) => Some(*f),
-        Data::Int(i)   => Some(*i as f64),
-        Data::Bool(b)  => Some(if *b { 1.0 } else { 0.0 }),
-        Data::String(s) => parse_number_locale(s),
-        _ => None,
-    }
 }
 
 /// Parse a numeric string supporting both English (`1,234.56`) and European

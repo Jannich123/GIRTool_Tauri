@@ -138,57 +138,18 @@ pub fn prepend_db_id(rows: Vec<Value>, db_id: &str) -> Vec<Value> {
         .collect()
 }
 
-// ── Fan-out a SQL string against every active DB in parallel ──────────────────
+// ── Fan-out SQL against every active DB in parallel ───────────────────────────
+// (The same-SQL-everywhere variant was removed in #236 — every caller routes
+// per-database SQL through fan_out_query_per_db.)
 
-/// Run the same SQL against every active database in parallel, prepend
-/// `db_id` to every row, and concatenate the results.
+/// Run per-database SQL in parallel, prepend `db_id` to every row, and
+/// concatenate the results.  `databases` is `(cfg, sql)` pairs; only listed
+/// DBs are queried.
 ///
 /// Spawns one `tokio::task::spawn_blocking` per database so slow DBs don't
 /// block fast ones from returning.  Per-database errors are collected into
 /// `errors_out` (`{ db_id, error }`) rather than failing the whole call —
 /// the user can still see whatever rows the healthy DBs returned.
-pub async fn fan_out_query(
-    databases: Vec<DbConfig>,
-    sql: String,
-    errors_out: &mut Vec<Value>,
-) -> Vec<Value> {
-    if databases.is_empty() {
-        return Vec::new();
-    }
-    let mut handles = Vec::with_capacity(databases.len());
-    for cfg in databases {
-        let id  = cfg.effective_id();
-        let sql = sql.clone();
-        handles.push(tokio::task::spawn_blocking(move || {
-            let res = crate::db::query_rows(&cfg, &sql);
-            (id, res)
-        }));
-    }
-
-    let mut all_rows = Vec::new();
-    for h in handles {
-        let (db_id, res) = match h.await {
-            Ok(pair) => pair,
-            Err(e)   => {
-                errors_out.push(json!({ "db_id": "?", "error": format!("internal task error: {e}") }));
-                continue;
-            }
-        };
-        match res {
-            Ok(rows) => {
-                let prefixed = prepend_db_id(rows, &db_id);
-                all_rows.extend(prefixed);
-            }
-            Err(e) => {
-                errors_out.push(json!({ "db_id": db_id, "error": format!("{e:#}") }));
-            }
-        }
-    }
-    all_rows
-}
-
-/// Same as `fan_out_query` but lets each DB use a different SQL string.
-/// `databases` is `(cfg, sql)` pairs; only listed DBs are queried.
 pub async fn fan_out_query_per_db(
     databases: Vec<(DbConfig, String)>,
     errors_out: &mut Vec<Value>,
