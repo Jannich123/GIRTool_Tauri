@@ -8,7 +8,7 @@ import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS, convertPoint, CRS_LABELS } from '../lib/proj'
 import { useDataChanged } from '../lib/dataChanged'
 import CrsCursorReadout from '../components/CrsCursorReadout'
-import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom } from '../lib/crsDk'
+import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, clampDkZoom, mapGridFor, clampMercZoom, MERC_DEFAULT_ZOOM, DK_DEFAULT_ZOOM } from '../lib/crsDk'
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 
@@ -328,7 +328,12 @@ function loadMapSettings() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MapPage() {
-  const { selectedProjects, typeStyles, coordinateSystem } = useApp()
+  const { selectedProjects, typeStyles, coordinateSystem, mapAddons } = useApp()
+
+  // #234: dynamic tile grid — web-mercator while an XYZ world map (OSM/Esri)
+  // is visible on this map, the Danish 25832 grid (WMTS builtins) otherwise.
+  const grid = mapGridFor(mapAddons, 'project')
+  const dkGrid = grid === 'dk'
 
   // Get style for a type key (upper-cased), fall back to Other
   const typeStyle = t => typeStyles[(t || '').toUpperCase()] ?? typeStyles.Other ?? { color: '#7f8c8d', symbol: 'circle' }
@@ -738,19 +743,22 @@ export default function MapPage() {
           // Remount when the project changes so the fresh per-project view
           // hydrated from GIRTool_settings.json takes effect — Leaflet
           // doesn't react to changed initial-center / initial-zoom props.
-          key={projectId || 'no-project'}
-          // #232: Danish EPSG:25832 tile grid — WMTS built-ins native, WMS
-          // layers requested in 25832, vector layers unaffected.
-          crs={CRS_DK}
-          maxZoom={DK_MAX_ZOOM}
+          // #232/#234: the grid is dynamic — Danish 25832 (WMTS builtins)
+          // unless an XYZ world map (OSM/Esri) is visible, then web-mercator
+          // with the Danish maps falling back to WMS.  Grid changes remount.
+          key={`${projectId || 'no-project'}_${grid}`}
+          crs={dkGrid ? CRS_DK : L.CRS.EPSG3857}
+          maxZoom={dkGrid ? DK_MAX_ZOOM : 19}
           center={savedPos ? [savedPos.lat, savedPos.lng] : DK_CENTER}
-          zoom={savedPos ? clampDkZoom(savedPos.zoom) : DK_DEFAULT_ZOOM}
+          zoom={savedPos
+            ? (dkGrid ? clampDkZoom(savedPos.zoom) : clampMercZoom(savedPos.zoom))
+            : (dkGrid ? DK_DEFAULT_ZOOM : MERC_DEFAULT_ZOOM)}
           style={{ width: '100%', height: '100%' }}
         >
           {/* Background maps + WMS addons — one unified layer list (M4.5a).
               The base maps (OSM / Esri / Dataforsyningen ortho + topo) are now
               built-in entries in the same list, managed in the top-right panel. */}
-          <AddonLayers target="project" />
+          <AddonLayers target="project" grid={grid} />
 
           {pointMarkers}
 

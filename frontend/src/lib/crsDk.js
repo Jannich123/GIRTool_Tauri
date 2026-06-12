@@ -36,3 +36,18 @@ export const DK_DEFAULT_ZOOM = 2
 // Clamp a persisted zoom (older sessions stored web-mercator zooms up to 19).
 export const clampDkZoom = (z) =>
   Math.max(0, Math.min(DK_MAX_ZOOM, Number.isFinite(Number(z)) ? Number(z) : DK_DEFAULT_ZOOM))
+
+// ── Dynamic grid selection (#234) ────────────────────────────────────────────
+// A Leaflet map renders exactly ONE tile grid.  OSM/Esri only exist in
+// web-mercator; the Danish WMTS only on the 25832 grid.  Rule: any visible
+// XYZ layer targeted at this map → web-mercator (Danish maps fall back to
+// WMS); otherwise → the Danish grid (WMTS).
+export function mapGridFor(addons, target) {
+  const merc = (Array.isArray(addons) ? addons : []).some(a =>
+    a && a.type === 'xyz' && a.visible !== false && a.maps?.[target])
+  return merc ? '3857' : 'dk'
+}
+
+export const MERC_DEFAULT_ZOOM = 7
+export const clampMercZoom = (z) =>
+  Math.max(0, Math.min(19, Number.isFinite(Number(z)) ? Number(z) : MERC_DEFAULT_ZOOM))

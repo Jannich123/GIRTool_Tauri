@@ -109,13 +109,18 @@ function applyRenderType(gj, render) {
 }
 
 // Renders every visible map layer targeted at `target` ('project' |
-// 'selection'), in list order: XYZ tiles, WMS overlays, and (M4.5b) local-file
-// GeoJSON addons.  Must be a child of a react-leaflet <MapContainer>.
+// 'selection'), in list order: XYZ tiles, WMS/WMTS overlays, and (M4.5b)
+// local-file GeoJSON addons.  Must be a child of a react-leaflet <MapContainer>.
+//
+// `grid` (#234): the map's active tile grid — 'dk' (EPSG:25832) or '3857'.
+// WMTS layers render natively on 'dk' and fall back to their WMS variant on
+// '3857'; XYZ layers only exist on '3857' (their visibility is what flips the
+// grid in the first place — see mapGridFor).
 //
 // `onPolygonClick(feature, latlng, addonName)` (#209, optional): fired when a
 // Polygon/MultiPolygon feature of a GeoJSON addon is clicked — the selection
 // map uses it to stage the polygon as the active selection boundary.
-export default function AddonLayers({ target, onPolygonClick }) {
+export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
   const { mapAddons } = useApp()
 
   // Local mirror of the session cache (state, so loads trigger a re-render).
@@ -155,6 +160,7 @@ export default function AddonLayers({ target, onPolygonClick }) {
       const httpsUrl = (a.url || '').replace(/^http:\/\//i, 'https://')
 
       if (a.type === 'xyz') {
+        if (grid !== '3857') return null // web-mercator tiles need the 3857 grid
         return (
           <TileLayer
             key={a.id}
@@ -182,10 +188,31 @@ export default function AddonLayers({ target, onPolygonClick }) {
         )
       }
 
-      // WMTS (#230): rendered as a plain TileLayer over the KVP GetTile
-      // endpoint — only usable when the service publishes a web-mercator
-      // tile grid (the Settings tab enforces that on add).  Vendor query
-      // params already in the saved URL are preserved.
+      // WMTS (#230/#234): rendered as a plain TileLayer over the KVP GetTile
+      // endpoint when the map runs the Danish grid.  On the web-mercator grid
+      // (an XYZ world map is visible) the entry renders through its WMS
+      // fallback instead — same imagery, server-side 3857.
+      if (a.type === 'wmts' && grid !== 'dk') {
+        const fb = a.wmsFallback
+        if (!fb) return null // no fallback — incompatible with this grid
+        const extra = {}
+        if (a.token) extra.token = a.token
+        if (fb.maxZoom) extra.maxZoom = fb.maxZoom
+        return (
+          <WMSTileLayer
+            key={`${a.id}_wmsfb`}
+            url={wmsBaseUrl(fb.url)}
+            layers={fb.layer || ''}
+            format={fb.format || 'image/png'}
+            transparent={fb.transparent !== false ? 'TRUE' : 'FALSE'}
+            version={fb.version || '1.3.0'}
+            opacity={opacity}
+            zIndex={zIndex}
+            attribution={a.name}
+            {...extra}
+          />
+        )
+      }
       if (a.type === 'wmts') {
         const base = httpsUrl.split('?')[0]
         const qp = new URLSearchParams()

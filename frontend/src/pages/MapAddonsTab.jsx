@@ -230,6 +230,11 @@ export default function MapAddonsTab() {
           (defined in code — baseLayers.js); the toggles edit the same entries
           the on-map layer panel manages. */}
       <h4 style={{ margin: '0 0 .35rem' }}>Built-in background maps</h4>
+      <p className="hint" style={{ marginTop: 0 }}>
+        The map picks its tile grid automatically (#234): with <strong>OpenStreetMap / Esri</strong> on,
+        it runs web-mercator and the Danish maps use their WMS variant; with only Danish layers on,
+        it runs the Danish 25832 grid and serves the faster WMTS tiles.
+      </p>
       <table className="data-table" style={{ maxWidth: 900, marginBottom: '1.25rem' }}>
         <thead>
           <tr>

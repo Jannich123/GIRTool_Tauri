@@ -8,7 +8,7 @@ import { reproject, toLatLng, pointToLatLng, convertPoint, normaliseEpsg, CRS_LA
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 import CrsCursorReadout from '../components/CrsCursorReadout'
-import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom } from '../lib/crsDk'
+import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom, mapGridFor, clampMercZoom, MERC_DEFAULT_ZOOM } from '../lib/crsDk'
 
 // Issue #153 (M4.1) + #155 (M4.2) + #159 (M4.3) — selection map.
 //
@@ -224,7 +224,12 @@ function DrawHandler({ active, onVertex }) {
 
 export default function SelectionMap() {
   const { allPoints } = useFilter()
-  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem } = useApp()
+  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem, mapAddons } = useApp()
+
+  // #234: dynamic tile grid — web-mercator while an XYZ world map (OSM/Esri)
+  // is visible on this map, the Danish 25832 grid (WMTS builtins) otherwise.
+  const grid = mapGridFor(mapAddons, 'selection')
+  const dkGrid = grid === 'dk'
   const [initials, setInitials] = useState('')
 
   // Jupiter boreholes (#174) — loaded per region; category show/hide toggles.
@@ -825,12 +830,16 @@ export default function SelectionMap() {
         }}
       >
         <MapContainer
-          // #232: Danish EPSG:25832 tile grid — WMTS built-ins native, WMS
-          // layers requested in 25832, vector layers unaffected.
-          crs={CRS_DK}
-          maxZoom={DK_MAX_ZOOM}
+          // #232/#234: dynamic grid — Danish 25832 (WMTS builtins) unless an
+          // XYZ world map is visible, then web-mercator with WMS fallbacks.
+          // Grid changes remount the map (Leaflet can't switch CRS live).
+          key={`selmap_${grid}`}
+          crs={dkGrid ? CRS_DK : L.CRS.EPSG3857}
+          maxZoom={dkGrid ? DK_MAX_ZOOM : 19}
           center={mapStore.view ? [mapStore.view.lat, mapStore.view.lng] : DK_CENTER}
-          zoom={mapStore.view ? clampDkZoom(mapStore.view.zoom) : DK_DEFAULT_ZOOM}
+          zoom={mapStore.view
+            ? (dkGrid ? clampDkZoom(mapStore.view.zoom) : clampMercZoom(mapStore.view.zoom))
+            : (dkGrid ? DK_DEFAULT_ZOOM : MERC_DEFAULT_ZOOM)}
           scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}
         >
           <MapRef onMap={setMap} />
@@ -853,7 +862,7 @@ export default function SelectionMap() {
 
           {/* Background maps + WMS addons — one unified layer list (M4.5a).
               Addon polygons double as clickable selection boundaries (#209). */}
-          <AddonLayers target="selection" onPolygonClick={onAddonPolygonClick} />
+          <AddonLayers target="selection" grid={grid} onPolygonClick={onAddonPolygonClick} />
 
           {/* Jupiter boreholes (#174), available points (M4.3), selected-project
               points and selection rings (M4.4a) — all memoised marker trees
