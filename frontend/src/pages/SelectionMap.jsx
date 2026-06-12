@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, CircleMarker, Polygon, Polyline, Tooltip, useMap, useMapEvents } from 'react-leaflet'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
@@ -127,6 +127,39 @@ function pointInPolygonLatLng(ll, poly) {
   return inside
 }
 
+// #209: outer ring of a clicked addon (sub-)polygon as unclosed [[lat, lng], …]
+// — the same shape as hand-drawn `vertices`.  Addon GeoJSON is reprojected to
+// EPSG:4326 at load time, so coordinates arrive as [lng, lat].  For a
+// MultiPolygon the sub-polygon containing the click wins (fallback: the ring
+// with the most vertices).
+function ringFromFeature(feature, clickLatLng) {
+  const g = feature?.geometry
+  if (!g) return null
+  const toLatLngRing = (ring) => {
+    const out = (ring || []).map(([lng, lat]) => [lat, lng])
+    if (out.length > 1) {
+      const [f, l] = [out[0], out[out.length - 1]]
+      if (f[0] === l[0] && f[1] === l[1]) out.pop() // drop the closing vertex
+    }
+    return out
+  }
+  if (g.type === 'Polygon') {
+    const r = toLatLngRing(g.coordinates?.[0])
+    return r.length >= 3 ? r : null
+  }
+  if (g.type === 'MultiPolygon') {
+    const rings = (g.coordinates || []).map(c => toLatLngRing(c?.[0])).filter(r => r.length >= 3)
+    if (!rings.length) return null
+    if (clickLatLng) {
+      const ll = [clickLatLng.lat, clickLatLng.lng]
+      const hit = rings.find(r => pointInPolygonLatLng(ll, r))
+      if (hit) return hit
+    }
+    return rings.reduce((a, b) => (b.length > a.length ? b : a))
+  }
+  return null
+}
+
 // Fit the view to the rendered DB points whenever their count changes.
 function FitBounds({ pts }) {
   const map = useMap()
@@ -209,6 +242,10 @@ export default function SelectionMap() {
   // Polygon draw (M4.3b) — transient (not persisted).
   const [drawing, setDrawing] = useState(false)
   const [vertices, setVertices] = useState([]) // [[lat, lng], …]
+  // #209: addon name when the active boundary came from a clicked addon
+  // polygon (Settings → Map addons) instead of a hand draw.  While set, map
+  // clicks do NOT drop vertices — the ring is fixed.
+  const [polyFromAddon, setPolyFromAddon] = useState(null)
 
   // Persist across unmount so returning to Data Selection restores this state.
   useEffect(() => { mapStore.jupiter = jupiter }, [jupiter])
@@ -484,10 +521,26 @@ export default function SelectionMap() {
     const ring4326 = vertices.map(([lat, lng]) => [lng, lat]) // → [lng, lat]
     setDrawing(false)
     setVertices([])
+    setPolyFromAddon(null)
     if (action === 'load') loadInside(ring4326)
     else if (action === 'select') selectInside(ring4326)
     else if (action === 'remove') removeInside(polyLatLng)
   }
+
+  // #209: clicking a polygon from a map addon stages it as the active
+  // boundary — same buttons/flow as a hand-drawn one.  Reads state via a ref
+  // because AddonLayers attaches the handler once per layer mount.
+  const drawStateRef = useRef({ drawing: false, fromAddon: null })
+  useEffect(() => { drawStateRef.current = { drawing, fromAddon: polyFromAddon } }, [drawing, polyFromAddon])
+  const onAddonPolygonClick = useCallback((feature, latlng, addonName) => {
+    const s = drawStateRef.current
+    if (s.drawing && !s.fromAddon) return  // hand-drawing in progress — don't hijack
+    const ring = ringFromFeature(feature, latlng)
+    if (!ring) return
+    setVertices(ring)
+    setPolyFromAddon(addonName || 'addon')
+    setDrawing(true)
+  }, [])
 
   return (
     <div className="page page-wide" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -506,7 +559,7 @@ export default function SelectionMap() {
       <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
         {!drawing ? (
           <>
-            <button className="btn-secondary" onClick={() => { setVertices([]); setDrawing(true) }} disabled={!map || loading}>
+            <button className="btn-secondary" onClick={() => { setVertices([]); setPolyFromAddon(null); setDrawing(true) }} disabled={!map || loading}>
               ✏️ Draw polygon
             </button>
             <button className="btn-secondary" onClick={loadInView} disabled={!map || loading}>
@@ -530,11 +583,13 @@ export default function SelectionMap() {
             <button className="btn-secondary" onClick={() => applyPolygon('remove')} disabled={vertices.length < 3 || loading}>
               ✖ Remove inside
             </button>
-            <button className="btn-secondary" onClick={() => { setDrawing(false); setVertices([]) }} disabled={loading}>
+            <button className="btn-secondary" onClick={() => { setDrawing(false); setVertices([]); setPolyFromAddon(null) }} disabled={loading}>
               Cancel
             </button>
             <span className="hint" style={{ margin: 0 }}>
-              Click to drop vertices (zoom/pan freely), then <strong>Load</strong> / <strong>Select</strong> / <strong>Remove</strong> inside
+              {polyFromAddon
+                ? <>Boundary from <strong>{polyFromAddon}</strong> — <strong>Load</strong> / <strong>Select</strong> / <strong>Remove</strong> points inside it</>
+                : <>Click to drop vertices (zoom/pan freely), then <strong>Load</strong> / <strong>Select</strong> / <strong>Remove</strong> inside</>}
             </span>
           </>
         )}
@@ -554,21 +609,26 @@ export default function SelectionMap() {
           scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}
         >
           <MapRef onMap={setMap} />
-          <DrawHandler active={drawing} onVertex={(v) => setVertices(prev => [...prev, v])} />
+          {/* #209: while an addon polygon is staged, map clicks must NOT drop
+              vertices — the ring is fixed. */}
+          <DrawHandler active={drawing && !polyFromAddon} onVertex={(v) => setVertices(prev => [...prev, v])} />
 
-          {/* In-progress draw polygon (M4.3b). */}
+          {/* In-progress draw polygon (M4.3b) / staged addon boundary (#209). */}
           {drawing && vertices.length >= 3 && (
             <Polygon positions={vertices} pathOptions={{ color: '#dc2626', weight: 2, dashArray: '5,5', fillColor: '#dc2626', fillOpacity: 0.08 }} />
           )}
           {drawing && vertices.length === 2 && (
             <Polyline positions={vertices} pathOptions={{ color: '#dc2626', weight: 2, dashArray: '5,5' }} />
           )}
-          {drawing && vertices.map((v, i) => (
+          {/* Per-vertex handles only for hand-drawn rings — addon rings can
+              easily have hundreds of vertices. */}
+          {drawing && !polyFromAddon && vertices.map((v, i) => (
             <CircleMarker key={`v${i}`} center={v} radius={3} pathOptions={{ color: '#dc2626', weight: 2, fillColor: '#fff', fillOpacity: 1 }} />
           ))}
 
-          {/* Background maps + WMS addons — one unified layer list (M4.5a). */}
-          <AddonLayers target="selection" />
+          {/* Background maps + WMS addons — one unified layer list (M4.5a).
+              Addon polygons double as clickable selection boundaries (#209). */}
+          <AddonLayers target="selection" onPolygonClick={onAddonPolygonClick} />
 
           {/* Jupiter boreholes (#174) — loaded per region, coloured by category,
               filtered by the legend's category toggles.  Hover = info +
