@@ -203,12 +203,14 @@ function ImportSection({ datasheets, onDone }) {
         .filter(c => !ID_COL_NAMES.has(normCol(c)))
         .map(c => {
           const i = hdr.findIndex(h => normCol(h) === normCol(c))
-          return { target: cellText(c).trim(), source: i >= 0 ? i : null, fixed: true }
+          return i >= 0
+            ? { target: cellText(c).trim(), kind: 'column', value: String(i), fixed: true }
+            : { target: cellText(c).trim(), kind: 'skip', value: '', fixed: true }
         }))
     } else if (hdr.length) {
       // No known destination: derive editable targets from the source header.
       setMapping(hdr
-        .map((h, i) => ({ target: cellText(h).trim(), source: i, fixed: false }))
+        .map((h, i) => ({ target: cellText(h).trim(), kind: 'column', value: String(i), fixed: false }))
         .filter(m => m.target && !ID_COL_NAMES.has(normCol(m.target))))
     } else {
       setMapping([])
@@ -224,7 +226,12 @@ function ImportSection({ datasheets, onDone }) {
   const idErrors = ID_FIELDS
     .filter(f => ids[f.key].kind === 'text' && !ids[f.key].value.trim())
     .map(f => f.label)
-  const canImport = !busy && path && grid.length > 0 && fname.trim() && idErrors.length === 0
+  // Custom-text columns left empty block the import just like the IDs (#282).
+  const mapErrors = mapping
+    .filter(m => m.kind === 'text' && m.target.trim() && !m.value.trim())
+    .map(m => m.target.trim())
+  const fillErrors = [...idErrors, ...mapErrors]
+  const canImport = !busy && path && grid.length > 0 && fname.trim() && fillErrors.length === 0
 
   async function runImport() {
     setMsg(null)
@@ -241,8 +248,8 @@ function ImportSection({ datasheets, onDone }) {
         }])),
         columns: destCols,
         mapping: mapping
-          .filter(m => m.source != null && m.target.trim())
-          .map(m => ({ target: m.target.trim(), source: m.source })),
+          .filter(m => m.kind !== 'skip' && m.target.trim())
+          .map(m => ({ target: m.target.trim(), kind: m.kind, value: String(m.value ?? '').trim() })),
       }
       const r = await invokeAndNotify('datasheets', 'import_data', { req })
       // Merge upserted points back into the live selection — points.xlsx is
@@ -286,11 +293,26 @@ function ImportSection({ datasheets, onDone }) {
     }
   }
 
-  const sourceSelect = (value, onChange, { allowSkip = false, width = 220 } = {}) => (
-    <select value={value} onChange={onChange} style={{ width }}>
-      {allowSkip && <option value="">— skip —</option>}
-      {Array.from({ length: nCols }, (_, i) => (
-        <option key={i} value={String(i)}>{srcLabel(i)}</option>
+  // Shared source selector (#282): every destination column offers the same
+  // kinds as the IDs — skip / file name / custom text / any source column.
+  const patchMapping = (i, patch) =>
+    setMapping(arr => arr.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+  const kindSelect = (m, i) => (
+    <select
+      value={m.kind === 'column' ? `col:${m.value}` : m.kind}
+      onChange={e => {
+        const v = e.target.value
+        patchMapping(i, v.startsWith('col:')
+          ? { kind: 'column', value: v.slice(4) }
+          : { kind: v, value: v === 'text' ? (m.kind === 'text' ? m.value : '') : '' })
+      }}
+      style={{ width: 220 }}
+    >
+      <option value="skip">— skip —</option>
+      <option value="filename">File name</option>
+      <option value="text">Custom text…</option>
+      {Array.from({ length: nCols }, (_, c) => (
+        <option key={c} value={`col:${c}`}>Column {srcLabel(c)}</option>
       ))}
     </select>
   )
@@ -478,10 +500,15 @@ function ImportSection({ datasheets, onDone }) {
                       style={{ width: 200 }}
                     />}
                 <span style={{ color: '#6b7280', width: 16, textAlign: 'center' }}>←</span>
-                {sourceSelect(m.source == null ? '' : String(m.source), e => {
-                  const v = e.target.value
-                  setMapping(arr => arr.map((x, j) => (j === i ? { ...x, source: v === '' ? null : Number(v) } : x)))
-                }, { allowSkip: true })}
+                {kindSelect(m, i)}
+                {m.kind === 'text' && (
+                  <input
+                    value={m.value}
+                    onChange={e => patchMapping(i, { value: e.target.value })}
+                    placeholder="required"
+                    style={{ width: 180, borderColor: m.value.trim() ? undefined : '#dc2626' }}
+                  />
+                )}
                 {!m.fixed && (
                   <button
                     className="btn-secondary btn-sm"
@@ -494,10 +521,14 @@ function ImportSection({ datasheets, onDone }) {
               </div>
             ))}
             <div style={{ display: 'flex', gap: '.5rem', marginTop: '.4rem' }}>
-              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', source: null, fixed: false }])}>
+              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', kind: 'skip', value: '', fixed: false }])}>
                 + Add destination column
               </button>
             </div>
+            <p className="hint" style={{ margin: '.35rem 0 0' }}>
+              Each column can come from a source column, the file name, or custom text
+              (<code>{'{PointNo}'}</code> is replaced per row — handy for IDs like <code>TestId</code>).
+            </p>
           </div>
         </div>
       )}
@@ -506,8 +537,8 @@ function ImportSection({ datasheets, onDone }) {
         <button className="btn-primary" onClick={runImport} disabled={!canImport}>
           {busy ? 'Importing…' : '📥 Import'}
         </button>
-        {idErrors.length > 0 && grid.length > 0 && (
-          <span className="msg err">Fill in: {idErrors.join(', ')}</span>
+        {fillErrors.length > 0 && grid.length > 0 && (
+          <span className="msg err">Fill in: {fillErrors.join(', ')}</span>
         )}
         {msg && <span className={`msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</span>}
       </div>

@@ -350,6 +350,14 @@ Performance (load a few thousand points first):
 - [ ] Importing into an existing DOWNLOADED sheet reuses its `db_id` column for the DB value (no duplicate DB column); a sheet with a PointId/ProjectId column gets those filled from the ID block on every imported row.
 - [ ] points.xlsx upsert uses the chosen IDs for NEW points (db_id/ProjectId/PointId as configured); existing PointNos still only get missing coordinates filled.
 
+### 6aj. Import wizard - file name / custom text for every column (#282)
+
+- [ ] Every row in the column mapping (e.g. CPTData's TestId) offers the full source list: "- skip -", **File name**, **Custom text...**, and every source column - not just columns.
+- [ ] Choosing Custom text shows a text input; leaving it empty turns it red, disables Import and lists the column in the "Fill in: ..." message together with any empty IDs.
+- [ ] `{PointNo}` in a column's custom text is replaced per row (e.g. TestId = `CPT_{PointNo}`); purely numeric custom text (e.g. `5`) is written as a number, leading-zero text like `007` stays text.
+- [ ] File name as a column source writes the file's stem on every row of that file (folder import: each file its own value).
+- [ ] Column-sourced cells still keep their original type (numbers stay numbers); auto-matched mappings and skip behaviour are unchanged.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

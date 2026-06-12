@@ -449,8 +449,11 @@ pub struct IdSpec {
 pub struct MapEntry {
     /// Datasheet column to write into (created when missing).
     pub target: String,
-    /// 0-based source column index in the import files.
-    pub source: usize,
+    /// Same source kinds as the IDs (#282): "column" (value = 0-based source
+    /// column index), "filename", or "text" (literal with `{PointNo}`).
+    pub kind: String,
+    #[serde(default)]
+    pub value: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,17 +482,16 @@ enum IdValue {
 }
 
 impl IdValue {
-    fn parse(src: &IdSource, label: &str) -> Result<IdValue, String> {
-        match src.kind.as_str() {
-            "column" => src
-                .value
+    fn parse(kind: &str, value: &str, label: &str) -> Result<IdValue, String> {
+        match kind {
+            "column" => value
                 .trim()
                 .parse::<usize>()
                 .map(IdValue::Col)
                 .map_err(|_| format!("{label}: pick a source column.")),
             "filename" => Ok(IdValue::FileStem),
             "text" => {
-                let t = src.value.trim();
+                let t = value.trim();
                 if t.is_empty() {
                     Err(format!("{label}: fill in the custom text before importing."))
                 } else {
@@ -510,6 +512,18 @@ impl IdValue {
                 Some(pn) => t.replace("{PointNo}", pn),
                 None => t.clone(),
             },
+        }
+    }
+
+    /// Resolve for one row as a cell value (#282, regular mapped columns):
+    /// column sources keep their typed value (numbers stay numbers), file
+    /// stems become strings, and custom text goes through `csv_value` so a
+    /// numeric constant like "5" is written as a number.
+    fn resolve_value(&self, row: &[Value], stem: &str, point_no: &str) -> Value {
+        match self {
+            IdValue::Col(i) => row.get(*i).cloned().unwrap_or(Value::Null),
+            IdValue::FileStem => Value::String(stem.to_string()),
+            IdValue::Text(t) => csv_value(&t.replace("{PointNo}", point_no)),
         }
     }
 }
@@ -551,10 +565,10 @@ struct PointSeed {
 fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
     let fname = sanitize_fname(&req.fname)?;
 
-    let id_db = IdValue::parse(&req.ids.db, "DB")?;
-    let id_project = IdValue::parse(&req.ids.project_id, "ProjectId")?;
-    let id_point = IdValue::parse(&req.ids.point_id, "PointId")?;
-    let id_pn = IdValue::parse(&req.ids.point_no, "PointNo")?;
+    let id_db = IdValue::parse(&req.ids.db.kind, &req.ids.db.value, "DB")?;
+    let id_project = IdValue::parse(&req.ids.project_id.kind, &req.ids.project_id.value, "ProjectId")?;
+    let id_point = IdValue::parse(&req.ids.point_id.kind, &req.ids.point_id.value, "PointId")?;
+    let id_pn = IdValue::parse(&req.ids.point_no.kind, &req.ids.point_no.value, "PointNo")?;
 
     let files = resolve_files(&req.path)?;
 
@@ -586,12 +600,14 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
         Some(i) => i,
         None => col_index(&mut columns, "PointNo", &mut new_columns),
     };
-    let map_idx: Vec<(usize, usize)> = req
-        .mapping
-        .iter()
-        .filter(|m| !m.target.trim().is_empty())
-        .map(|m| (col_index(&mut columns, &m.target, &mut new_columns), m.source))
-        .collect();
+    let mut map_idx: Vec<(usize, IdValue)> = Vec::new();
+    for m in &req.mapping {
+        if m.target.trim().is_empty() {
+            continue;
+        }
+        let src = IdValue::parse(&m.kind, &m.value, m.target.trim())?;
+        map_idx.push((col_index(&mut columns, &m.target, &mut new_columns), src));
+    }
     // ProjectId / PointId values land in the sheet only when it has such a
     // column (most datasheet queries carry PointId).
     let prj_idx = find_ci(&columns, &["projectid"]);
@@ -649,10 +665,8 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
             };
 
             let mut row = vec![Value::Null; width];
-            for &(tgt, srcix) in &map_idx {
-                if let Some(v) = src.get(srcix) {
-                    row[tgt] = v.clone();
-                }
+            for (tgt, source) in &map_idx {
+                row[*tgt] = source.resolve_value(src, &stem, &pn);
             }
             // IDs win over any mapping that targets the same column.
             row[db_idx] = Value::String(db.clone());
