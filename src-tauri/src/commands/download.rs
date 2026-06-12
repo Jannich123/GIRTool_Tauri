@@ -207,6 +207,133 @@ fn read_datasheet_cached(folder: &str, fname: &str) -> Option<Value> {
     serde_json::from_str::<Value>(&text).ok()
 }
 
+// ── Downloaded-point keys (#228) ─────────────────────────────────────────────
+//
+// The Project map shows only points that actually HAVE downloaded data.  This
+// scans {folder}/Datasheets and returns the distinct `DB||PointNo` keys found
+// across every sheet — via the JSON sidecar when fresh (#128), falling back to
+// a header + two-column xlsx parse.  Sheets without a DB column (legacy
+// single-DB exports) emit wildcard `*||PointNo` keys the frontend matches for
+// any database.
+
+fn ds_cell_to_string(c: &Data) -> String {
+    match c {
+        Data::String(s) => s.trim().to_string(),
+        Data::Float(f) => {
+            if f.fract() == 0.0 { format!("{}", *f as i64) } else { f.to_string() }
+        }
+        Data::Int(i) => i.to_string(),
+        Data::Bool(b) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn ds_json_to_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.trim().to_string(),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.to_string()
+            } else if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 { format!("{}", f as i64) } else { f.to_string() }
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn collect_sheet_point_keys(folder: &str, fname: &str, keys: &mut HashSet<String>) {
+    // Fast path: fresh JSON sidecar (#128) — no xlsx parsing.
+    if let Some(cached) = read_datasheet_cached(folder, fname) {
+        let cols: Vec<String> = cached["columns"]
+            .as_array()
+            .map(|a| a.iter().map(|c| c.as_str().unwrap_or("").to_string()).collect())
+            .unwrap_or_default();
+        let pi = cols.iter().position(|c| c.trim().eq_ignore_ascii_case("pointno"));
+        let di = cols.iter().position(|c| c.trim().eq_ignore_ascii_case("db"));
+        let Some(pi) = pi else { return };
+        if let Some(rows) = cached["rows"].as_array() {
+            for row in rows {
+                let Some(cells) = row.as_array() else { continue };
+                let pn = cells.get(pi).map(ds_json_to_string).unwrap_or_default();
+                if pn.is_empty() {
+                    continue;
+                }
+                let db = di
+                    .and_then(|i| cells.get(i).map(ds_json_to_string))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "*".to_string());
+                keys.insert(format!("{db}||{pn}"));
+            }
+        }
+        return;
+    }
+    // Slow path: header + the PointNo/DB columns straight from the xlsx.
+    let path = datasheets_dir(folder).join(format!("{fname}.xlsx"));
+    let mut wb: Xlsx<_> = match open_workbook(&path) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    let range = match wb.worksheet_range_at(0) {
+        Some(Ok(r)) => r,
+        _ => return,
+    };
+    let mut rows = range.rows();
+    let Some(header) = rows.next() else { return };
+    let mut pi: Option<usize> = None;
+    let mut di: Option<usize> = None;
+    for (i, c) in header.iter().enumerate() {
+        let t = ds_cell_to_string(c);
+        if t.eq_ignore_ascii_case("pointno") {
+            pi = Some(i);
+        } else if t.eq_ignore_ascii_case("db") {
+            di = Some(i);
+        }
+    }
+    let Some(pi) = pi else { return };
+    for row in rows {
+        let pn = row.get(pi).map(ds_cell_to_string).unwrap_or_default();
+        if pn.is_empty() {
+            continue;
+        }
+        let db = di
+            .and_then(|i| row.get(i).map(ds_cell_to_string))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "*".to_string());
+        keys.insert(format!("{db}||{pn}"));
+    }
+}
+
+/// #228: distinct `DB||PointNo` keys across every downloaded datasheet.
+#[tauri::command]
+pub async fn downloaded_point_keys(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let folder = state.output_folder().unwrap_or_default();
+    if folder.is_empty() {
+        return Ok(Vec::new());
+    }
+    tokio::task::spawn_blocking(move || {
+        let dir = datasheets_dir(&folder);
+        let mut keys: HashSet<String> = HashSet::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for ent in entries.flatten() {
+                let name = ent.file_name().to_string_lossy().to_string();
+                if !name.to_ascii_lowercase().ends_with(".xlsx") || name.starts_with("~$") {
+                    continue;
+                }
+                let fname = name[..name.len() - 5].to_string();
+                collect_sheet_point_keys(&folder, &fname, &mut keys);
+            }
+        }
+        let mut v: Vec<String> = keys.into_iter().collect();
+        v.sort();
+        Ok(v)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
 /// Issue #117: persist per-datasheet metadata to GIRTool_settings.json so
 /// `list_datasheets` can return instantly without opening every xlsx.
 /// Settings shape:

@@ -112,6 +112,7 @@ pub fn run() {
             commands::cpt::run_cpt_calc,
             commands::download::list_datasheets,
             commands::download::read_datasheet,
+            commands::download::downloaded_point_keys,
             commands::download::save_session,
             commands::download::restore_session,
             // sharepoint

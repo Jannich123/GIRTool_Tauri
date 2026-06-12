@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { MapContainer, TileLayer, WMSTileLayer, CircleMarker, Marker, Popup, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import proj4 from 'proj4'
@@ -6,6 +6,7 @@ import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS, convertPoint, CRS_LABELS } from '../lib/proj'
+import { useDataChanged } from '../lib/dataChanged'
 import CrsCursorReadout from '../components/CrsCursorReadout'
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
@@ -463,6 +464,7 @@ export default function MapPage() {
           PointNo:   p.PointNo   || '',
           PointType: p.PointType || '',
           ProjectNo: p.ProjectNo || '',
+          db_id:     p.db_id ?? '?',
         }
       })
       .filter(Boolean)
@@ -492,8 +494,31 @@ export default function MapPage() {
     return result
   }, [allPoints, crs])
 
-  // WFS replaces db points when available; otherwise fall back to db coordinates
-  const basePoints = wfsPoints.length > 0 ? wfsPoints : dbPoints
+  // #228: the Project map only shows points that actually HAVE downloaded
+  // data — the distinct DB||PointNo keys across the Datasheets folder.
+  // `null` = still loading (show everything briefly instead of flashing
+  // empty); refreshed live when any window downloads/appends ('datasheets').
+  const [downloadedKeys, setDownloadedKeys] = useState(null)
+  const refreshDownloadedKeys = useCallback(() => {
+    invoke('downloaded_point_keys')
+      .then(keys => setDownloadedKeys(new Set(Array.isArray(keys) ? keys : [])))
+      .catch(() => setDownloadedKeys(new Set()))
+  }, [])
+  useEffect(() => { refreshDownloadedKeys() }, [refreshDownloadedKeys])
+  useDataChanged('datasheets', refreshDownloadedKeys)
+
+  const dlPoints = useMemo(() => {
+    if (downloadedKeys === null) return dbPoints
+    return dbPoints.filter(pt => {
+      const pn = String(pt.PointNo || '').trim()
+      if (!pn) return false
+      // `*||PointNo` = wildcard from sheets without a DB column (legacy).
+      return downloadedKeys.has(`${pt.db_id ?? '?'}||${pn}`) || downloadedKeys.has(`*||${pn}`)
+    })
+  }, [dbPoints, downloadedKeys])
+
+  // WFS replaces db points when available; otherwise downloaded-only DB points.
+  const basePoints = wfsPoints.length > 0 ? wfsPoints : dlPoints
 
   // Apply cross-filter from Filter Panel
   const visiblePoints = useMemo(() => {
@@ -692,7 +717,7 @@ export default function MapPage() {
             {visiblePoints.length}
             {visiblePoints.length !== basePoints.length ? `/${basePoints.length}` : ''}
             {' point'}{basePoints.length !== 1 ? 's' : ''}
-            {wfsPoints.length > 0 ? ' (WFS)' : ''}
+            {wfsPoints.length > 0 ? ' (WFS)' : ' · with downloaded data'}
           </span>
         )}
       </div>
@@ -729,7 +754,9 @@ export default function MapPage() {
         {status && <div className="map-status">{status}</div>}
         {basePoints.length === 0 && !status && allPoints.length > 0 && (
           <div className="map-status" style={{ background: 'rgba(0,0,0,.6)' }}>
-            No map coordinates — open ⚙ Settings and set the correct Coordinate CRS for your data
+            {dbPoints.length > 0
+              ? 'No downloaded data for the selected points — the Project map only shows points present in downloaded datasheets (Data → ⬇ Download).'
+              : 'No map coordinates — open ⚙ Settings and set the correct Coordinate CRS for your data'}
           </div>
         )}
 
