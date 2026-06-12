@@ -299,6 +299,13 @@ Performance (load a few thousand points first):
 - [ ] 10 charts on the SAME datasheet load fast after the first (one shared query result, one in-memory copy).
 - [ ] Statistics table reflects the full row set.
 - [ ] ↺ Refresh data / new downloads re-fetch (shared cache cleared).
+### 6ad. Excel-slicer filter panel (#268)
+
+- [ ] Side filter (Points / group systems / strata tabs): **clicking a row filters to ONLY that item**; clicking another switches to it.
+- [ ] **Ctrl(/Cmd)+click** adds/removes items one by one.
+- [ ] **Shift+click** selects the whole range from the last clicked row (in the visible searched/sorted order); **Ctrl+Shift+click** ADDS the range.
+- [ ] The row checkbox still works as a plain additive toggle; master select-all row, search, sort and Reset unchanged.
+- [ ] Selecting every item ends as "no filter" (badge disappears); filters persist + sync as before.
 
 ## 7. Quick regression sweep
 
