@@ -1,9 +1,31 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { invoke } from '../tauri-api'
 import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
+import { useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import Plot from 'react-plotly.js'
+
+// #266: charts pointing at the same query + selection share ONE
+// run_chart_query result (a 100k-row sheet is fetched once, not once per
+// chart — and the cached `rows` array is shared by reference, so ten charts
+// hold one copy).  Promise-cached so concurrent mounts coalesce; failures
+// are evicted; size-capped; cleared on refresh / datasheet changes.
+const chartQueryCache = new Map() // key -> Promise<{columns, rows, truncated}>
+const CHART_CACHE_MAX = 8
+function cachedChartQuery(key, run) {
+  let p = chartQueryCache.get(key)
+  if (!p) {
+    p = run()
+    chartQueryCache.set(key, p)
+    p.catch(() => chartQueryCache.delete(key))
+    while (chartQueryCache.size > CHART_CACHE_MAX) {
+      const oldest = chartQueryCache.keys().next().value
+      chartQueryCache.delete(oldest)
+    }
+  }
+  return p
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1121,9 +1143,10 @@ function ChartPlot({ chart }) {
         }
       }
 
-      // scatter → markers only
+      // scatter → markers only.  #266: WebGL above a few thousand rows —
+      // SVG scatter chokes long before 100k points; scattergl stays smooth.
       return {
-        type:   'scatter',
+        type:   (rows?.length ?? 0) > 5000 ? 'scattergl' : 'scatter',
         mode:   'markers',
         name,
         x: data.x, y: data.y,
@@ -1319,6 +1342,10 @@ function ChartPlot({ chart }) {
 
 export default function ChartsPage() {
   const { selectedProjects, selectedPoints, refreshKey } = useApp()
+
+  // #266: drop shared chart-query results when data may have changed.
+  useEffect(() => { chartQueryCache.clear() }, [refreshKey])
+  useDataChanged('datasheets', () => chartQueryCache.clear(), { includeSelf: true })
   const { groupSystems, groupAssignments, filteredPtIds, checkedStrataPrimary, checkedStrataSecondary } = useFilter()
 
   const [charts,   setCharts]   = useState(() => [newChart()])
@@ -1480,7 +1507,14 @@ export default function ChartsPage() {
       // flat shape for older session restores.
       const hasProjDb = selectedProjects.some(p => p?.db_id)
       const hasPtDb   = selectedPoints.some(p => p?.db_id)
-      const res = await invoke('run_chart_query', {
+      // #266: identical query + selection across charts -> one shared fetch.
+      const selKey = [
+        projectId,
+        chart.queryName,
+        selectedProjects.map(p => `${p.db_id ?? '?'}|${p.ProjectId}`).join(','),
+        selectedPoints.map(p => `${p.db_id ?? '?'}|${p.PointId}`).join(','),
+      ].join('||')
+      const res = await cachedChartQuery(selKey, () => invoke('run_chart_query', {
         projectId,
         query: {
           project_ids: hasProjDb
@@ -1489,9 +1523,15 @@ export default function ChartsPage() {
           point_ids:   hasPtDb
             ? selectedPoints.map(p => ({ db_id: p.db_id, PointId: p.PointId }))
             : selectedPoints.map(p => p.PointId),
+          // #267: downloaded datasheets identify points by DB + PointNo —
+          // used when the chart sources the curated xlsx instead of the DB.
+          point_nos:   selectedPoints.map(p => ({
+            db_id: p.db_id ?? null,
+            point_no: String(p.PointNo ?? ''),
+          })),
           query_name:  chart.queryName,
         },
-      })
+      }))
       const axisUpdates = needsAutoAxes ? autoAxes(res.columns) : {}
       updateChart(id, {
         columns:   res.columns,

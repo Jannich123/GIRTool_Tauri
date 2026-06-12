@@ -292,6 +292,13 @@ Performance (load a few thousand points first):
 - [ ] Selection map ✚ **Select inside** only selects points actually VISIBLE on the map (loaded ∪ project points, hidden sources excluded) — nothing invisible gets selected, no parent projects of unseen points; status suggests ⬇ Load when the polygon contains none.
 - [ ] ⬇ Load still queries the databases (that's how points get onto the map).
 
+### 6ac. Charts at 100k rows (#266 — test branch feature/charts-100k)
+
+- [ ] A 100k-row datasheet charts FULLY (no 10k truncation); the ⚠ truncation hint only appears beyond 100k.
+- [ ] Big charts pan/zoom smoothly (WebGL traces above 5k rows; small charts keep SVG + symbols).
+- [ ] 10 charts on the SAME datasheet load fast after the first (one shared query result, one in-memory copy).
+- [ ] Statistics table reflects the full row set.
+- [ ] ↺ Refresh data / new downloads re-fetch (shared cache cleared).
 ### 6ad. Excel-slicer filter panel (#268)
 
 - [ ] Side filter (Points / group systems / strata tabs): **clicking a row filters to ONLY that item**; clicking another switches to it.
