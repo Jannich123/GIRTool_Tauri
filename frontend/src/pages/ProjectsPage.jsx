@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { invoke } from '../tauri-api'
 import { useDataChanged } from '../lib/dataChanged'
+import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
 import { useApp } from '../context/AppContext'
 import { useDragSelect } from '../hooks/useDragSelect'
 
@@ -64,7 +65,14 @@ function ProjectsTable({
   // soft cap (Available table).  When both are provided `height` wins so the
   // layout is stable regardless of row count.
   maxHeight, height, onScroll, footerHint,
+  // #248: Excel-style column filters — {items, filters, setColFilter}; the
+  // SAME state is shared by the Selected and Available tables.
+  colFilter,
 }) {
+  const cf = (col, label) => colFilter && (
+    <ColumnFilterButton col={col} label={label} items={colFilter.items}
+                        filters={colFilter.filters} setColFilter={colFilter.setColFilter} />
+  )
   return (
     <div
       className="table-wrap"
@@ -76,16 +84,16 @@ function ProjectsTable({
           <tr>
             <th style={{ width: 40 }} />
             <th className="sortable" onClick={() => onSort('db_id')} style={{ width: 110 }}>
-              DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
+              DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />{cf('db_id', 'DB')}
             </th>
             <th className="sortable" onClick={() => onSort('ProjectNo')}>
-              Project No <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
+              Project No <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />{cf('ProjectNo', 'Project No')}
             </th>
             <th className="sortable" onClick={() => onSort('Title')}>
-              Title <SortIcon col="Title" sortCol={sortCol} sortDir={sortDir} />
+              Title <SortIcon col="Title" sortCol={sortCol} sortDir={sortDir} />{cf('Title', 'Title')}
             </th>
             <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('PointCount')}>
-              Points <SortIcon col="PointCount" sortCol={sortCol} sortDir={sortDir} />
+              Points <SortIcon col="PointCount" sortCol={sortCol} sortDir={sortDir} />{cf('PointCount', 'Points')}
             </th>
           </tr>
         </thead>
@@ -316,15 +324,20 @@ export default function ProjectsPage({ setPage }) {
     })
   }
 
+  // #248: Excel-style column filters — applied to the DISPLAY of both tables
+  // (selection state itself always lives on the full `projects` list).
+  const { filters: colFilters, setColFilter, filteredItems: colFilteredProjects } =
+    useColumnFilters(projects)
+
   const selectedSorted = useMemo(() => {
-    return applySort(projects.filter(p => checked[projKey(p)]))
+    return applySort(colFilteredProjects.filter(p => checked[projKey(p)]))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, checked, sortCol, sortDir])
+  }, [colFilteredProjects, checked, sortCol, sortDir])
 
   // Bottom table: only the unselected rows, search-filtered.
   const unselectedFiltered = useMemo(() => {
     const q = search.toLowerCase()
-    const unsel = projects.filter(p => !checked[projKey(p)])
+    const unsel = colFilteredProjects.filter(p => !checked[projKey(p)])
     const filtered = !q ? unsel : unsel.filter(p =>
       p.ProjectNo?.toLowerCase().includes(q) ||
       p.Title?.toLowerCase().includes(q) ||
@@ -332,7 +345,7 @@ export default function ProjectsPage({ setPage }) {
     )
     return applySort(filtered)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, checked, search, sortCol, sortDir])
+  }, [colFilteredProjects, checked, search, sortCol, sortDir])
 
   // Issue #83: only render the first N rows of the (sorted, search-filtered)
   // unselected set; infinite scroll appends more as the user nears the
@@ -497,6 +510,7 @@ export default function ProjectsPage({ setPage }) {
               )}
             </div>
             <ProjectsTable
+              colFilter={{ items: projects, filters: colFilters, setColFilter }}
               items={selectedSorted}
               checkedFlag={true}
               onToggle={toggle}
@@ -538,6 +552,7 @@ export default function ProjectsPage({ setPage }) {
               </button>
             </div>
             <ProjectsTable
+              colFilter={{ items: projects, filters: colFilters, setColFilter }}
               items={unselectedSlice}
               checkedFlag={false}
               onToggle={toggle}

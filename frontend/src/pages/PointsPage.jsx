@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { invoke } from '../tauri-api'
+import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
 import { useApp } from '../context/AppContext'
 import { applyCoordinateSystem, normaliseEpsg, CRS_LABELS } from '../lib/proj'
 
@@ -49,7 +50,14 @@ function PointsTable({
   items, checkedFlag, onToggle, dragRowProps, tbodyStyle,
   sortCol, sortDir, onSort, emptyText, height, maxHeight, onScroll,
   footerHint, typeColor,
+  // #248: Excel-style column filters — {items, filters, setColFilter}; the
+  // SAME state is shared by the Selected and Available tables.
+  colFilter,
 }) {
+  const cf = (col, label) => colFilter && (
+    <ColumnFilterButton col={col} label={label} items={colFilter.items}
+                        filters={colFilter.filters} setColFilter={colFilter.setColFilter} />
+  )
   const wrapStyle = {
     overflowY: 'auto',
     ...(height ? { height } : {}),
@@ -63,31 +71,31 @@ function PointsTable({
             <th style={{ width: 40 }} />
             <th style={{ width: 10 }} />
             <th className="sortable" onClick={() => onSort('db_id')} style={{ width: 110 }}>
-              DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />
+              DB <SortIcon col="db_id" sortCol={sortCol} sortDir={sortDir} />{cf('db_id', 'DB')}
             </th>
             <th className="sortable" onClick={() => onSort('PointNo')}>
-              Point No <SortIcon col="PointNo" sortCol={sortCol} sortDir={sortDir} />
+              Point No <SortIcon col="PointNo" sortCol={sortCol} sortDir={sortDir} />{cf('PointNo', 'Point No')}
             </th>
             <th className="sortable" onClick={() => onSort('PointType')}>
-              Type <SortIcon col="PointType" sortCol={sortCol} sortDir={sortDir} />
+              Type <SortIcon col="PointType" sortCol={sortCol} sortDir={sortDir} />{cf('PointType', 'Type')}
             </th>
             <th className="sortable" onClick={() => onSort('ProjectNo')}>
-              Project <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />
+              Project <SortIcon col="ProjectNo" sortCol={sortCol} sortDir={sortDir} />{cf('ProjectNo', 'Project')}
             </th>
             <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('X1')}>
-              X <SortIcon col="X1" sortCol={sortCol} sortDir={sortDir} />
+              X <SortIcon col="X1" sortCol={sortCol} sortDir={sortDir} />{cf('X1', 'X')}
             </th>
             <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Y1')}>
-              Y <SortIcon col="Y1" sortCol={sortCol} sortDir={sortDir} />
+              Y <SortIcon col="Y1" sortCol={sortCol} sortDir={sortDir} />{cf('Y1', 'Y')}
             </th>
             <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Z1')}>
-              Z <SortIcon col="Z1" sortCol={sortCol} sortDir={sortDir} />
+              Z <SortIcon col="Z1" sortCol={sortCol} sortDir={sortDir} />{cf('Z1', 'Z')}
             </th>
             <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Top')}>
-              Top <SortIcon col="Top" sortCol={sortCol} sortDir={sortDir} />
+              Top <SortIcon col="Top" sortCol={sortCol} sortDir={sortDir} />{cf('Top', 'Top')}
             </th>
             <th className="sortable" style={{ textAlign: 'right' }} onClick={() => onSort('Bottom')}>
-              Bottom <SortIcon col="Bottom" sortCol={sortCol} sortDir={sortDir} />
+              Bottom <SortIcon col="Bottom" sortCol={sortCol} sortDir={sortDir} />{cf('Bottom', 'Bottom')}
             </th>
           </tr>
         </thead>
@@ -354,6 +362,11 @@ export default function PointsPage({ setPage }) {
     [points, coordinateSystem],
   )
 
+  // #248: Excel-style column filters — applied to the DISPLAY of both tables
+  // (the selection itself always lives on the full checked map / viewPoints).
+  const { filters: colFilters, setColFilter, filteredItems: colFilteredPoints } =
+    useColumnFilters(viewPoints)
+
   // ── Derived: selected vs. available, each with its OWN search (#190) ──────
   function applySort(arr) {
     return [...arr].sort((a, b) => {
@@ -374,17 +387,17 @@ export default function PointsPage({ setPage }) {
 
   const selectedSorted = useMemo(() => {
     const q = selectedSearch.toLowerCase()
-    const sel = viewPoints.filter(p => checked[ptKey(p)])
+    const sel = colFilteredPoints.filter(p => checked[ptKey(p)])
     return applySort(q ? sel.filter(p => matchesQuery(p, q)) : sel)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewPoints, checked, selectedSearch, sortCol, sortDir])
+  }, [colFilteredPoints, checked, selectedSearch, sortCol, sortDir])
 
   const availableFiltered = useMemo(() => {
     const q = search.toLowerCase()
-    const avail = viewPoints.filter(p => !checked[ptKey(p)])
+    const avail = colFilteredPoints.filter(p => !checked[ptKey(p)])
     return applySort(q ? avail.filter(p => matchesQuery(p, q)) : avail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewPoints, checked, search, sortCol, sortDir])
+  }, [colFilteredPoints, checked, search, sortCol, sortDir])
 
   // Issue #89: paginated Available table with infinite scroll.
   const [visibleCount, setVisibleCount] = useState(PAGE_STEP)
@@ -497,6 +510,7 @@ export default function PointsPage({ setPage }) {
               )}
             </div>
             <PointsTable
+              colFilter={{ items: viewPoints, filters: colFilters, setColFilter }}
               items={selectedSorted}
               checkedFlag={true}
               onToggle={toggle}
@@ -539,6 +553,7 @@ export default function PointsPage({ setPage }) {
               </button>
             </div>
             <PointsTable
+              colFilter={{ items: viewPoints, filters: colFilters, setColFilter }}
               items={availableSlice}
               checkedFlag={false}
               onToggle={toggle}

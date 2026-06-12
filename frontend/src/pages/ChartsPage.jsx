@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { invoke } from '../tauri-api'
+import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import Plot from 'react-plotly.js'
@@ -773,6 +774,11 @@ function StatsTable({ chart, statsAutoStatus, statsAxis, onAxisChange, onOpenExc
      filteredPtIds, checkedStrataPrimary, checkedStrataSecondary, groupAssignments]
   )
 
+  // #248: Excel-style filter on the Group column (hook must run before the
+  // early return below — hooks are unconditional).
+  const { filters: statColFilters, setColFilter: setStatColFilter, filteredItems: groupsFiltered } =
+    useColumnFilters(groups)
+
   // Hide entirely when no data passes the filters or all groups have no numeric values
   if (!rows.length || groups.length === 0) return null
 
@@ -818,11 +824,17 @@ function StatsTable({ chart, statsAutoStatus, statsAxis, onAxisChange, onOpenExc
       <table className="stats-table">
         <thead>
           <tr>{['Group','N','Min','Max','Mean','Std Dev','Median','P10','P90'].map(h =>
-            <th key={h}>{h}</th>)}
+            <th key={h}>
+              {h}
+              {h === 'Group' && (
+                <ColumnFilterButton col="group" label="Group" items={groups}
+                                    filters={statColFilters} setColFilter={setStatColFilter} />
+              )}
+            </th>)}
           </tr>
         </thead>
         <tbody>
-          {groups.map(s => (
+          {groupsFiltered.map(s => (
             <tr key={s.group}>
               <td>{s.group === '__all__' ? 'All' : s.group}</td>
               <td>{s.n.toLocaleString()}</td>

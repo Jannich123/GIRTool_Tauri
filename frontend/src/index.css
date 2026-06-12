@@ -171,6 +171,85 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
   color: #fff;
 }
 
+/* ── Excel-style column filters (#248) ───────── */
+.colfilter-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: .8rem;
+  line-height: 1;
+  padding: 0 .15rem;
+  color: #9ca3af;
+  vertical-align: middle;
+}
+.colfilter-btn:hover  { color: #374151; }
+.colfilter-btn.active { color: #2563eb; font-weight: 700; }
+
+.colfilter-pop {
+  position: fixed;
+  z-index: 3000;
+  width: 252px;
+  max-height: 330px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  padding: .45rem;
+  font-size: .8rem;
+  font-weight: 400;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.colfilter-search {
+  width: 100%;
+  margin-bottom: .35rem;
+  padding: .25rem .4rem;
+  font-size: .8rem;
+}
+.colfilter-actions {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin-bottom: .35rem;
+}
+.colfilter-actions button {
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: .15rem .5rem;
+  font-size: .74rem;
+  cursor: pointer;
+}
+.colfilter-actions button:hover { background: #e5e7eb; }
+.colfilter-flag { margin-left: auto; color: #2563eb; font-size: .72rem; font-weight: 600; }
+.colfilter-list {
+  overflow-y: auto;
+  flex: 1;
+  border-top: 1px solid #f3f4f6;
+  padding-top: .25rem;
+}
+.colfilter-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .12rem .1rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.colfilter-row:hover { background: #f8fafc; }
+.colfilter-row input { margin: 0; flex-shrink: 0; }
+.colfilter-val {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.colfilter-count { color: #9ca3af; font-size: .72rem; flex-shrink: 0; }
+.colfilter-capnote { color: #9ca3af; font-size: .72rem; padding: .3rem .1rem; }
+
 /* ── Page ────────────────────────────────────── */
 .page { max-width: 1200px; }
 /* Issue #120: opt-in full-window width — applied to Projects / Points /

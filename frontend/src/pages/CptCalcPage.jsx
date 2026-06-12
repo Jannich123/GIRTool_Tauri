@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '../tauri-api'
+import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
 import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 
@@ -142,6 +143,12 @@ export default function CptCalcPage() {
 
   useEffect(() => { loadPointData() }, [loadPointData])
 
+  // #248: Excel-style filters on the point table.  Items are {r, i} tuples so
+  // edits keep routing through the ORIGINAL row index after filtering.
+  const pointItems = useMemo(() => pointRows.map((r, i) => ({ r, i })), [pointRows])
+  const { filters: pointColFilters, setColFilter: setPointColFilter, filteredItems: pointItemsFiltered } =
+    useColumnFilters(pointItems, it => it.r)
+
   function editPoint(i, key, raw) {
     setPointRows(prev => {
       const next = prev.map((r, j) => (j === i ? { ...r, [key]: raw === '' ? null : Number(String(raw).replace(',', '.')) } : r))
@@ -180,6 +187,12 @@ export default function CptCalcPage() {
   }, [hasFolder, connection?.output_folder]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadLayerData() }, [loadLayerData])
+
+  // #248: Excel-style filter on the layer table (tuple pattern → original
+  // indices survive filtering for edits).
+  const layerItems = useMemo(() => layerRows.map((r, i) => ({ r, i })), [layerRows])
+  const { filters: layerColFilters, setColFilter: setLayerColFilter, filteredItems: layerItemsFiltered } =
+    useColumnFilters(layerItems, it => it.r)
 
   // #213: CPT settings changed in another window — reload the calc config and
   // both settings tables.  (Own-window saves are skipped by the bus.)
@@ -376,16 +389,16 @@ export default function CptCalcPage() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>PointNo</th>
-                  <th style={{ width: 90 }}>DB</th>
-                  <th style={{ width: 130 }}>Project</th>
+                  <th>PointNo <ColumnFilterButton col={PH.point} label="PointNo" items={pointItems} getRow={it => it.r} filters={pointColFilters} setColFilter={setPointColFilter} /></th>
+                  <th style={{ width: 90 }}>DB <ColumnFilterButton col={PH.db} label="DB" items={pointItems} getRow={it => it.r} filters={pointColFilters} setColFilter={setPointColFilter} /></th>
+                  <th style={{ width: 130 }}>Project <ColumnFilterButton col={PH.proj} label="Project" items={pointItems} getRow={it => it.r} filters={pointColFilters} setColFilter={setPointColFilter} /></th>
                   <th style={{ width: 170 }}>Cone Area Ratio [-]</th>
                   <th style={{ width: 190 }}>Ground/Seabed Level [m]</th>
                   <th style={{ width: 160 }}>Water Level [m]</th>
                 </tr>
               </thead>
               <tbody>
-                {pointRows.map((r, i) => (
+                {pointItemsFiltered.map(({ r, i }) => (
                   <tr key={`${r[PH.point]}_${i}`}>
                     <td>{r[PH.point]}</td>
                     <td>
@@ -438,13 +451,13 @@ export default function CptCalcPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>Strata</th>
+                <th>Strata <ColumnFilterButton col={LH.layer} label="Strata" items={layerItems} getRow={it => it.r} filters={layerColFilters} setColFilter={setLayerColFilter} /></th>
                 <th style={{ width: 180 }}>Unit weight [kN/m³]</th>
                 <th style={{ width: 140 }}>Nkt [-]</th>
               </tr>
             </thead>
             <tbody>
-              {layerRows.map((r, i) => (
+              {layerItemsFiltered.map(({ r, i }) => (
                 <tr key={`${r[LH.layer]}_${i}`}>
                   <td>{r[LH.layer]}</td>
                   <td>{numInput(r[LH.uw], v => editLayer(i, LH.uw, v))}</td>

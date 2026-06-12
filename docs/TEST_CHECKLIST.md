@@ -247,6 +247,17 @@ Performance (load a few thousand points first):
 - [ ] Collapsed: logo text, project-folder name (dot stays), pop-out ↗ arrows hidden; Refresh + Settings show as icons.
 - [ ] The collapsed/expanded choice survives an app restart (and is per-window — a pop-out can differ).
 
+### 6x. Excel-style column filters (#248)
+
+- [ ] Every filterable header shows a small **▾** funnel; clicking opens a dropdown with a search box, Select all / Clear, and a checkbox per unique value with counts; `(blank)` covers empty cells; funnel turns blue when a filter is active.
+- [ ] **Projects**: filtering (e.g. DB = DB2) applies to BOTH the Selected and Available tables; "Select all" in the Available header only selects the filtered rows (Excel semantics).
+- [ ] **Points**: same shared behaviour across both tables; works with the existing search boxes (they compose).
+- [ ] **Data → preview**: filters on any column of a big datasheet open instantly and compose with the search; columns with thousands of values show "type to narrow".
+- [ ] **CPT point table**: filter PointNo/DB/Project; editing a value on a FILTERED view updates the right row (saved xlsx correct).
+- [ ] **CPT layer table**: Strata column filter; edits land on the right layer.
+- [ ] **Charts statistics**: Group column filter trims the rows.
+- [ ] Dropdown closes on outside click / Escape; opening near the screen edge stays on screen; sort-by-header still works (the funnel doesn't trigger sorting).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
