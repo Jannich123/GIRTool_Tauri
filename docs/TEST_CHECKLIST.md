@@ -176,6 +176,13 @@ Performance (load a few thousand points first):
 - [ ] Hovering a DB point (selection map) shows the Jupiter-style list: PointNo · type, ProjectNo, Project name, Database, Z1, **Depth (Bottom − Top)**, CRS line, click hints. Polygon-loaded points show Depth too (new Top/Bottom columns).
 - [ ] Settings → Query config: new sections **Map — distinct coordinate systems** and **Map — points inside polygon** (override per query type; defaults shown from the builtin templates).
 
+### 6n. Map batch follow-ups (#224)
+
+- [ ] Double-click decides by the **clicked point**: dbl-click an UNSELECTED point of an already-selected project → the project's remaining points are bulk-added; dbl-click a SELECTED point → project + all its points removed.
+- [ ] Layer panel arrows are the old **↑/↓ in black** and clearly visible; ↑ still brings forward (top of list = front).
+- [ ] Add WMS overlay: new **Token** field — used for Connect (GetCapabilities) and stored on the addon; tiles from api.dataforsyningen.dk render with a valid token.
+- [ ] Existing WMS rows: **Edit** opens a panel with Token + Layer inputs (typing is throttled, no lag).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

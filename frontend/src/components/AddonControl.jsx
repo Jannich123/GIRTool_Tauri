@@ -39,6 +39,7 @@ export default function AddonControl({ target }) {
     padding: '0 .35rem', lineHeight: 1.5, fontSize: '.8rem',
     border: '1px solid var(--border, #cbd5e1)', borderRadius: 4,
     background: '#fff', cursor: 'pointer',
+    color: '#111827', // #224: explicit black — the glyphs inherited an invisible colour
   }
 
   return (
@@ -64,8 +65,8 @@ export default function AddonControl({ target }) {
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.name}>
               {a.name}
             </span>
-            <button style={btn} disabled={i === 0} onClick={() => move(a.id, +1)} title="Bring forward (draw above)">▲</button>
-            <button style={btn} disabled={i === display.length - 1} onClick={() => move(a.id, -1)} title="Send backward (draw below)">▼</button>
+            <button style={btn} disabled={i === 0} onClick={() => move(a.id, +1)} title="Bring forward (draw above)">↑</button>
+            <button style={btn} disabled={i === display.length - 1} onClick={() => move(a.id, -1)} title="Send backward (draw below)">↓</button>
           </div>
           {a.visible !== false && (
             <input
