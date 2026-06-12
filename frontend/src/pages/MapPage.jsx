@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { MapContainer, TileLayer, WMSTileLayer, CircleMarker, Marker, Popup, LayersControl, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, WMSTileLayer, CircleMarker, Marker, Popup, Polygon, Polyline, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import proj4 from 'proj4'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS, convertPoint, CRS_LABELS } from '../lib/proj'
-import { useDataChanged } from '../lib/dataChanged'
+import { useDataChanged, invokeAndNotify } from '../lib/dataChanged'
+import { pointInPolygonLatLng, ringFromFeature } from '../lib/geo'
 import CrsCursorReadout from '../components/CrsCursorReadout'
 import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, clampDkZoom, mapGridFor, clampMercZoom, MERC_DEFAULT_ZOOM, DK_DEFAULT_ZOOM } from '../lib/crsDk'
 import AddonLayers from '../components/AddonLayers'
@@ -160,23 +161,44 @@ function makeIcon(symbol, color) {
 
 // ── Point marker (circle = CircleMarker; others = divIcon Marker) ─────────────
 
-function PointMarker({ pt, color, symbol, children }) {
+function PointMarker({ pt, color, symbol, children, eventHandlers }) {
   if (!symbol || symbol === 'circle') {
     return (
       <CircleMarker
         center={pt.latlng}
         radius={6}
         pathOptions={{ color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 0.9 }}
+        {...(eventHandlers ? { eventHandlers } : {})}
       >
         {children}
       </CircleMarker>
     )
   }
   return (
-    <Marker position={pt.latlng} icon={makeIcon(symbol, color)}>
+    <Marker position={pt.latlng} icon={makeIcon(symbol, color)} {...(eventHandlers ? { eventHandlers } : {})}>
       {children}
     </Marker>
   )
+}
+
+// ── Polygon draw for grouping mode (#262 — mirrors SelectionMap's) ───────────
+
+function DrawHandler({ active, onVertex }) {
+  const map = useMap()
+  useMapEvents({
+    click: (e) => { if (active) onVertex([e.latlng.lat, e.latlng.lng]) },
+  })
+  useEffect(() => {
+    const pane = map.getPane('overlayPane')
+    const container = map.getContainer()
+    if (pane) pane.style.pointerEvents = active ? 'none' : ''
+    if (container) container.style.cursor = active ? 'crosshair' : ''
+    return () => {
+      if (pane) pane.style.pointerEvents = ''
+      if (container) container.style.cursor = ''
+    }
+  }, [active, map])
+  return null
 }
 
 // ── Type order ────────────────────────────────────────────────────────────────
@@ -343,12 +365,23 @@ export default function MapPage() {
     filteredPtIds,       // active cross-filter set (null = no filter)
     groupSystems,        // [{id, name, groups:[{name, color}]}]
     groupAssignments,    // {pointId: {systemId: groupName}}
+    refreshGroupData,    // re-fetch grouping after a save (#262)
   } = useFilter()
 
   const saved = loadMapSettings()
   const [crs,       setCrs]       = useState(saved.crs       || 'EPSG:25832')
   const [wfsUrl,    setWfsUrl]    = useState(saved.wfsUrl    || '')
   const [colorMode, setColorMode] = useState(saved.colorMode || 'type')
+
+  // ── Grouping mode (#262): assign the active group system's groups straight
+  // from the map — click a point, draw a polygon, or click an addon polygon.
+  const UNASSIGN = '__unknown__'
+  const [grpMode,      setGrpMode]      = useState(false)
+  const [grpTarget,    setGrpTarget]    = useState('')
+  const [grpDrawing,   setGrpDrawing]   = useState(false)
+  const [grpVerts,     setGrpVerts]     = useState([]) // [[lat, lng], …]
+  const [grpFromAddon, setGrpFromAddon] = useState(null)
+  const [grpMsg,       setGrpMsg]       = useState('')
 
   // Active project for session lookups.
   const projectId = selectedProjects[0]?.ProjectId
@@ -554,6 +587,82 @@ export default function MapPage() {
     }
   }
 
+  // ── Grouping-mode logic (#262) ─────────────────────────────────────────────
+  // Keep the target group valid + leave the mode when group colouring is off.
+  useEffect(() => {
+    if (!activeGroupSystem) {
+      if (grpMode) { setGrpMode(false); setGrpDrawing(false); setGrpVerts([]); setGrpFromAddon(null) }
+      return
+    }
+    const names = activeGroupSystem.groups.map(g => g.name)
+    if (!grpTarget || (grpTarget !== UNASSIGN && !names.includes(grpTarget))) {
+      setGrpTarget(names[0] || UNASSIGN)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeGroupSystem, grpMode])
+
+  async function assignGroupToPoints(pointIds) {
+    if (!activeGroupSystem || !grpTarget || !pointIds.length || !projectId) return
+    const sysId = activeGroupSystem.id
+    const label = grpTarget === UNASSIGN ? 'Unknown' : grpTarget
+    const next = { ...groupAssignments }
+    for (const pid of pointIds) {
+      const key = String(pid)
+      const cur = { ...(next[key] || {}) }
+      if (grpTarget === UNASSIGN) delete cur[sysId]
+      else cur[sysId] = grpTarget
+      next[key] = cur
+    }
+    try {
+      await invokeAndNotify('grouping', 'save_grouping', {
+        projectId,
+        body: { systems: groupSystems, assignments: next, points: [] },
+      })
+      refreshGroupData() // markers recolour from the saved truth
+      setGrpMsg(`${label} → ${pointIds.length} point${pointIds.length === 1 ? '' : 's'}`)
+    } catch (err) {
+      setGrpMsg(`Save failed: ${err}`)
+    }
+  }
+
+  function assignInsidePolygon() {
+    if (grpVerts.length < 3) return
+    const ids = visiblePoints
+      .filter(pt => pointInPolygonLatLng(pt.latlng, grpVerts))
+      .map(pt => pt.PointId)
+    setGrpDrawing(false)
+    setGrpVerts([])
+    setGrpFromAddon(null)
+    if (!ids.length) { setGrpMsg('No points inside the polygon'); return }
+    assignGroupToPoints(ids)
+  }
+
+  // Handlers reached from memoised markers / addon layers via refs — always
+  // fresh, never stale closures.
+  const grpStateRef = useRef({})
+  grpStateRef.current = { grpMode, grpDrawing, grpFromAddon }
+  const assignRef = useRef(null)
+  assignRef.current = assignGroupToPoints
+  const mapPointClickRef = useRef(null)
+  mapPointClickRef.current = (grpMode && !grpDrawing)
+    ? (pt) => assignRef.current?.([pt.PointId])
+    : null
+
+  // #262: in grouping mode an addon polygon click stages its ring as the
+  // assignment boundary (same semantics as the selection map's #209 flow).
+  function onAddonPolyClick(feature, latlng) {
+    const s = grpStateRef.current
+    if (!s.grpMode) return
+    if (s.grpDrawing && !s.grpFromAddon) return // hand-drawing — don't hijack
+    const ring = ringFromFeature(feature, latlng)
+    if (!ring) return
+    setGrpVerts(ring)
+    setGrpFromAddon('addon')
+    setGrpDrawing(true)
+  }
+  const onAddonPolyClickRef = useRef(onAddonPolyClick)
+  onAddonPolyClickRef.current = onAddonPolyClick
+
   // Memoised marker tree (#218): unrelated context churn (e.g. addon
   // transparency drags) re-renders this component; a referentially stable
   // marker array lets React skip reconciling every point marker.  Popups get
@@ -580,25 +689,31 @@ export default function MapPage() {
       const crsLine = crsTip(pt)
       const srcLine = srcCrs(pt.srcProj)
       return (
-        <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}>
-          <Popup>
-            <strong>{pt.PointNo}</strong><br />
-            Type: {pt.PointType}
-            {activeGroupSystem && (
-              <><br />
-                {activeGroupSystem.name}:{' '}
-                {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
-              </>
-            )}
-            {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
-            {srcLine && <><br />Source CRS: {srcLine}</>}
-            {crsLine && <><br />{crsLine}</>}
-          </Popup>
+        <PointMarker
+          key={pt.id} pt={pt} color={color} symbol={symbol}
+          eventHandlers={{ click: () => mapPointClickRef.current?.(pt) }}
+        >
+          {/* #262: no popup while assigning — clicks assign the group. */}
+          {!grpMode && (
+            <Popup>
+              <strong>{pt.PointNo}</strong><br />
+              Type: {pt.PointType}
+              {activeGroupSystem && (
+                <><br />
+                  {activeGroupSystem.name}:{' '}
+                  {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
+                </>
+              )}
+              {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
+              {srcLine && <><br />Source CRS: {srcLine}</>}
+              {crsLine && <><br />{crsLine}</>}
+            </Popup>
+          )}
         </PointMarker>
       )
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem])
+  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem, grpMode])
 
   // ── Legend entries derived from color mode ────────────────────────────────
 
@@ -690,6 +805,65 @@ export default function MapPage() {
           )}
         </select>
 
+        {/* #262: grouping mode — only offered while a group system colours
+            the map. */}
+        {activeGroupSystem && (
+          <button
+            className="btn-secondary btn-sm"
+            style={grpMode ? { background: '#1d4ed8', borderColor: '#1d4ed8', color: '#fff' } : undefined}
+            onClick={() => {
+              setGrpMode(m => !m)
+              setGrpDrawing(false); setGrpVerts([]); setGrpFromAddon(null); setGrpMsg('')
+            }}
+            title="Assign this group system's groups from the map: click points, draw a polygon, or click an addon polygon"
+          >
+            🏷 {grpMode ? 'Exit grouping' : 'Assign groups'}
+          </button>
+        )}
+        {grpMode && activeGroupSystem && (
+          <>
+            <select
+              value={grpTarget}
+              onChange={e => setGrpTarget(e.target.value)}
+              className="map-color-select"
+              title="Group to assign"
+            >
+              {activeGroupSystem.groups.map(g => (
+                <option key={g.name} value={g.name}>{g.name}</option>
+              ))}
+              <option value={UNASSIGN}>Unknown (clear)</option>
+            </select>
+            {!grpDrawing ? (
+              <button
+                className="btn-secondary btn-sm"
+                onClick={() => { setGrpVerts([]); setGrpFromAddon(null); setGrpDrawing(true); setGrpMsg('') }}
+              >
+                ✏️ Draw polygon
+              </button>
+            ) : (
+              <>
+                <button className="btn-primary btn-sm" disabled={grpVerts.length < 3} onClick={assignInsidePolygon}>
+                  🏷 Assign inside{grpVerts.length >= 3 ? '' : ` (${grpVerts.length})`}
+                </button>
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={() => { setGrpDrawing(false); setGrpVerts([]); setGrpFromAddon(null) }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+            <span className="hint" style={{ margin: 0 }}>
+              {grpDrawing
+                ? (grpFromAddon
+                    ? 'Addon boundary staged — 🏷 Assign inside'
+                    : 'Click to drop vertices, then 🏷 Assign inside')
+                : 'Click a point to assign · ✏️ draw or click an addon polygon for bulk'}
+            </span>
+            {grpMsg && <span className="hint" style={{ margin: 0, color: '#16a34a' }}>{grpMsg}</span>}
+          </>
+        )}
+
         {/* Settings */}
         <button className="btn-secondary btn-sm" onClick={() => setSettingsOpen(o => !o)}>
           ⚙ Settings
@@ -758,7 +932,26 @@ export default function MapPage() {
           {/* Background maps + WMS addons — one unified layer list (M4.5a).
               The base maps (OSM / Esri / Dataforsyningen ortho + topo) are now
               built-in entries in the same list, managed in the top-right panel. */}
-          <AddonLayers target="project" grid={grid} />
+          <AddonLayers
+            target="project"
+            grid={grid}
+            onPolygonClick={(feature, latlng) => onAddonPolyClickRef.current?.(feature, latlng)}
+          />
+
+          {/* #262: grouping-mode polygon draw + staged boundary overlay. */}
+          <DrawHandler
+            active={grpMode && grpDrawing && !grpFromAddon}
+            onVertex={(v) => setGrpVerts(prev => [...prev, v])}
+          />
+          {grpMode && grpVerts.length >= 3 && (
+            <Polygon positions={grpVerts} pathOptions={{ color: '#1d4ed8', weight: 2, dashArray: '5,5', fillColor: '#1d4ed8', fillOpacity: 0.08 }} />
+          )}
+          {grpMode && grpVerts.length === 2 && (
+            <Polyline positions={grpVerts} pathOptions={{ color: '#1d4ed8', weight: 2, dashArray: '5,5' }} />
+          )}
+          {grpMode && !grpFromAddon && grpVerts.map((v, i) => (
+            <CircleMarker key={`gv${i}`} center={v} radius={3} pathOptions={{ color: '#1d4ed8', weight: 2, fillColor: '#fff', fillOpacity: 1 }} />
+          ))}
 
           {pointMarkers}
 
