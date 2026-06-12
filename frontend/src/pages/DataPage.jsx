@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { invoke } from '../tauri-api'
+import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
 import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
@@ -853,13 +854,18 @@ function DatasheetPreview({ fname, cacheRef }) {
     })
   }, [data.rows, filteredPtIds, checkedStrataPrimary, checkedStrataSecondary, filterIdx])
 
+  // #248: Excel-style per-column filters.  Preview rows are POSITIONAL
+  // arrays, so the column key is the real column index.
+  const { filters: colFilters, setColFilter, filteredItems: colFilteredRows } =
+    useColumnFilters(filteredRows)
+
   // Search across the *visible* columns only — hidden ID columns shouldn't
   // pollute the search.
   const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return filteredRows
+    if (!q) return colFilteredRows
     const visIdxs = visibleColumns.map(c => c.idx)
-    return filteredRows.filter(row => {
+    return colFilteredRows.filter(row => {
       for (const i of visIdxs) {
         const v = row[i]
         if (v == null) continue
@@ -867,7 +873,7 @@ function DatasheetPreview({ fname, cacheRef }) {
       }
       return false
     })
-  }, [filteredRows, search, visibleColumns])
+  }, [colFilteredRows, search, visibleColumns])
 
   // Sort by the clicked visible column.  Stable, simple — copies once.
   const sortedRows = useMemo(() => {
@@ -890,7 +896,7 @@ function DatasheetPreview({ fname, cacheRef }) {
   }, [searchedRows, sortCol, sortDir, visibleColumns])
 
   // Reset pagination whenever the result set or sort changes.
-  useEffect(() => { setVisibleCount(PAGE_STEP) }, [search, sortCol, sortDir,
+  useEffect(() => { setVisibleCount(PAGE_STEP) }, [search, sortCol, sortDir, colFilters,
                                                   filteredPtIds, checkedStrataPrimary, checkedStrataSecondary])
 
   const displayed = sortedRows.slice(0, visibleCount)
@@ -963,6 +969,9 @@ function DatasheetPreview({ fname, cacheRef }) {
                   title={`Sort by ${c.name}`}
                 >
                   {c.name}{sortCol === i ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                  {' '}
+                  <ColumnFilterButton col={c.idx} label={c.name} items={filteredRows}
+                                      filters={colFilters} setColFilter={setColFilter} />
                 </th>
               ))}
             </tr>
