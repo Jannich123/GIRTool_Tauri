@@ -8,6 +8,7 @@ import { useFilter } from '../context/FilterContext'
 import { PROJ_DEFS, convertPoint, CRS_LABELS } from '../lib/proj'
 import { useDataChanged } from '../lib/dataChanged'
 import CrsCursorReadout from '../components/CrsCursorReadout'
+import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom } from '../lib/crsDk'
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 
@@ -465,6 +466,7 @@ export default function MapPage() {
           PointType: p.PointType || '',
           ProjectNo: p.ProjectNo || '',
           db_id:     p.db_id ?? '?',
+          srcProj:   rawProj, // #232: original coordinate system from the DB
         }
       })
       .filter(Boolean)
@@ -562,9 +564,16 @@ export default function MapPage() {
       if (c?.X1 == null || c?.Y1 == null || !isFinite(Number(c.X1)) || !isFinite(Number(c.Y1))) return null
       return `${c.X1} · ${c.Y1} — ${CRS_LABELS[epsg] || epsg}`
     }
+    // #232: the point's ORIGINAL coordinate system (Projection1 from the DB).
+    const srcCrs = (raw) => {
+      if (raw == null || raw === '') return null
+      const e = normaliseEpsg(raw)
+      return (e && (CRS_LABELS[e] || e)) || String(raw)
+    }
     return visiblePoints.map(pt => {
       const { color, symbol } = getStyle(pt)
       const crsLine = crsTip(pt)
+      const srcLine = srcCrs(pt.srcProj)
       return (
         <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}>
           <Popup>
@@ -577,6 +586,7 @@ export default function MapPage() {
               </>
             )}
             {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
+            {srcLine && <><br />Source CRS: {srcLine}</>}
             {crsLine && <><br />{crsLine}</>}
           </Popup>
         </PointMarker>
@@ -729,8 +739,12 @@ export default function MapPage() {
           // hydrated from GIRTool_settings.json takes effect — Leaflet
           // doesn't react to changed initial-center / initial-zoom props.
           key={projectId || 'no-project'}
-          center={savedPos ? [savedPos.lat, savedPos.lng] : [56, 10]}
-          zoom={savedPos ? savedPos.zoom : 6}
+          // #232: Danish EPSG:25832 tile grid — WMTS built-ins native, WMS
+          // layers requested in 25832, vector layers unaffected.
+          crs={CRS_DK}
+          maxZoom={DK_MAX_ZOOM}
+          center={savedPos ? [savedPos.lat, savedPos.lng] : DK_CENTER}
+          zoom={savedPos ? clampDkZoom(savedPos.zoom) : DK_DEFAULT_ZOOM}
           style={{ width: '100%', height: '100%' }}
         >
           {/* Background maps + WMS addons — one unified layer list (M4.5a).

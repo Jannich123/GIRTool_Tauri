@@ -51,8 +51,8 @@ export default function MapAddonsTab() {
           text: arr.length === 0
             ? 'No layers found'
             : merc
-              ? `${arr.length} layer${arr.length === 1 ? '' : 's'} found · web-mercator grid: ${merc}`
-              : `${arr.length} layer${arr.length === 1 ? '' : 's'} found, but NO web-mercator tile grid (found: ${gridSummary(r)}) — this WMTS can't be drawn on the map; use the service's WMS variant instead.`,
+              ? `${arr.length} layer${arr.length === 1 ? '' : 's'} found · Danish-grid tile matrix set: ${merc}`
+              : `${arr.length} layer${arr.length === 1 ? '' : 's'} found, but NO EPSG:25832 tile grid (found: ${gridSummary(r)}) — this WMTS can't be drawn on the Danish-grid map; use the service's WMS variant instead.`,
         })
       } else {
         const list = await invoke('wms_capabilities', { url: withToken(form.url.trim(), form.token) })
@@ -67,13 +67,14 @@ export default function MapAddonsTab() {
     }
   }
 
-  // #230: pick a web-mercator TileMatrixSet from WMTS capabilities — by CRS
-  // (3857 / 900913) or by conventional grid names.  Returns its id or null.
+  // #232: the maps run on the Danish EPSG:25832 grid (lib/crsDk.js) — a WMTS
+  // is usable when it publishes a 25832 tile matrix set (the Kortforsyning
+  // grid: View1 / KortforsyningTilingDK / DKtiling…).  Returns its id or null.
   function webMercatorSet(info) {
     const sets = Array.isArray(info?.matrix_sets) ? info.matrix_sets : []
     const hit = sets.find(s =>
-      /3857|900913/.test(String(s.crs || '')) ||
-      /google|webmercator|web_mercator/i.test(String(s.id || '')))
+      /25832/.test(String(s.crs || '')) ||
+      /view1|kortforsyning|dktiling/i.test(String(s.id || '')))
     return hit ? hit.id : null
   }
   function gridSummary(info) {
@@ -116,7 +117,7 @@ export default function MapAddonsTab() {
       if (!tms) {
         setMsg({
           ok: false,
-          text: `This WMTS has no web-mercator tile grid (found: ${gridSummary(wmtsInfo)}) — it cannot be drawn on the map. Use the service's WMS variant instead.`,
+          text: `This WMTS has no EPSG:25832 tile grid (found: ${gridSummary(wmtsInfo)}) — it cannot be drawn on the Danish-grid map. Use the service's WMS variant instead.`,
         })
         return
       }
@@ -246,7 +247,18 @@ export default function MapAddonsTab() {
               <td style={{ fontSize: '.72rem', fontFamily: 'monospace', wordBreak: 'break-all' }} title={a.url}>
                 {a.url}
               </td>
-              <td style={{ fontSize: '.8rem' }}>{a.layer || '—'}</td>
+              {/* #232: services exposing several layers get a dropdown. */}
+              <td style={{ fontSize: '.8rem' }}>
+                {Array.isArray(a.layers) && a.layers.length > 1 ? (
+                  <select
+                    value={a.layer}
+                    onChange={e => update(a.id, { layer: e.target.value })}
+                    style={{ marginBottom: 0, maxWidth: 220 }}
+                  >
+                    {a.layers.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                ) : (a.layer || '—')}
+              </td>
               <td style={{ fontSize: '.8rem' }}>{a.format || (a.type === 'xyz' ? 'tiles' : '—')}</td>
               <td style={{ textAlign: 'center' }}>
                 <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
@@ -393,7 +405,7 @@ export default function MapAddonsTab() {
           </select>
           {form.service === 'wmts' && (
             <span className="hint" style={{ margin: 0 }}>
-              WMTS needs a web-mercator tile grid — Connect checks and refuses otherwise.
+              WMTS must publish the Danish EPSG:25832 grid (View1 / KortforsyningTilingDK) — Connect checks and refuses otherwise.
             </span>
           )}
         </div>
