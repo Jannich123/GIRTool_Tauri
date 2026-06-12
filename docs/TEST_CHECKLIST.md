@@ -221,6 +221,13 @@ Performance (load a few thousand points first):
 - [ ] Settings hint under "Built-in background maps" explains the automatic grid choice.
 - [ ] Points/Jupiter/polygon select/GeoJSON addons behave identically on both grids.
 
+### 6t. Selection map survives folder switches (#238)
+
+- [ ] Load points on the map, switch to another project folder, return to the map → old loaded/Jupiter points are **cleared** with a status line saying so; ⬇ Load in view works against the new folder.
+- [ ] After the switch, single-click on a loaded point adds its parent project again; double-click adds/removes the whole project (project index refreshed via the 'databases' sync domain).
+- [ ] Clicking a point whose project genuinely isn't in the list shows the explanatory status line (not silent).
+- [ ] Normal single-folder sessions: tab away/back still restores view + loaded points as before.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
