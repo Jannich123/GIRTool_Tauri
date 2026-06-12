@@ -292,6 +292,14 @@ Performance (load a few thousand points first):
 - [ ] Selection map ✚ **Select inside** only selects points actually VISIBLE on the map (loaded ∪ project points, hidden sources excluded) — nothing invisible gets selected, no parent projects of unseen points; status suggests ⬇ Load when the polygon contains none.
 - [ ] ⬇ Load still queries the databases (that's how points get onto the map).
 
+### 6ad. Excel-slicer filter panel (#268)
+
+- [ ] Side filter (Points / group systems / strata tabs): **clicking a row filters to ONLY that item**; clicking another switches to it.
+- [ ] **Ctrl(/Cmd)+click** adds/removes items one by one.
+- [ ] **Shift+click** selects the whole range from the last clicked row (in the visible searched/sorted order); **Ctrl+Shift+click** ADDS the range.
+- [ ] The row checkbox still works as a plain additive toggle; master select-all row, search, sort and Reset unchanged.
+- [ ] Selecting every item ends as "no filter" (badge disappears); filters persist + sync as before.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
