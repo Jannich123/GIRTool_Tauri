@@ -266,6 +266,15 @@ Performance (load a few thousand points first):
 - [ ] During hand-drawing, clicks over addon shapes still drop vertices.
 - [ ] New **🗑 Remove projects** polygon action: every project with points inside the polygon leaves the selection together with ALL its points (status line reports the count); ⬇ Load / ✚ Select / ✖ Remove unchanged.
 
+### 6z. CPT picker mirrors the calculation-selection sheet (#258)
+
+- [ ] Groups read Basic / Normalized / **Estimation Plots 1–8** in sheet order; descriptions, units, rounding and "CPT Guide 2022 p. N" references match the sheet (engine names kept: the sheet's OCR_2013/OCR_2019 are OCR_2009/OCR_2013 here — noted in their descriptions).
+- [ ] The **group select-all tick sits in each table's header bar** (with the x/y counter), not above the table.
+- [ ] First open in a FRESH project: exactly the sheet's green rows are pre-selected (Basic + Normalized + Estimation 1–3).
+- [ ] Intermediate/QA columns (Sigma_eff_v0, n, Cn, Zone…, graph flags, alpha_E, Dr Bray & Olaya) are **hidden** by default; ticking "Show hidden columns (20)" reveals them red-tinted and selectable; untick hides them again.
+- [ ] Selection, Round edits and the show-hidden toggle survive app restarts (per project folder) and sync to other windows ('cpt' domain).
+- [ ] `cargo test` still 2/2 (engine untouched — catalogue metadata only).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
