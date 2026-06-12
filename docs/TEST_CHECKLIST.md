@@ -213,6 +213,14 @@ Performance (load a few thousand points first):
 - [ ] Adding a user WMTS now requires an EPSG:25832 grid (message names what was found); WMS addons must support 25832.
 - [ ] Hovering a point (selection map) / clicking (project map) shows **Source CRS: <original system>** (origin_Projection1/Projection1, labelled like the tables).
 
+### 6s. OSM/Esri restored — dynamic grid (#234)
+
+- [ ] **OpenStreetMap** and **Aerial (Esri)** are back in the layer panel + builtin table.
+- [ ] Toggle OSM ON → map remounts in web-mercator: OSM renders, Danish base maps still render (via their WMS fallback), all markers stay in place.
+- [ ] Toggle OSM/Esri OFF → map remounts on the Danish grid: Danish maps switch to WMTS tiles (faster).
+- [ ] Settings hint under "Built-in background maps" explains the automatic grid choice.
+- [ ] Points/Jupiter/polygon select/GeoJSON addons behave identically on both grids.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
