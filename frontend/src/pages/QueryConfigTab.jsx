@@ -69,6 +69,22 @@ const SECTIONS = [
     hint:      'Per-query SQL.  Use #DB#, #projectid#, #pointfilter# placeholders.  Pick a query name to edit.',
     isMap:     true,
   },
+  // #222: the selection-map loading queries — overridable per query type so a
+  // different database structure can still feed the map.
+  {
+    key:       'map_distinct_epsg',
+    title:     'Map — distinct coordinate systems',
+    drives:    'map_distinct_epsgs (selection-map loading, step 1)',
+    hint:      'Lists the EPSG codes present in a database before the spatial query.  Use the #DB# table prefix; no other placeholders.',
+    isMap:     false,
+  },
+  {
+    key:       'map_polygon_points',
+    title:     'Map — points inside polygon',
+    drives:    'map_polygon_points (⬇ Load in view / polygon load)',
+    hint:      'Spatial-intersect query.  Must keep the #EPSG# (integer SRID) and #WKT# (polygon text) placeholders; #DB# prefixes tables.',
+    isMap:     false,
+  },
 ]
 
 // The built-in query type.  Always present, always first, never deletable.
