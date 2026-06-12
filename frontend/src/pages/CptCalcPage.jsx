@@ -319,28 +319,26 @@ export default function CptCalcPage() {
             const someSel = entries.some(c => selectedSet.has(c.name))
             return (
             <div key={g} style={{ marginBottom: '1rem' }}>
+              <h4 style={{ margin: '0 0 .35rem' }}>
+                {g}{' '}
+                <span className="hint" style={{ fontWeight: 400 }}>
+                  ({entries.filter(c => selectedSet.has(c.name)).length}/{entries.length} selected)
+                </span>
+              </h4>
               <table className="data-table" style={{ maxWidth: 1280 }}>
                 <thead>
-                  {/* #258: the group select-all tick lives IN the header. */}
                   <tr>
-                    <th colSpan={6} style={{ background: '#f1f5f9' }}>
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer', margin: 0 }}>
-                        <input
-                          type="checkbox"
-                          checked={allSel}
-                          ref={el => { if (el) el.indeterminate = !allSel && someSel }}
-                          onChange={e => toggleGroup(entries, e.target.checked)}
-                          title={`Select / deselect all ${g} columns`}
-                        />
-                        <strong>{g}</strong>
-                        <span className="hint" style={{ fontWeight: 400, margin: 0 }}>
-                          ({entries.filter(c => selectedSet.has(c.name)).length}/{entries.length} selected)
-                        </span>
-                      </label>
+                    {/* #258/#260: the group select-all tick sits IN the
+                        column-header row (checkbox column). */}
+                    <th style={{ width: 36, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={allSel}
+                        ref={el => { if (el) el.indeterminate = !allSel && someSel }}
+                        onChange={e => toggleGroup(entries, e.target.checked)}
+                        title={`Select / deselect all ${g} columns`}
+                      />
                     </th>
-                  </tr>
-                  <tr>
-                    <th style={{ width: 36 }} />
                     <th style={{ width: 220 }}>Column</th>
                     <th>Description</th>
                     <th style={{ width: 90 }}>Unit</th>
