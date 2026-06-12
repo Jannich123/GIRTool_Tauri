@@ -400,14 +400,17 @@ export default function SelectionMap() {
     }
   }
 
-  // #222: double-click selects/deselects the point's WHOLE parent project.
-  // Not selected → add the project + ALL its points (fetched via the cached
-  // get_points).  Already selected → remove the project and its points.
+  // #222/#224: double-click adds/removes the point's WHOLE parent project.
+  // The CLICKED POINT decides the direction — point currently selected →
+  // remove the project and all its points; point not selected → add the
+  // project (if missing) and ALL its points (cached get_points).  Keying on
+  // the project instead (#222) made it impossible to bulk-add the rest of a
+  // project that was already selected via a single point.
   async function toggleProjectByPoint(p) {
     const pk = `${p.db_id ?? '?'}||${p.ProjectId}`
     const proj = projIndex.current[pk]
-    const isSelected = (selectedProjects || []).some(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` === pk)
-    if (isSelected) {
+    const pointSelected = selectedIds.has(`${p.db_id ?? '?'}_${p.PointId}`)
+    if (pointSelected) {
       setSelectedProjects(prev => (prev || []).filter(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` !== pk))
       setSelectedPoints(prev => (prev || []).filter(pt => `${pt.db_id ?? '?'}||${pt.ProjectId}` !== pk))
       setLoadStatus(`Removed project ${proj?.ProjectNo ?? p.ProjectId} and its points from the selection`)
@@ -417,7 +420,8 @@ export default function SelectionMap() {
       setLoadStatus('Parent project not found in the project list')
       return
     }
-    setSelectedProjects(prev => [...(prev || []), proj])
+    setSelectedProjects(prev =>
+      (prev || []).some(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` === pk) ? prev : [...(prev || []), proj])
     try {
       const rows = await invoke('get_points', { projectIds: [{ db_id: p.db_id, ProjectId: p.ProjectId }] })
       setSelectedPoints(prev => {

@@ -19,7 +19,15 @@ export default function MapAddonsTab() {
   const hasFolder = !!connection?.output_folder
   const userAddons = addons.filter(a => !a.builtin) // built-ins managed in the on-map panel
 
-  const [form, setForm] = useState({ name: '', url: '', layer: '', project: true, selection: true })
+  const [form, setForm] = useState({ name: '', url: '', layer: '', token: '', project: true, selection: true })
+
+  // #224: services like api.dataforsyningen.dk require a `token` query param —
+  // append it for GetCapabilities probes when the user supplied one.
+  const withToken = (url, token) => {
+    const t = (token || '').trim()
+    if (!t) return url
+    return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t)
+  }
   const [msg, setMsg] = useState(null)
   const [layers, setLayers] = useState([])           // [{ name, title }] from GetCapabilities
   const [connecting, setConnecting] = useState(false)
@@ -28,7 +36,7 @@ export default function MapAddonsTab() {
   async function connect() {
     setConnectMsg(null); setConnecting(true)
     try {
-      const list = await invoke('wms_capabilities', { url: form.url.trim() })
+      const list = await invoke('wms_capabilities', { url: withToken(form.url.trim(), form.token) })
       const arr = Array.isArray(list) ? list : []
       setLayers(arr)
       setConnectMsg({ ok: arr.length > 0, text: `${arr.length} layer${arr.length === 1 ? '' : 's'} found` })
@@ -55,11 +63,12 @@ export default function MapAddonsTab() {
       type: 'wms',
       url: form.url.trim(),
       layer: form.layer.trim(),
+      token: form.token.trim(),
       maps: { project: form.project, selection: form.selection },
       visible: true,
     }
     updateNow([...addons, addon])
-    setForm({ name: '', url: '', layer: '', project: true, selection: true })
+    setForm({ name: '', url: '', layer: '', token: '', project: true, selection: true })
     setMsg({ ok: true, text: `Added "${addon.name}".` })
   }
 
@@ -235,18 +244,48 @@ export default function MapAddonsTab() {
                     <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {a.type === 'geojson' && (
-                      <button
-                        className="btn-secondary btn-sm"
-                        onClick={() => setEditId(editId === a.id ? null : a.id)}
-                        style={{ marginRight: '.35rem' }}
-                      >
-                        {editId === a.id ? 'Close' : 'Edit'}
-                      </button>
-                    )}
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => setEditId(editId === a.id ? null : a.id)}
+                      style={{ marginRight: '.35rem' }}
+                    >
+                      {editId === a.id ? 'Close' : 'Edit'}
+                    </button>
                     <button className="btn-secondary btn-sm" onClick={() => remove(a.id)}>Delete</button>
                   </td>
                 </tr>
+                {/* #224: WMS edit panel — token (and layer) adjustable after the fact. */}
+                {editId === a.id && a.type !== 'geojson' && (
+                  <tr>
+                    <td colSpan={7} style={{ background: '#f8fafc' }}>
+                      <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap', padding: '.3rem 0' }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
+                          Token
+                          <input
+                            type="text"
+                            value={a.token || ''}
+                            onChange={e => updateLive(a.id, { token: e.target.value.trim() })}
+                            placeholder="service token (optional)"
+                            style={{ minWidth: 260, marginBottom: 0 }}
+                          />
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
+                          Layer
+                          <input
+                            type="text"
+                            value={a.layer || ''}
+                            onChange={e => updateLive(a.id, { layer: e.target.value })}
+                            placeholder="layer name"
+                            style={{ minWidth: 180, marginBottom: 0 }}
+                          />
+                        </label>
+                        <span className="hint" style={{ margin: 0 }}>
+                          The token is sent as <code>token=…</code> with every tile request (api.dataforsyningen.dk needs one).
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
                 {editId === a.id && a.type === 'geojson' && (
                   <tr>
                     <td colSpan={7} style={{ background: '#f8fafc' }}>
@@ -313,6 +352,17 @@ export default function MapAddonsTab() {
             placeholder="layer name" style={{ minWidth: 160 }}
           />
           {connectMsg && <span className={`msg ${connectMsg.ok ? 'ok' : 'err'}`} style={{ margin: 0 }}>{connectMsg.text}</span>}
+        </div>
+        <label>Token</label>
+        <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text" value={form.token}
+            onChange={e => setForm({ ...form, token: e.target.value })}
+            placeholder="service token (optional)" style={{ minWidth: 260 }}
+          />
+          <span className="hint" style={{ margin: 0 }}>
+            Required by e.g. api.dataforsyningen.dk — sent as <code>token=…</code> with every request.
+          </span>
         </div>
         <label>Show on</label>
         <div style={{ display: 'flex', gap: '1rem' }}>
