@@ -362,10 +362,14 @@ export default function PointsPage({ setPage }) {
     [points, coordinateSystem],
   )
 
-  // #248: Excel-style column filters — applied to the DISPLAY of both tables
-  // (the selection itself always lives on the full checked map / viewPoints).
-  const { filters: colFilters, setColFilter, filteredItems: colFilteredPoints } =
-    useColumnFilters(viewPoints)
+  // #248/#252: Excel-style column filters — PER TABLE.  Each table filters
+  // its own base (checked vs. unchecked rows) with its own state, so a funnel
+  // on one table never narrows the other; dropdowns list only that table's
+  // values.  The selection itself always lives on the full checked map.
+  const selBase   = useMemo(() => viewPoints.filter(p => checked[ptKey(p)]),  [viewPoints, checked])
+  const availBase = useMemo(() => viewPoints.filter(p => !checked[ptKey(p)]), [viewPoints, checked])
+  const selCF   = useColumnFilters(selBase)
+  const availCF = useColumnFilters(availBase)
 
   // ── Derived: selected vs. available, each with its OWN search (#190) ──────
   function applySort(arr) {
@@ -387,17 +391,17 @@ export default function PointsPage({ setPage }) {
 
   const selectedSorted = useMemo(() => {
     const q = selectedSearch.toLowerCase()
-    const sel = colFilteredPoints.filter(p => checked[ptKey(p)])
+    const sel = selCF.filteredItems
     return applySort(q ? sel.filter(p => matchesQuery(p, q)) : sel)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colFilteredPoints, checked, selectedSearch, sortCol, sortDir])
+  }, [selCF.filteredItems, selectedSearch, sortCol, sortDir])
 
   const availableFiltered = useMemo(() => {
     const q = search.toLowerCase()
-    const avail = colFilteredPoints.filter(p => !checked[ptKey(p)])
+    const avail = availCF.filteredItems
     return applySort(q ? avail.filter(p => matchesQuery(p, q)) : avail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colFilteredPoints, checked, search, sortCol, sortDir])
+  }, [availCF.filteredItems, search, sortCol, sortDir])
 
   // Issue #89: paginated Available table with infinite scroll.
   const [visibleCount, setVisibleCount] = useState(PAGE_STEP)
@@ -510,7 +514,7 @@ export default function PointsPage({ setPage }) {
               )}
             </div>
             <PointsTable
-              colFilter={{ items: viewPoints, filters: colFilters, setColFilter }}
+              colFilter={{ items: selBase, filters: selCF.filters, setColFilter: selCF.setColFilter }}
               items={selectedSorted}
               checkedFlag={true}
               onToggle={toggle}
@@ -553,7 +557,7 @@ export default function PointsPage({ setPage }) {
               </button>
             </div>
             <PointsTable
-              colFilter={{ items: viewPoints, filters: colFilters, setColFilter }}
+              colFilter={{ items: availBase, filters: availCF.filters, setColFilter: availCF.setColFilter }}
               items={availableSlice}
               checkedFlag={false}
               onToggle={toggle}

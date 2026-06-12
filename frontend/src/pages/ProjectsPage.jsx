@@ -324,20 +324,24 @@ export default function ProjectsPage({ setPage }) {
     })
   }
 
-  // #248: Excel-style column filters — applied to the DISPLAY of both tables
-  // (selection state itself always lives on the full `projects` list).
-  const { filters: colFilters, setColFilter, filteredItems: colFilteredProjects } =
-    useColumnFilters(projects)
+  // #248/#252: Excel-style column filters — PER TABLE.  Each table filters
+  // its own base (selected vs. unselected rows) with its own state, so a
+  // funnel on one table never narrows the other; dropdowns list only that
+  // table's values.  Selection state itself always lives on the full list.
+  const selBase   = useMemo(() => projects.filter(p => checked[projKey(p)]),  [projects, checked])
+  const availBase = useMemo(() => projects.filter(p => !checked[projKey(p)]), [projects, checked])
+  const selCF   = useColumnFilters(selBase)
+  const availCF = useColumnFilters(availBase)
 
   const selectedSorted = useMemo(() => {
-    return applySort(colFilteredProjects.filter(p => checked[projKey(p)]))
+    return applySort(selCF.filteredItems)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colFilteredProjects, checked, sortCol, sortDir])
+  }, [selCF.filteredItems, sortCol, sortDir])
 
   // Bottom table: only the unselected rows, search-filtered.
   const unselectedFiltered = useMemo(() => {
     const q = search.toLowerCase()
-    const unsel = colFilteredProjects.filter(p => !checked[projKey(p)])
+    const unsel = availCF.filteredItems
     const filtered = !q ? unsel : unsel.filter(p =>
       p.ProjectNo?.toLowerCase().includes(q) ||
       p.Title?.toLowerCase().includes(q) ||
@@ -345,7 +349,7 @@ export default function ProjectsPage({ setPage }) {
     )
     return applySort(filtered)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colFilteredProjects, checked, search, sortCol, sortDir])
+  }, [availCF.filteredItems, search, sortCol, sortDir])
 
   // Issue #83: only render the first N rows of the (sorted, search-filtered)
   // unselected set; infinite scroll appends more as the user nears the
@@ -510,7 +514,7 @@ export default function ProjectsPage({ setPage }) {
               )}
             </div>
             <ProjectsTable
-              colFilter={{ items: projects, filters: colFilters, setColFilter }}
+              colFilter={{ items: selBase, filters: selCF.filters, setColFilter: selCF.setColFilter }}
               items={selectedSorted}
               checkedFlag={true}
               onToggle={toggle}
@@ -552,7 +556,7 @@ export default function ProjectsPage({ setPage }) {
               </button>
             </div>
             <ProjectsTable
-              colFilter={{ items: projects, filters: colFilters, setColFilter }}
+              colFilter={{ items: availBase, filters: availCF.filters, setColFilter: availCF.setColFilter }}
               items={unselectedSlice}
               checkedFlag={false}
               onToggle={toggle}

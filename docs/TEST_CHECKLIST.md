@@ -250,8 +250,8 @@ Performance (load a few thousand points first):
 ### 6x. Excel-style column filters (#248)
 
 - [ ] Every filterable header shows a small **▾** funnel; clicking opens a dropdown with a search box, Select all / Clear, and a checkbox per unique value with counts; `(blank)` covers empty cells; funnel turns blue when a filter is active.
-- [ ] **Projects**: filtering (e.g. DB = DB2) applies to BOTH the Selected and Available tables; "Select all" in the Available header only selects the filtered rows (Excel semantics).
-- [ ] **Points**: same shared behaviour across both tables; works with the existing search boxes (they compose).
+- [ ] **Projects** (#252): each table filters INDEPENDENTLY — a funnel on Selected does not narrow Available (and vice versa); dropdowns list only that table's values; "Select all" in the Available header only selects its filtered rows.
+- [ ] **Points** (#252): same per-table independence; works with the existing search boxes (they compose).
 - [ ] **Data → preview**: filters on any column of a big datasheet open instantly and compose with the search; columns with thousands of values show "type to narrow".
 - [ ] **CPT point table**: filter PointNo/DB/Project; editing a value on a FILTERED view updates the right row (saved xlsx correct).
 - [ ] **CPT layer table**: Strata column filter; edits land on the right layer.
