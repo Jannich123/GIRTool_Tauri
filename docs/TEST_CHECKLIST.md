@@ -240,6 +240,13 @@ Performance (load a few thousand points first):
 - [ ] Remove a database + Save & connect all → its projects drop out of the list the same way.
 - [ ] Map parent-project selection works for points of the newly added database after the re-index lands.
 
+### 6w. Collapsible sidebar (#244)
+
+- [ ] **«** button next to the logo collapses the menu to icons only (~64 px); **»** expands it back.
+- [ ] Collapsed: hovering an icon shows the page name; clicking navigates as usual; active page stays highlighted.
+- [ ] Collapsed: logo text, project-folder name (dot stays), pop-out ↗ arrows hidden; Refresh + Settings show as icons.
+- [ ] The collapsed/expanded choice survives an app restart (and is per-window — a pop-out can differ).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

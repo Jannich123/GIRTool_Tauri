@@ -32,7 +32,43 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
   flex-direction: column;
   padding: 1.25rem 0;
   flex-shrink: 0;
+  transition: width .15s ease;
 }
+
+/* #244: icon-only mode — toggled by the «/» button next to the logo. */
+.sidebar.collapsed { width: 64px; }
+
+.sidebar-collapse-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 4px;
+  color: rgba(255,255,255,.7);
+  font-size: .85rem;
+  line-height: 1.4;
+  padding: 0 .4rem;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.sidebar-collapse-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
+
+.sidebar.collapsed .sidebar-logo {
+  flex-direction: column;
+  gap: .5rem;
+  padding: 0 0 .85rem;
+  align-items: center;
+}
+.sidebar.collapsed .sidebar-logo > span { display: none; }
+.sidebar.collapsed .sidebar-collapse-btn { margin-left: 0; }
+
+.sidebar.collapsed .sidebar-status { justify-content: center; padding: .75rem .25rem; }
+.sidebar.collapsed .sidebar-status-text { display: none; }
+
+.nav-icon { display: inline-block; width: 1.55em; flex-shrink: 0; }
+.sidebar.collapsed .nav-label  { display: none; }
+.sidebar.collapsed .nav-item   { text-align: center; padding: .65rem 0; }
+.sidebar.collapsed .nav-icon   { width: auto; }
+.sidebar.collapsed .nav-popout { display: none; }
 
 .sidebar-logo {
   display: flex;
