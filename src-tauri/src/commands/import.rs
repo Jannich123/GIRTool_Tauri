@@ -1,15 +1,21 @@
-// Data import wizard (issue #278): bring CSV / Excel files (or a folder of
-// them) into an existing or new datasheet under {output}/Datasheets/.
+// Data import wizard (issues #278, #280): bring CSV / Excel files (or a
+// folder of them) into an existing or new datasheet under
+// {output}/Datasheets/.
 //
 // Flow (frontend Data → Import tab):
-//   1. pick_import_path  — native file/folder dialog
-//   2. import_preview    — list matched files + a grid of the first file
-//   3. import_data       — append mapped rows to the target datasheet,
-//                          DB = "imported", and upsert points.xlsx
+//   1. pick_import_path   — native file/folder dialog
+//   2. import_preview     — list matched files + a grid of the first file
+//   3. datasheet_columns  — destination column list: the existing sheet's
+//                           columns, or the SELECT aliases of the datasheet
+//                           query with that fname (generated-table case)
+//   4. import_data        — append mapped rows, resolve the IDs, upsert
+//                           points.xlsx
 //
-// Points policy (per the issue): a PointNo not present in points.xlsx is
-// inserted with db_id/ProjectId "imported"; an existing PointNo only gets its
-// MISSING fields (X1/Y1/Z1/Projection1) filled — never overwritten.
+// IDs (#280): DB / ProjectId / PointId / PointNo each come from a source
+// column, the file name, or custom text.  Custom text may contain a
+// `{PointNo}` placeholder replaced per row.  Points policy: a PointNo not in
+// points.xlsx is inserted; an existing PointNo only gets its MISSING fields
+// (X1/Y1/Z1/Projection1) filled — never overwritten.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,8 +29,8 @@ use tauri_plugin_dialog::DialogExt;
 use crate::state::AppState;
 
 use super::download::{
-    datasheets_dir, parse_number_locale, persist_datasheet_meta, read_existing_datasheet,
-    write_datasheet, write_datasheet_cache, FormulaMap,
+    datasheets_dir, parse_number_locale, persist_datasheet_meta, read_datasheet_cached,
+    read_existing_datasheet, write_datasheet, write_datasheet_cache, FormulaMap,
 };
 use super::points_xlsx::{
     points_xlsx_path, read_rows as read_points_rows, write_workbook as write_points_workbook,
@@ -197,6 +203,175 @@ fn value_to_f64(v: &Value) -> Option<f64> {
     }
 }
 
+// ── Destination columns from the datasheet queries (#280) ─────────────────────
+
+/// Pull the output column names out of a datasheet query's SELECT list.
+///
+/// House SQL format (commands/queries.rs): one column per line, optional
+/// `AS [Alias]`, brackets around identifiers, function wrapping like
+/// `round(A.[X1], 2) AS [X1]`.  The scan is paren-depth aware so commas
+/// inside `CAST(... AS VARCHAR(MAX))` / `round(x, 2)` don't split items.
+fn parse_select_aliases(sql: &str) -> Vec<String> {
+    // ASCII-only uppercase keeps byte offsets aligned with `sql` even when
+    // identifiers contain æ/ø/å.
+    let upper = sql.to_ascii_uppercase();
+    let Some(sel) = upper.find("SELECT") else { return Vec::new() };
+    let body_start = sel + "SELECT".len();
+
+    // Matching top-level FROM.
+    let bytes = upper.as_bytes();
+    let mut depth = 0i32;
+    let mut from_at = None;
+    let mut i = body_start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b'F' if depth == 0
+                && upper[i..].starts_with("FROM")
+                && bytes.get(i.wrapping_sub(1)).map_or(true, |c| c.is_ascii_whitespace())
+                && bytes.get(i + 4).map_or(true, |c| c.is_ascii_whitespace() || *c == b'(') =>
+            {
+                from_at = Some(i);
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let Some(from_at) = from_at else { return Vec::new() };
+    let list = &sql[body_start..from_at];
+
+    // Split on depth-0 commas.
+    let mut items: Vec<String> = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for ch in list.chars() {
+        match ch {
+            '(' => { depth += 1; cur.push(ch); }
+            ')' => { depth -= 1; cur.push(ch); }
+            ',' if depth == 0 => { items.push(cur.clone()); cur.clear(); }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() {
+        items.push(cur);
+    }
+
+    let strip_ident = |s: &str| -> String {
+        s.trim()
+            .trim_matches(|c| c == '[' || c == ']' || c == '"' || c == '\'')
+            .trim()
+            .to_string()
+    };
+
+    items
+        .iter()
+        .map(|raw| {
+            let mut item = raw.trim();
+            // First item may carry DISTINCT / TOP n.
+            for kw in ["DISTINCT", "TOP"] {
+                let up = item.to_ascii_uppercase();
+                if let Some(rest) = up.strip_prefix(kw) {
+                    if rest.starts_with(char::is_whitespace) {
+                        item = item[kw.len()..].trim_start();
+                        // TOP is followed by its count.
+                        if kw == "TOP" {
+                            item = item.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start();
+                        }
+                    }
+                }
+            }
+            // Depth-0 ` AS ` — the LAST one names the column (CAST has its
+            // own AS, but only inside parens).
+            let up = item.to_ascii_uppercase();
+            let mut depth = 0i32;
+            let mut alias_at = None;
+            for (i, ch) in up.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    'A' if depth == 0 && up[i..].starts_with("AS")
+                        && up[..i].ends_with(char::is_whitespace)
+                        && up[i + 2..].starts_with(char::is_whitespace) =>
+                    {
+                        alias_at = Some(i);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(a) = alias_at {
+                return strip_ident(&item[a + 2..]);
+            }
+            // No alias: take the part after the last depth-0 '.'.
+            let tail = item.rsplit('.').next().unwrap_or(item);
+            strip_ident(tail)
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Case-insensitive position of any of `names` in `cols`.
+fn find_ci(cols: &[String], names: &[&str]) -> Option<usize> {
+    cols.iter().position(|c| {
+        let t = c.trim();
+        names.iter().any(|n| t.eq_ignore_ascii_case(n))
+    })
+}
+
+fn sanitize_fname(raw: &str) -> Result<String, String> {
+    let fname = raw.trim().trim_end_matches(".xlsx").trim().to_string();
+    if fname.is_empty() {
+        return Err("Choose a datasheet name to import into.".into());
+    }
+    if fname.contains(['/', '\\']) {
+        return Err("The datasheet name cannot contain path separators.".into());
+    }
+    Ok(fname)
+}
+
+/// Destination column list for the mapping UI: the existing sheet's columns
+/// when the file is there, otherwise the SELECT aliases of the datasheet
+/// query named `fname` (prefixed with DB — every downloaded sheet carries a
+/// database tag).  Empty when neither exists.
+#[tauri::command]
+pub async fn datasheet_columns(fname: String, state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let fname = sanitize_fname(&fname)?;
+    let queries = super::queries::load_queries(&state);
+    tokio::task::spawn_blocking(move || {
+        // 1. Existing sheet → its real columns (cache first, then xlsx).
+        if let Some(cached) = read_datasheet_cached(&folder, &fname) {
+            let cols: Vec<String> = cached["columns"]
+                .as_array()
+                .map(|a| a.iter().map(|c| c.as_str().unwrap_or("").to_string()).collect())
+                .unwrap_or_default();
+            if !cols.is_empty() {
+                return Ok(cols);
+            }
+        }
+        let path = datasheets_dir(&folder).join(format!("{fname}.xlsx"));
+        if path.exists() {
+            if let Some((cols, _, _)) = read_existing_datasheet(&path) {
+                if !cols.is_empty() {
+                    return Ok(cols);
+                }
+            }
+        }
+        // 2. Generated table: SELECT aliases of the query with this fname.
+        if let Some(q) = queries.iter().find(|q| q.fname.eq_ignore_ascii_case(&fname)) {
+            let mut cols = parse_select_aliases(&q.sql_script);
+            if !cols.is_empty() && find_ci(&cols, &["db", "db_id"]).is_none() {
+                cols.insert(0, "DB".to_string());
+            }
+            return Ok(cols);
+        }
+        Ok(Vec::new())
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /// Native picker for the import source.  `mode` is "file" or "folder".
@@ -250,6 +425,26 @@ pub async fn import_preview(path: String) -> Result<Value, String> {
     .map_err(|e| format!("internal task error: {e}"))?
 }
 
+// ── Import request (#280 shape) ───────────────────────────────────────────────
+
+/// Where an ID value comes from: `kind` is "column" (value = 0-based source
+/// column index), "filename" (the file's stem) or "text" (a literal, with an
+/// optional `{PointNo}` placeholder replaced per row).
+#[derive(Debug, Deserialize)]
+pub struct IdSource {
+    pub kind: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IdSpec {
+    pub db: IdSource,
+    pub project_id: IdSource,
+    pub point_id: IdSource,
+    pub point_no: IdSource,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MapEntry {
     /// Datasheet column to write into (created when missing).
@@ -266,9 +461,57 @@ pub struct ImportRequest {
     pub fname: String,
     /// 1-based row where data starts in every file.
     pub data_row: usize,
-    /// "filename" or "col:<0-based idx>".
-    pub point_no_source: String,
+    /// ID sources — all four are required (#280).
+    pub ids: IdSpec,
+    /// Destination column list shown in the UI — unioned into the sheet in
+    /// this order so a generated table matches its query schema even where
+    /// nothing is mapped.
+    #[serde(default)]
+    pub columns: Vec<String>,
     pub mapping: Vec<MapEntry>,
+}
+
+/// Validated form of an IdSource.
+enum IdValue {
+    Col(usize),
+    FileStem,
+    Text(String),
+}
+
+impl IdValue {
+    fn parse(src: &IdSource, label: &str) -> Result<IdValue, String> {
+        match src.kind.as_str() {
+            "column" => src
+                .value
+                .trim()
+                .parse::<usize>()
+                .map(IdValue::Col)
+                .map_err(|_| format!("{label}: pick a source column.")),
+            "filename" => Ok(IdValue::FileStem),
+            "text" => {
+                let t = src.value.trim();
+                if t.is_empty() {
+                    Err(format!("{label}: fill in the custom text before importing."))
+                } else {
+                    Ok(IdValue::Text(t.to_string()))
+                }
+            }
+            other => Err(format!("{label}: unknown source kind '{other}'.")),
+        }
+    }
+
+    /// Resolve for one row.  `point_no` is the already-resolved PointNo for
+    /// the `{PointNo}` placeholder (None while resolving PointNo itself).
+    fn resolve(&self, row: &[Value], stem: &str, point_no: Option<&str>) -> String {
+        match self {
+            IdValue::Col(i) => row.get(*i).map(value_to_string).unwrap_or_default(),
+            IdValue::FileStem => stem.to_string(),
+            IdValue::Text(t) => match point_no {
+                Some(pn) => t.replace("{PointNo}", pn),
+                None => t.clone(),
+            },
+        }
+    }
 }
 
 /// Case-insensitive find-or-append of a column name; returns its index.
@@ -292,34 +535,28 @@ pub async fn import_data(req: ImportRequest, state: State<'_, AppState>) -> Resu
         .map_err(|e| format!("internal task error: {e}"))?
 }
 
+/// First-seen identity + coordinates per imported PointNo, feeding the
+/// points.xlsx upsert.
+#[derive(Default, Clone)]
+struct PointSeed {
+    db: String,
+    project_id: String,
+    point_id: String,
+    x1: Option<f64>,
+    y1: Option<f64>,
+    z1: Option<f64>,
+    projection: String,
+}
+
 fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
-    let fname = req
-        .fname
-        .trim()
-        .trim_end_matches(".xlsx")
-        .trim()
-        .to_string();
-    if fname.is_empty() {
-        return Err("Choose a datasheet name to import into.".into());
-    }
-    if fname.contains(['/', '\\']) {
-        return Err("The datasheet name cannot contain path separators.".into());
-    }
-    if req.mapping.is_empty() && req.point_no_source.is_empty() {
-        return Err("Map at least one column before importing.".into());
-    }
+    let fname = sanitize_fname(&req.fname)?;
+
+    let id_db = IdValue::parse(&req.ids.db, "DB")?;
+    let id_project = IdValue::parse(&req.ids.project_id, "ProjectId")?;
+    let id_point = IdValue::parse(&req.ids.point_id, "PointId")?;
+    let id_pn = IdValue::parse(&req.ids.point_no, "PointNo")?;
 
     let files = resolve_files(&req.path)?;
-
-    // PointNo source: per-row column value or the file's stem.
-    let pn_col: Option<usize> = req
-        .point_no_source
-        .strip_prefix("col:")
-        .and_then(|s| s.trim().parse::<usize>().ok());
-    let pn_from_filename = req.point_no_source == "filename";
-    if pn_col.is_none() && !pn_from_filename {
-        return Err("Choose where the PointNo comes from (a column or the file name).".into());
-    }
 
     // ── Target datasheet: load existing, union columns ────────────────────
     let dir = datasheets_dir(folder);
@@ -332,14 +569,33 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
     };
 
     let mut new_columns: Vec<String> = Vec::new();
-    let db_idx = col_index(&mut columns, "DB", &mut new_columns);
-    let pn_idx = col_index(&mut columns, "PointNo", &mut new_columns);
+    // Destination list first, in UI order, so a generated table matches its
+    // query schema (unmapped columns exist but stay blank).
+    for c in &req.columns {
+        if !c.trim().is_empty() {
+            col_index(&mut columns, c, &mut new_columns);
+        }
+    }
+    // Database tag + PointNo always exist.  Downloaded sheets call the tag
+    // `db_id` (multi-DB prepend) — reuse it instead of adding a second one.
+    let db_idx = match find_ci(&columns, &["db", "db_id"]) {
+        Some(i) => i,
+        None => col_index(&mut columns, "DB", &mut new_columns),
+    };
+    let pn_idx = match find_ci(&columns, &["pointno"]) {
+        Some(i) => i,
+        None => col_index(&mut columns, "PointNo", &mut new_columns),
+    };
     let map_idx: Vec<(usize, usize)> = req
         .mapping
         .iter()
         .filter(|m| !m.target.trim().is_empty())
         .map(|m| (col_index(&mut columns, &m.target, &mut new_columns), m.source))
         .collect();
+    // ProjectId / PointId values land in the sheet only when it has such a
+    // column (most datasheet queries carry PointId).
+    let prj_idx = find_ci(&columns, &["projectid"]);
+    let pid_idx = find_ci(&columns, &["pointid"]);
 
     let width = columns.len();
     for row in rows.iter_mut() {
@@ -347,25 +603,18 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
     }
 
     // Column indices (case-insensitive) feeding the points.xlsx upsert.
-    let find_col = |name: &str| {
-        columns
-            .iter()
-            .position(|c| c.trim().eq_ignore_ascii_case(name))
-    };
     let (x1_idx, y1_idx, z1_idx, proj_idx) = (
-        find_col("X1"),
-        find_col("Y1"),
-        find_col("Z1"),
-        find_col("Projection1"),
+        find_ci(&columns, &["x1"]),
+        find_ci(&columns, &["y1"]),
+        find_ci(&columns, &["z1"]),
+        find_ci(&columns, &["projection1"]),
     );
 
     // ── Append data rows from every file ──────────────────────────────────
     let start = req.data_row.max(1) - 1; // 1-based → 0-based
     let mut rows_added = 0usize;
     let mut rows_skipped = 0usize;
-    // PointNo → first non-empty coordinate values seen during this import.
-    let mut point_info: HashMap<String, (Option<f64>, Option<f64>, Option<f64>, String)> =
-        HashMap::new();
+    let mut point_info: HashMap<String, PointSeed> = HashMap::new();
     let mut point_order: Vec<String> = Vec::new();
 
     for file in &files {
@@ -380,40 +629,62 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
             if src.iter().all(|v| value_to_string(v).is_empty()) {
                 continue;
             }
-            let pn = match pn_col {
-                Some(i) => src.get(i).map(value_to_string).unwrap_or_default(),
-                None => stem.clone(),
-            };
+            let pn = id_pn.resolve(src, &stem, None);
             if pn.is_empty() {
                 rows_skipped += 1;
                 continue;
             }
+            // Per-row blanks (column-sourced IDs) fall back to the import tag.
+            let db = match id_db.resolve(src, &stem, Some(&pn)) {
+                s if s.is_empty() => "imported".to_string(),
+                s => s,
+            };
+            let project_id = match id_project.resolve(src, &stem, Some(&pn)) {
+                s if s.is_empty() => "imported".to_string(),
+                s => s,
+            };
+            let point_id = match id_point.resolve(src, &stem, Some(&pn)) {
+                s if s.is_empty() => format!("imported_{pn}"),
+                s => s,
+            };
 
             let mut row = vec![Value::Null; width];
-            row[db_idx] = Value::String("imported".into());
-            row[pn_idx] = Value::String(pn.clone());
             for &(tgt, srcix) in &map_idx {
                 if let Some(v) = src.get(srcix) {
                     row[tgt] = v.clone();
                 }
             }
+            // IDs win over any mapping that targets the same column.
+            row[db_idx] = Value::String(db.clone());
+            row[pn_idx] = Value::String(pn.clone());
+            if let Some(i) = prj_idx {
+                row[i] = Value::String(project_id.clone());
+            }
+            if let Some(i) = pid_idx {
+                row[i] = Value::String(point_id.clone());
+            }
 
-            let info = point_info.entry(pn.clone()).or_insert_with(|| {
+            let seed = point_info.entry(pn.clone()).or_insert_with(|| {
                 point_order.push(pn.clone());
-                (None, None, None, String::new())
+                PointSeed {
+                    db: db.clone(),
+                    project_id: project_id.clone(),
+                    point_id: point_id.clone(),
+                    ..PointSeed::default()
+                }
             });
-            if info.0.is_none() {
-                info.0 = x1_idx.and_then(|i| value_to_f64(&row[i]));
+            if seed.x1.is_none() {
+                seed.x1 = x1_idx.and_then(|i| value_to_f64(&row[i]));
             }
-            if info.1.is_none() {
-                info.1 = y1_idx.and_then(|i| value_to_f64(&row[i]));
+            if seed.y1.is_none() {
+                seed.y1 = y1_idx.and_then(|i| value_to_f64(&row[i]));
             }
-            if info.2.is_none() {
-                info.2 = z1_idx.and_then(|i| value_to_f64(&row[i]));
+            if seed.z1.is_none() {
+                seed.z1 = z1_idx.and_then(|i| value_to_f64(&row[i]));
             }
-            if info.3.is_empty() {
+            if seed.projection.is_empty() {
                 if let Some(i) = proj_idx {
-                    info.3 = value_to_string(&row[i]);
+                    seed.projection = value_to_string(&row[i]);
                 }
             }
 
@@ -423,7 +694,9 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
     }
 
     if rows_added == 0 {
-        return Err("No data rows found — check the first-data-row setting and the PointNo source.".into());
+        return Err(
+            "No data rows found — check the first-data-row setting and the PointNo source.".into(),
+        );
     }
 
     // ── Write the datasheet + sidecar cache + meta ────────────────────────
@@ -446,7 +719,7 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
     let mut points_updated = 0usize;
 
     for pn in &point_order {
-        let (x1, y1, z1, proj) = point_info.get(pn).cloned().unwrap_or_default();
+        let seed = point_info.get(pn).cloned().unwrap_or_default();
         match points
             .iter_mut()
             .find(|p| p.point_no.trim().eq_ignore_ascii_case(pn))
@@ -454,36 +727,36 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
             Some(p) => {
                 // Existing point: only fill what is missing.
                 let mut changed = false;
-                if p.x1.is_none() && x1.is_some() {
-                    p.x1 = x1;
+                if p.x1.is_none() && seed.x1.is_some() {
+                    p.x1 = seed.x1;
                     changed = true;
                 }
-                if p.y1.is_none() && y1.is_some() {
-                    p.y1 = y1;
+                if p.y1.is_none() && seed.y1.is_some() {
+                    p.y1 = seed.y1;
                     changed = true;
                 }
-                if p.z1.is_none() && z1.is_some() {
-                    p.z1 = z1;
+                if p.z1.is_none() && seed.z1.is_some() {
+                    p.z1 = seed.z1;
                     changed = true;
                 }
-                if p.projection1.trim().is_empty() && !proj.is_empty() {
-                    p.projection1 = proj.clone();
+                if p.projection1.trim().is_empty() && !seed.projection.is_empty() {
+                    p.projection1 = seed.projection.clone();
                     changed = true;
                 }
-                if p.origin_x1.is_none() && x1.is_some() {
-                    p.origin_x1 = x1;
+                if p.origin_x1.is_none() && seed.x1.is_some() {
+                    p.origin_x1 = seed.x1;
                     changed = true;
                 }
-                if p.origin_y1.is_none() && y1.is_some() {
-                    p.origin_y1 = y1;
+                if p.origin_y1.is_none() && seed.y1.is_some() {
+                    p.origin_y1 = seed.y1;
                     changed = true;
                 }
-                if p.origin_z1.is_none() && z1.is_some() {
-                    p.origin_z1 = z1;
+                if p.origin_z1.is_none() && seed.z1.is_some() {
+                    p.origin_z1 = seed.z1;
                     changed = true;
                 }
-                if p.origin_projection1.trim().is_empty() && !proj.is_empty() {
-                    p.origin_projection1 = proj.clone();
+                if p.origin_projection1.trim().is_empty() && !seed.projection.is_empty() {
+                    p.origin_projection1 = seed.projection.clone();
                     changed = true;
                 }
                 if changed {
@@ -492,18 +765,18 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
             }
             None => {
                 points.push(SelectedPoint {
-                    db_id: "imported".into(),
-                    project_id: "imported".into(),
-                    point_id: format!("imported_{pn}"),
+                    db_id: seed.db,
+                    project_id: seed.project_id,
+                    point_id: seed.point_id,
                     point_no: pn.clone(),
-                    x1,
-                    y1,
-                    z1,
-                    projection1: proj.clone(),
-                    origin_x1: x1,
-                    origin_y1: y1,
-                    origin_z1: z1,
-                    origin_projection1: proj,
+                    x1: seed.x1,
+                    y1: seed.y1,
+                    z1: seed.z1,
+                    projection1: seed.projection.clone(),
+                    origin_x1: seed.x1,
+                    origin_y1: seed.y1,
+                    origin_z1: seed.z1,
+                    origin_projection1: seed.projection,
                 });
                 points_added += 1;
             }
@@ -523,4 +796,33 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
         "new_columns": new_columns,
         "fname": fname,
     }))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::parse_select_aliases;
+
+    #[test]
+    fn parses_house_sql_aliases() {
+        // Real builtin (commands/queries.rs POINTS_SQL) — covers CAST with an
+        // inner AS, round(x, 2) commas, plain A.[Col], unbracketed A.PointType
+        // and a two-word alias.
+        let cols = parse_select_aliases(crate::commands::queries::POINTS_SQL);
+        assert_eq!(
+            cols,
+            vec![
+                "ProjectId", "PointId", "PointNo", "ProjectNo", "PointType",
+                "X1", "Y1", "Z1", "Top", "Bottom", "Projection1",
+                "Level Reference", "Coordinate System",
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_headerless_select() {
+        let cols = parse_select_aliases("SELECT DISTINCT A.[Epsg], B.Name AS [CRS] FROM T");
+        assert_eq!(cols, vec!["Epsg", "CRS"]);
+    }
 }
