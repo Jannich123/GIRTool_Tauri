@@ -203,6 +203,16 @@ Performance (load a few thousand points first):
 - [ ] WMTS + Connect against a service WITH a GoogleMapsCompatible/3857 grid: layer dropdown lists multiple layers, Add stores layer/format/style/grid, tiles render on both maps (token supported).
 - [ ] WMS Connect flow unchanged (layer dropdown still works).
 
+### 6r. Danish-grid maps + WMTS builtins + source CRS on hover (#232)
+
+- [ ] Both maps open on the Danish grid: **Topo map (DK) WMTS** renders as default background (crisp cached tiles); Orthophoto (DK) WMTS toggles on in the layer panel.
+- [ ] **OpenStreetMap / Esri are gone** (web-mercator-only tiles can't render on the 25832 grid) — old saved entries disappear by themselves.
+- [ ] Settings → Map addons → Built-in table: the **Layer column is a dropdown** (topo_skaermkort / topo_skaermkort_tls; orto_foraar_wmts / _tls) — switching re-renders the layer; choice survives restart.
+- [ ] GEUS/Jupiter WMS overlays still render (now requested in EPSG:25832 — their native CRS); GeoJSON/file addons + all markers unchanged.
+- [ ] Zoom feels right: country → site (topo upsamples past level 13; ortho goes deeper); saved old zooms are clamped, then self-heal.
+- [ ] Adding a user WMTS now requires an EPSG:25832 grid (message names what was found); WMS addons must support 25832.
+- [ ] Hovering a point (selection map) / clicking (project map) shows **Source CRS: <original system>** (origin_Projection1/Projection1, labelled like the tables).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

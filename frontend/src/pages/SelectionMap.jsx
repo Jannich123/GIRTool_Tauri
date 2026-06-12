@@ -8,6 +8,7 @@ import { reproject, toLatLng, pointToLatLng, convertPoint, normaliseEpsg, CRS_LA
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 import CrsCursorReadout from '../components/CrsCursorReadout'
+import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom } from '../lib/crsDk'
 
 // Issue #153 (M4.1) + #155 (M4.2) + #159 (M4.3) — selection map.
 //
@@ -501,6 +502,7 @@ export default function SelectionMap() {
         Database: {p.db_id ?? '?'}<br />
         {z != null && <>Z1: {z} m<br /></>}
         {depth != null && <>Depth: {depth} m (Bottom − Top)<br /></>}
+        {srcCrsLabel(p) && <>Source CRS: {srcCrsLabel(p)}<br /></>}
         {crsLine && <>{crsLine}<br /></>}
         <span style={{ opacity: 0.7 }}>
           click = {selectedIds.has(id) ? 'deselect' : 'select'} point · double-click = whole project
@@ -517,6 +519,15 @@ export default function SelectionMap() {
     if (c?.X1 == null || c?.Y1 == null || !isFinite(Number(c.X1)) || !isFinite(Number(c.Y1))) return null
     return `${c.X1} · ${c.Y1} — ${CRS_LABELS[epsg] || epsg}`
   }, [coordinateSystem])
+
+  // #232: the point's ORIGINAL coordinate system as stored in the database
+  // (origin_Projection1 survives conversions; raw points carry Projection1).
+  const srcCrsLabel = useCallback((p) => {
+    const raw = p.origin_Projection1 ?? p.Projection1
+    if (raw == null || raw === '') return null
+    const epsg = normaliseEpsg(raw)
+    return (epsg && (CRS_LABELS[epsg] || epsg)) || String(raw)
+  }, [])
 
   const jupiterMarkers = useMemo(() => (
     jupiter.filter(f => jupiterCats[f.cat]).map(f => (
@@ -814,8 +825,12 @@ export default function SelectionMap() {
         }}
       >
         <MapContainer
-          center={mapStore.view ? [mapStore.view.lat, mapStore.view.lng] : [56, 10]}
-          zoom={mapStore.view ? mapStore.view.zoom : 7}
+          // #232: Danish EPSG:25832 tile grid — WMTS built-ins native, WMS
+          // layers requested in 25832, vector layers unaffected.
+          crs={CRS_DK}
+          maxZoom={DK_MAX_ZOOM}
+          center={mapStore.view ? [mapStore.view.lat, mapStore.view.lng] : DK_CENTER}
+          zoom={mapStore.view ? clampDkZoom(mapStore.view.zoom) : DK_DEFAULT_ZOOM}
           scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}
         >
           <MapRef onMap={setMap} />

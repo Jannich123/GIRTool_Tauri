@@ -216,6 +216,7 @@ export default function AddonLayers({ target, onPolygonClick }) {
             zIndex={zIndex}
             attribution={a.name}
             {...(a.maxZoom ? { maxZoom: a.maxZoom } : {})}
+            {...(a.maxNativeZoom ? { maxNativeZoom: a.maxNativeZoom } : {})}
           />
         )
       }
