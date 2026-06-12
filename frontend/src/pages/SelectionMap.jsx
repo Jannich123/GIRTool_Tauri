@@ -312,7 +312,9 @@ export default function SelectionMap() {
 
   // Lazy cyklogram summary on first hover (#174).  Bumps a counter so the open
   // tooltip re-renders when the result lands.
-  const [, setCykVersion] = useState(0)
+  // The version VALUE is consumed by the memoised Jupiter markers (#218) —
+  // bumping it recomputes their tooltips after a cyklogram loads.
+  const [cykVersion, setCykVersion] = useState(0)
   function loadCyklogram(f) {
     if (!f.cyklogram || cykCache.has(f.borid)) return
     cykCache.set(f.borid, 'loading')
