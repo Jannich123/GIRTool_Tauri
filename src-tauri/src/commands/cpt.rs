@@ -428,8 +428,10 @@ pub fn cpt_calc(inp: &CptInputs, p: &CptParams) -> Vec<(&'static str, Col)> {
             let t1 = (3.47 - qtn_v.log10()).powi(2);
             let t2 = (1.22 + fri.log10()).powi(2);
             let mut ic_new = (t1 + t2).sqrt();
-            let mut n_v = nan;
-            let mut cn_v = nan;
+            // Definitely assigned on the first loop pass (the loop body always
+            // writes both before any read or break) — no dummy initialisers.
+            let mut n_v;
+            let mut cn_v;
             let mut it = 0;
             loop {
                 n_v = f64::min(1.0, 0.381 * ic_new + 0.05 * (se / PATM) - 0.15);

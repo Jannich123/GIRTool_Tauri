@@ -145,10 +145,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn has_output_folder(&self) -> bool {
-        self.output_folder().is_some()
-    }
-
     /// Return the configured workspace folder.
     /// Prefers the top-level field; falls back to the primary DB's
     /// `output_folder` for back-compat with legacy settings.
