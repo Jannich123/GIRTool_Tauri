@@ -112,6 +112,16 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] Pick points on the MAP only, restart the app → the map picks are restored (they now persist to points.xlsx).
 - [ ] points.xlsx in the output folder mirrors the live selection after any change (map pick, table tick, project removal).
 
+### 6h. Buttons removed + addon polygons as boundaries (#209)
+
+- [ ] Projects: the "Load N projects →" button is gone — ticking rows IS the selection.
+- [ ] Points: the "Use N points →" button is gone — same.
+- [ ] Selection map: click a polygon from a Settings → Map addons layer (shapefile / Excel / CSV rendered as polygon) → it becomes the active boundary (dashed red) with ⬇ Load / ✚ Select inside / ✖ Remove inside / Cancel.
+- [ ] MultiPolygon addon: the sub-polygon you clicked is used.
+- [ ] While hand-drawing, clicking an addon polygon does NOT hijack the draw (clicks drop vertices as before).
+- [ ] Clicking a different addon polygon while one is staged switches the boundary; Cancel clears it.
+- [ ] Project map (top-level Map page): addon polygons unchanged — tooltip only.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

@@ -286,19 +286,8 @@ export default function ProjectsPage({ setPage }) {
     setChecked({})
   }
 
-  function confirm() {
-    const selected = projects.filter(p => checked[projKey(p)])
-    setSelectedProjects(selected)
-    // #205: prune points of deselected projects instead of clearing all —
-    // selection now applies live on every tick, so a blanket clear here would
-    // wipe a point selection the user just made elsewhere (e.g. on the map).
-    const keep = new Set(selected.map(projKey))
-    setSelectedPoints(prev => prev.filter(pt => keep.has(projKey(pt))))
-    // Issue #95: projects.xlsx is the SOLE persistence path for the project
-    // selection (auto-saved on every checkbox change via the useEffect
-    // above).  GIRTool_settings.json no longer carries selectedProjects.
-    setPage('points')
-  }
+  // (#209: the "Load N projects →" confirm button is gone — ticking rows
+  // live-applies the selection since #206, so it only duplicated navigation.)
 
   function handleSort(col) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -456,9 +445,6 @@ export default function ProjectsPage({ setPage }) {
           <button onClick={handleReloadXlsx} className="btn-secondary btn-sm"
                   title="Re-read projects.xlsx and rebuild the selection from it">
             ↻ Reload from Excel
-          </button>
-          <button onClick={confirm} disabled={numSelected === 0} className="btn-primary">
-            Load {numSelected > 0 ? `${numSelected} project${numSelected > 1 ? 's' : ''}` : 'projects'} →
           </button>
         </div>
       </div>

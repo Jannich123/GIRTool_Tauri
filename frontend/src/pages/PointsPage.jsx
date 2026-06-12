@@ -250,16 +250,6 @@ export default function PointsPage({ setPage }) {
     setChecked({})
   }
 
-  // Select from the CONVERTED view (issue #147) so the persisted points.xlsx
-  // and the in-app selection both carry the project's target-CRS coordinates.
-  // #207: the selection is exactly the ticked rows — the old "nothing ticked
-  // → take everything" fallback silently turned a project-only selection into
-  // an all-points selection (and wrote it to points.xlsx, which then kept
-  // resurrecting it).
-  function currentSelection() {
-    return viewPoints.filter(p => checked[ptKey(p)])
-  }
-
   async function savePointsXlsx(selectedRows) {
     try {
       const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v)
@@ -350,15 +340,8 @@ export default function PointsPage({ setPage }) {
     }
   }
 
-  async function confirm() {
-    const selected = currentSelection()
-    setSelectedPoints(selected)
-    // Issue #91: points.xlsx is the SOLE persistence path for the point
-    // selection.  Cross-restart restoration flows through load_points_xlsx.
-    savePointsXlsx(selected).catch(() => {})
-    // After picking points, go to the map to see the selection.
-    setPage('map')
-  }
+  // (#209: the "Use N points →" confirm button is gone — ticking rows
+  // live-applies the selection AND persists points.xlsx since #206/#207.)
 
   function handleSort(col) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -469,11 +452,6 @@ export default function PointsPage({ setPage }) {
           <button onClick={handleReloadFromExcel} disabled={xlsxBusy} className="btn-secondary btn-sm"
                   title="Tick all rows whose (db_id, PointId) is listed in points.xlsx">
             ↻ Reload from Excel
-          </button>
-          <button onClick={confirm} className="btn-primary">
-            {numChecked > 0
-              ? `Use ${numChecked} point${numChecked > 1 ? 's' : ''} →`
-              : 'Use all points →'}
           </button>
         </div>
       </div>

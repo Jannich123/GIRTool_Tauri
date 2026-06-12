@@ -64,12 +64,21 @@ function applyRenderType(gj, render) {
 // Renders every visible map layer targeted at `target` ('project' |
 // 'selection'), in list order: XYZ tiles, WMS overlays, and (M4.5b) local-file
 // GeoJSON addons.  Must be a child of a react-leaflet <MapContainer>.
-export default function AddonLayers({ target }) {
+//
+// `onPolygonClick(feature, latlng, addonName)` (#209, optional): fired when a
+// Polygon/MultiPolygon feature of a GeoJSON addon is clicked — the selection
+// map uses it to stage the polygon as the active selection boundary.
+export default function AddonLayers({ target, onPolygonClick }) {
   const { mapAddons } = useApp()
 
   // Local mirror of the session cache (state, so loads trigger a re-render).
   const [geoCache, setGeoCache] = useState({})
   const loadingRef = useRef(new Set())
+
+  // Latest click handler in a ref: onEachFeature only runs when a GeoJSON
+  // layer mounts, so a directly-captured prop would go stale on re-renders.
+  const polyClickRef = useRef(onPolygonClick)
+  useEffect(() => { polyClickRef.current = onPolygonClick })
 
   useEffect(() => {
     for (const a of (mapAddons || [])) {
@@ -138,6 +147,11 @@ export default function AddonLayers({ target }) {
                   keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
                 : `<strong>${esc(a.name)}</strong>`
               layer.bindTooltip(html, { sticky: true })
+              // #209: polygons double as clickable selection boundaries.
+              const gt = feature?.geometry?.type
+              if (gt === 'Polygon' || gt === 'MultiPolygon') {
+                layer.on('click', (e) => polyClickRef.current?.(feature, e.latlng, a.name))
+              }
             }}
           />
         )
