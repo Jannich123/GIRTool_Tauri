@@ -141,6 +141,14 @@ With a pop-out open next to the main window:
 - [ ] **Boundaries** edits propagate (was already live, still works).
 - [ ] Editing in the SAME window never reloads under your hands (own-window events are skipped).
 
+### 6k. Database list — expandable rows + copy connection (#215)
+
+- [ ] Settings → Database: rows are compact — arrow, **ID**, **Type**, a grey connection summary, status icon, **Test**, ⧉, ×.
+- [ ] Tap a row → it expands to roomy labelled fields (Type, Server/Database or Access file + 📁, Authentication ± credentials, Query type, full status message). Tap again to collapse.
+- [ ] **⧉ Copy** duplicates the connection right below with a fresh DB&lt;N&gt; ID, opened for editing — change e.g. just the database name, then *Save & connect all*.
+- [ ] + Add database opens the new row expanded.
+- [ ] Test / × still work from the collapsed row without expanding it.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
