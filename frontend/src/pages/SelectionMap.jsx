@@ -3,9 +3,10 @@ import { MapContainer, CircleMarker, Polygon, Polyline, Tooltip, useMap, useMapE
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
-import { reproject, toLatLng, pointToLatLng } from '../lib/proj'
+import { reproject, toLatLng, pointToLatLng, convertPoint, normaliseEpsg, CRS_LABELS } from '../lib/proj'
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
+import CrsCursorReadout from '../components/CrsCursorReadout'
 
 // Issue #153 (M4.1) + #155 (M4.2) + #159 (M4.3) — selection map.
 //
@@ -221,7 +222,7 @@ function DrawHandler({ active, onVertex }) {
 
 export default function SelectionMap() {
   const { allPoints } = useFilter()
-  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects } = useApp()
+  const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem } = useApp()
   const [initials, setInitials] = useState('')
 
   // Jupiter boreholes (#174) — loaded per region; category show/hide toggles.
@@ -400,6 +401,127 @@ export default function SelectionMap() {
     loaded.forEach(f => { if (!byId.has(f.id)) byId.set(f.id, f) })
     return [...byId.values()].filter(f => selectedIds.has(f.id) && !hiddenDbs.has(f.p.db_id))
   }, [pts, loaded, selectedIds, hiddenDbs])
+
+  // ── Memoised marker trees (#218) ──────────────────────────────────────────
+  // Unrelated context churn (e.g. dragging an addon's transparency slider)
+  // re-renders this component on every commit; keeping the marker arrays
+  // referentially stable lets React skip reconciling thousands of
+  // CircleMarkers.  Handlers go through refs so the memos never hold stale
+  // closures.
+  const toggleSelectRef = useRef(null)
+  toggleSelectRef.current = toggleSelect
+  const loadCyklogramRef = useRef(null)
+  loadCyklogramRef.current = loadCyklogram
+
+  // X/Y line for point tooltips in the project's target CRS (#217).
+  const crsTip = useCallback((p) => {
+    const epsg = normaliseEpsg(coordinateSystem?.target_epsg)
+    if (!epsg) return null
+    const c = convertPoint(p, coordinateSystem)
+    if (c?.X1 == null || c?.Y1 == null || !isFinite(Number(c.X1)) || !isFinite(Number(c.Y1))) return null
+    return `${c.X1} · ${c.Y1} — ${CRS_LABELS[epsg] || epsg}`
+  }, [coordinateSystem])
+
+  const jupiterMarkers = useMemo(() => (
+    jupiter.filter(f => jupiterCats[f.cat]).map(f => (
+      <CircleMarker
+        key={`j_${f.borid}`}
+        center={f.latlng}
+        radius={4}
+        pathOptions={{ color: '#475569', weight: 1, fillColor: JUPITER_CAT_COLOR[f.cat], fillOpacity: 0.9 }}
+        eventHandlers={{
+          click: () => { if (f.url) invoke('open_url', { url: f.url }).catch(() => {}) },
+          tooltipopen: () => loadCyklogramRef.current(f),
+        }}
+      >
+        <Tooltip sticky>
+          <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 280 }}>
+            <strong>DGU {f.dgunr || '?'}</strong>{f.formaal ? ` · ${f.formaal}` : ''}<br />
+            {f.ejer ? <>Ejer: {f.ejer}<br /></> : null}
+            {(f.terraen !== '' && f.terraen != null) ? <>Terræn: {f.terraen} m<br /></> : null}
+            {f.dybde ? <>Dybde: {f.dybde}</> : null}
+            {f.aar ? ` · ${f.aar}` : ''}
+            {f.status ? ` · ${f.status}` : ''}
+            {(f.dybde || f.aar || f.status) ? <br /> : null}
+            {(() => {
+              // Cyklogram as compact text (the GEUS image is dead upstream).
+              const cyk = cykCache.get(f.borid)
+              const small = { fontSize: '.7rem', opacity: 0.75, marginTop: 2 }
+              if (!f.cyklogram) return null
+              if (cyk === 'loading') return <div style={small}>henter cyklogram…</div>
+              if (Array.isArray(cyk)) return (
+                <div style={{ marginTop: 2 }}>
+                  <strong>Cyklogram:</strong>
+                  <CyklogramFigure seq={cyk} />
+                </div>
+              )
+              if (cyk === null) return <div style={small}>Cyklogram: ingen data</div>
+              return null // loads on hover (tooltipopen)
+            })()}
+            <div style={{ opacity: 0.7, marginTop: 2 }}>click → borerapport</div>
+          </div>
+        </Tooltip>
+      </CircleMarker>
+    ))
+  ), [jupiter, jupiterCats, cykVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const availMarkers = useMemo(() => (
+    loaded.filter(f => !ptIdSet.has(f.id) && !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => {
+      const crsLine = crsTip(p)
+      return (
+        <CircleMarker
+          key={`avail_${id}`}
+          center={latlng}
+          radius={5}
+          // Available = hollow ring in the source colour.  Click to select.
+          pathOptions={{ color: colorFor(p.db_id), weight: 2, fillColor: colorFor(p.db_id), fillOpacity: 0.2 }}
+          eventHandlers={{ click: () => toggleSelectRef.current(p) }}
+        >
+          <Tooltip>
+            <span style={{ fontSize: '.75rem' }}>
+              {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
+              {crsLine && <><br />{crsLine}</>}
+            </span>
+          </Tooltip>
+        </CircleMarker>
+      )
+    })
+  ), [loaded, ptIdSet, hiddenDbs, dbColors, selectedIds, crsTip]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ptsMarkers = useMemo(() => (
+    pts.filter(f => !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => {
+      const crsLine = crsTip(p)
+      return (
+        <CircleMarker
+          key={id}
+          center={latlng}
+          radius={6}
+          // Selected-project point, solid fill in the source colour.  Click to select.
+          pathOptions={{ color: '#fff', weight: 1.5, fillColor: colorFor(p.db_id), fillOpacity: 0.95 }}
+          eventHandlers={{ click: () => toggleSelectRef.current(p) }}
+        >
+          <Tooltip>
+            <span style={{ fontSize: '.75rem' }}>
+              {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'}{p.ProjectNo ? ` · ${p.ProjectNo}` : ''} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
+              {crsLine && <><br />{crsLine}</>}
+            </span>
+          </Tooltip>
+        </CircleMarker>
+      )
+    })
+  ), [pts, hiddenDbs, dbColors, selectedIds, crsTip]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ringMarkers = useMemo(() => (
+    ringPoints.map(f => (
+      <CircleMarker
+        key={`ring_${f.id}`}
+        center={f.latlng}
+        radius={9}
+        interactive={false}
+        pathOptions={{ color: '#dc2626', weight: 2.5, fill: false }}
+      />
+    ))
+  ), [ringPoints])
 
   // Shared loader (M4.3a pipeline): given polygon vertices as [lng, lat] in
   // EPSG:4326, find each DB's coordinate systems, reproject the polygon into
@@ -630,99 +752,17 @@ export default function SelectionMap() {
               Addon polygons double as clickable selection boundaries (#209). */}
           <AddonLayers target="selection" onPolygonClick={onAddonPolygonClick} />
 
-          {/* Jupiter boreholes (#174) — loaded per region, coloured by category,
-              filtered by the legend's category toggles.  Hover = info +
-              cyklogram; click = borerapport. */}
-          {jupiter.filter(f => jupiterCats[f.cat]).map(f => (
-            <CircleMarker
-              key={`j_${f.borid}`}
-              center={f.latlng}
-              radius={4}
-              pathOptions={{ color: '#475569', weight: 1, fillColor: JUPITER_CAT_COLOR[f.cat], fillOpacity: 0.9 }}
-              eventHandlers={{
-                click: () => { if (f.url) invoke('open_url', { url: f.url }).catch(() => {}) },
-                tooltipopen: () => loadCyklogram(f),
-              }}
-            >
-              <Tooltip sticky>
-                <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 280 }}>
-                  <strong>DGU {f.dgunr || '?'}</strong>{f.formaal ? ` · ${f.formaal}` : ''}<br />
-                  {f.ejer ? <>Ejer: {f.ejer}<br /></> : null}
-                  {(f.terraen !== '' && f.terraen != null) ? <>Terræn: {f.terraen} m<br /></> : null}
-                  {f.dybde ? <>Dybde: {f.dybde}</> : null}
-                  {f.aar ? ` · ${f.aar}` : ''}
-                  {f.status ? ` · ${f.status}` : ''}
-                  {(f.dybde || f.aar || f.status) ? <br /> : null}
-                  {(() => {
-                    // Cyklogram as compact text (the GEUS image is dead upstream).
-                    const cyk = cykCache.get(f.borid)
-                    const small = { fontSize: '.7rem', opacity: 0.75, marginTop: 2 }
-                    if (!f.cyklogram) return null
-                    if (cyk === 'loading') return <div style={small}>henter cyklogram…</div>
-                    if (Array.isArray(cyk)) return (
-                      <div style={{ marginTop: 2 }}>
-                        <strong>Cyklogram:</strong>
-                        <CyklogramFigure seq={cyk} />
-                      </div>
-                    )
-                    if (cyk === null) return <div style={small}>Cyklogram: ingen data</div>
-                    return null // loads on hover (tooltipopen)
-                  })()}
-                  <div style={{ opacity: 0.7, marginTop: 2 }}>click → borerapport</div>
-                </div>
-              </Tooltip>
-            </CircleMarker>
-          ))}
-
-          {/* M4.3 available points loaded in view — orange (not selectable yet). */}
-          {loaded.filter(f => !ptIdSet.has(f.id) && !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
-            <CircleMarker
-              key={`avail_${id}`}
-              center={latlng}
-              radius={5}
-              // Available = hollow ring in the source colour.  Click to select.
-              pathOptions={{ color: colorFor(p.db_id), weight: 2, fillColor: colorFor(p.db_id), fillOpacity: 0.2 }}
-              eventHandlers={{ click: () => toggleSelect(p) }}
-            >
-              <Tooltip>
-                <span style={{ fontSize: '.75rem' }}>
-                  {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
-                </span>
-              </Tooltip>
-            </CircleMarker>
-          ))}
-
+          {/* Jupiter boreholes (#174), available points (M4.3), selected-project
+              points and selection rings (M4.4a) — all memoised marker trees
+              (#218) so unrelated re-renders skip reconciling them. */}
+          {jupiterMarkers}
+          {availMarkers}
           <FitBounds pts={pts} />
+          {ptsMarkers}
+          {ringMarkers}
 
-          {/* Selected-project points — blue, on top. */}
-          {pts.filter(f => !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
-            <CircleMarker
-              key={id}
-              center={latlng}
-              radius={6}
-              // Selected-project point, solid fill in the source colour.  Click to select.
-              pathOptions={{ color: '#fff', weight: 1.5, fillColor: colorFor(p.db_id), fillOpacity: 0.95 }}
-              eventHandlers={{ click: () => toggleSelect(p) }}
-            >
-              <Tooltip>
-                <span style={{ fontSize: '.75rem' }}>
-                  {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'}{p.ProjectNo ? ` · ${p.ProjectNo}` : ''} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
-                </span>
-              </Tooltip>
-            </CircleMarker>
-          ))}
-
-          {/* Red ring on selected points (M4.4a) — non-interactive so clicks
-              reach the underlying point. */}
-          {ringPoints.map(f => (
-            <CircleMarker
-              key={`ring_${f.id}`}
-              center={f.latlng}
-              radius={9}
-              interactive={false}
-              pathOptions={{ color: '#dc2626', weight: 2.5, fill: false }}
-            />
-          ))}
+          {/* Live cursor X/Y in the project coordinate system (#217). */}
+          <CrsCursorReadout targetEpsg={coordinateSystem?.target_epsg} />
         </MapContainer>
 
         {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}

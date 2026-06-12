@@ -30,6 +30,53 @@ function wmsBaseUrl(raw) {
   }
 }
 
+// One mounted GeoJSON file addon.  Colour/opacity changes restyle the layer
+// IN PLACE (#218) — the old approach baked them into the React key, so every
+// transparency-slider tick re-added all features.  react-leaflet's GeoJSON
+// never restyles by prop, hence the imperative setStyle effect.
+function GeoFileLayer({ addon, data, polyClickRef }) {
+  const layerRef = useRef(null)
+  const color = addon.color || '#7c3aed'
+  const opacity = typeof addon.opacity === 'number' ? addon.opacity : 1
+
+  useEffect(() => {
+    const layer = layerRef.current
+    if (!layer) return
+    layer.setStyle((feat) => (feat?.geometry?.type === 'Point'
+      ? { color: '#fff', weight: 1.2, fillColor: color, fillOpacity: Math.min(0.95, opacity) }
+      : { color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 }))
+  }, [color, opacity])
+
+  return (
+    <GeoJSON
+      ref={layerRef}
+      data={data}
+      style={() => ({ color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 })}
+      pointToLayer={(feat, latlng) =>
+        L.circleMarker(latlng, {
+          radius: 5, color: '#fff', weight: 1.2,
+          fillColor: color, fillOpacity: Math.min(0.95, opacity),
+        })
+      }
+      onEachFeature={(feature, layer) => {
+        const props = feature?.properties || {}
+        const keys = Object.keys(props).slice(0, 8)
+        const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        const html = keys.length
+          ? `<strong>${esc(addon.name)}</strong><br/>` +
+            keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
+          : `<strong>${esc(addon.name)}</strong>`
+        layer.bindTooltip(html, { sticky: true })
+        // #209: polygons double as clickable selection boundaries.
+        const gt = feature?.geometry?.type
+        if (gt === 'Polygon' || gt === 'MultiPolygon') {
+          layer.on('click', (e) => polyClickRef?.current?.(feature, e.latlng, addon.name))
+        }
+      }}
+    />
+  )
+}
+
 // Session-wide cache: addon id → reprojected FeatureCollection.  Module-level
 // so it survives unmount/remount (tab switches) — each imported file is read +
 // parsed + reprojected ONCE per app session, then map opens are instant.  Safe
@@ -123,36 +170,14 @@ export default function AddonLayers({ target, onPolygonClick }) {
       if (a.type === 'geojson') {
         const cached = geoCache[a.id]
         if (!cached) return null
-        const data = applyRenderType(cached, a.render)
-        const color = a.color || '#7c3aed'
         return (
-          <GeoJSON
-            // Key includes opacity / colour / render type: react-leaflet doesn't
-            // re-style a mounted GeoJSON layer, so changes remount it.
-            key={`${a.id}_${opacity}_${color}_${a.render || 'native'}`}
-            data={data}
-            style={() => ({ color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 })}
-            pointToLayer={(feat, latlng) =>
-              L.circleMarker(latlng, {
-                radius: 5, color: '#fff', weight: 1.2,
-                fillColor: color, fillOpacity: Math.min(0.95, opacity),
-              })
-            }
-            onEachFeature={(feature, layer) => {
-              const props = feature?.properties || {}
-              const keys = Object.keys(props).slice(0, 8)
-              const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
-              const html = keys.length
-                ? `<strong>${esc(a.name)}</strong><br/>` +
-                  keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
-                : `<strong>${esc(a.name)}</strong>`
-              layer.bindTooltip(html, { sticky: true })
-              // #209: polygons double as clickable selection boundaries.
-              const gt = feature?.geometry?.type
-              if (gt === 'Polygon' || gt === 'MultiPolygon') {
-                layer.on('click', (e) => polyClickRef.current?.(feature, e.latlng, a.name))
-              }
-            }}
+          <GeoFileLayer
+            // Key carries identity + render type only — colour/opacity changes
+            // restyle the mounted layer in place (#218) instead of remounting.
+            key={`${a.id}_${a.render || 'native'}`}
+            addon={a}
+            data={applyRenderType(cached, a.render)}
+            polyClickRef={polyClickRef}
           />
         )
       }

@@ -1,17 +1,20 @@
-import { useApp } from '../context/AppContext'
+import { useThrottledAddons } from '../lib/useThrottledAddons'
 
 // On-map overlay control (M4.5a follow-up): a top-right panel listing the WMS
 // addons for a map, each with a visibility checkbox (multi-select), ↑/↓ reorder
 // (draw order = z-order), and a transparency slider.  A plain DOM overlay
 // (rendered beside the map, not a Leaflet layer) so it can do what the built-in
 // LayersControl can't (opacity + reorder).
+//
+// #218: slider drags commit through the throttled committer — the old
+// per-input-tick saveMapAddons re-rendered every point marker (context
+// update), wrote settings.json and emitted a cross-window event ~20× per drag.
 export default function AddonControl({ target }) {
-  const { mapAddons, saveMapAddons } = useApp()
-  const addons = Array.isArray(mapAddons) ? mapAddons : []
+  const { addons, updateThrottled, updateNow } = useThrottledAddons()
   const list = addons.filter(a => a && a.maps?.[target])
   if (list.length === 0) return null
 
-  const update = (id, patch) => saveMapAddons(addons.map(a => (a.id === id ? { ...a, ...patch } : a)))
+  const patched = (id, patch) => addons.map(a => (a.id === id ? { ...a, ...patch } : a))
 
   // Move a layer up/down among the same-target layers, keeping others in place.
   function move(id, dir) {
@@ -23,7 +26,7 @@ export default function AddonControl({ target }) {
     ;[subset[pos], subset[swap]] = [subset[swap], subset[pos]]
     const next = [...addons]
     idxs.forEach((gi, k) => { next[gi] = subset[k] })
-    saveMapAddons(next)
+    updateNow(next)
   }
 
   const btn = {
@@ -47,7 +50,7 @@ export default function AddonControl({ target }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem' }}>
             <input
               type="checkbox" checked={a.visible !== false}
-              onChange={() => update(a.id, { visible: a.visible === false })}
+              onChange={() => updateNow(patched(a.id, { visible: a.visible === false }))}
             />
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.name}>
               {a.name}
@@ -59,7 +62,7 @@ export default function AddonControl({ target }) {
             <input
               type="range" min="0" max="1" step="0.05"
               value={typeof a.opacity === 'number' ? a.opacity : 1}
-              onChange={e => update(a.id, { opacity: parseFloat(e.target.value) })}
+              onChange={e => updateThrottled(patched(a.id, { opacity: parseFloat(e.target.value) }))}
               style={{ width: '100%' }}
               title="Transparency"
             />

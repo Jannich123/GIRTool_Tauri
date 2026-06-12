@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
+import { useThrottledAddons } from '../lib/useThrottledAddons'
 import { COMMON_CRS_OPTIONS } from '../lib/proj'
 
 // Issues #169 (M4.5a) + #171 (M4.5b) — Map addons Settings subtab.
@@ -11,9 +12,11 @@ import { COMMON_CRS_OPTIONS } from '../lib/proj'
 //     cached under the project's `map addons/` folder (Q-A6).
 
 export default function MapAddonsTab() {
-  const { mapAddons, saveMapAddons, connection } = useApp()
+  const { connection } = useApp()
+  // #218: addon edits go through the throttled committer — colour-picker
+  // drags batch to ~4 commits/s instead of one full save per input tick.
+  const { addons, updateThrottled, updateNow } = useThrottledAddons()
   const hasFolder = !!connection?.output_folder
-  const addons = Array.isArray(mapAddons) ? mapAddons : []
   const userAddons = addons.filter(a => !a.builtin) // built-ins managed in the on-map panel
 
   const [form, setForm] = useState({ name: '', url: '', layer: '', project: true, selection: true })
@@ -55,12 +58,14 @@ export default function MapAddonsTab() {
       maps: { project: form.project, selection: form.selection },
       visible: true,
     }
-    saveMapAddons([...addons, addon])
+    updateNow([...addons, addon])
     setForm({ name: '', url: '', layer: '', project: true, selection: true })
     setMsg({ ok: true, text: `Added "${addon.name}".` })
   }
 
-  const update = (id, patch) => saveMapAddons(addons.map(a => (a.id === id ? { ...a, ...patch } : a)))
+  const update     = (id, patch) => updateNow(addons.map(a => (a.id === id ? { ...a, ...patch } : a)))
+  // Continuous inputs (colour picker) — throttled commits (#218).
+  const updateLive = (id, patch) => updateThrottled(addons.map(a => (a.id === id ? { ...a, ...patch } : a)))
   const toggleMap = (id, which) => {
     const a = addons.find(x => x.id === id)
     if (a) update(id, { maps: { ...a.maps, [which]: !a.maps?.[which] } })
@@ -69,7 +74,7 @@ export default function MapAddonsTab() {
     // File addons also drop their cached GeoJSON (best-effort).
     const a = addons.find(x => x.id === id)
     if (a?.file) invoke('delete_addon_file', { file: a.file }).catch(() => {})
-    saveMapAddons(addons.filter(x => x.id !== id))
+    updateNow(addons.filter(x => x.id !== id))
   }
 
   // ── Local-file import (M4.5b) ───────────────────────────────────────────────
@@ -133,7 +138,7 @@ export default function MapAddonsTab() {
           maps: { project: ff.project, selection: ff.selection },
         },
       })
-      saveMapAddons([...addons, entry])
+      updateNow([...addons, entry])
       setFileMsg({ ok: true, text: `Imported "${entry.name}" (${entry.feature_count} features).` })
       setFf({ path: '', name: '', epsg: '25832', xCol: '', yCol: '', infoCols: [], project: true, selection: true })
       setPreview(null)
@@ -212,7 +217,7 @@ export default function MapAddonsTab() {
                           <input
                             type="color"
                             value={a.color || '#7c3aed'}
-                            onChange={e => update(a.id, { color: e.target.value })}
+                            onChange={e => updateLive(a.id, { color: e.target.value })}
                           />
                         </label>
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.45rem' }}>
