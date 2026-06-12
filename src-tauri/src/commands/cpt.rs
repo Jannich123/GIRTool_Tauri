@@ -1120,13 +1120,21 @@ pub async fn run_cpt_calc(fname: String, state: State<'_, AppState>) -> Result<V
         Some(v) if v.is_object() => v.clone(),
         _ => json!({}),
     };
-    let selected: Vec<String> = cfg
+    let mut selected: Vec<String> = cfg
         .get("selected")
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
         .unwrap_or_else(|| {
             CATALOG.iter().filter(|c| c.default_selected).map(|c| c.name.to_string()).collect()
         });
+    // #276: write only columns the user can actually SEE ticked in the picker
+    // — hidden catalogue entries (intermediates/QA, #258) are excluded unless
+    // "Show hidden columns" is on.  Guards against stale selections saved by
+    // older versions.
+    let show_hidden = cfg.get("show_hidden").and_then(|v| v.as_bool()).unwrap_or(false);
+    selected.retain(|name| {
+        CATALOG.iter().any(|c| c.name == name && (!c.hidden || show_hidden))
+    });
     if selected.is_empty() {
         return Err("No columns selected — tick at least one column in the catalogue.".into());
     }

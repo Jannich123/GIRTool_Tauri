@@ -12,6 +12,8 @@ import Plot from 'react-plotly.js'
 // hold one copy).  Promise-cached so concurrent mounts coalesce; failures
 // are evicted; size-capped; cleared on refresh / datasheet changes.
 const chartQueryCache = new Map() // key -> Promise<{columns, rows, truncated}>
+// #276: full reset on New project.
+export function clearChartQueryCache() { chartQueryCache.clear() }
 const CHART_CACHE_MAX = 8
 function cachedChartQuery(key, run) {
   let p = chartQueryCache.get(key)
