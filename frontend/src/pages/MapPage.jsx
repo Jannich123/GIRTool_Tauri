@@ -601,13 +601,13 @@ export default function MapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGroupSystem, grpMode])
 
-  async function assignGroupToPoints(pointIds) {
-    if (!activeGroupSystem || !grpTarget || !pointIds.length || !projectId) return
+  async function assignGroupToPoints(mapPts) {
+    if (!activeGroupSystem || !grpTarget || !mapPts.length || !projectId) return
     const sysId = activeGroupSystem.id
     const label = grpTarget === UNASSIGN ? 'Unknown' : grpTarget
     const next = { ...groupAssignments }
-    for (const pid of pointIds) {
-      const key = String(pid)
+    for (const pt of mapPts) {
+      const key = String(pt.PointId)
       const cur = { ...(next[key] || {}) }
       if (grpTarget === UNASSIGN) delete cur[sysId]
       else cur[sysId] = grpTarget
@@ -616,10 +616,21 @@ export default function MapPage() {
     try {
       await invokeAndNotify('grouping', 'save_grouping', {
         projectId,
-        body: { systems: groupSystems, assignments: next, points: [] },
+        body: {
+          systems: groupSystems,
+          assignments: next,
+          // #264: point metadata so first-time rows materialise in
+          // Grouping.xlsx (the writer needs PointNo etc. for new rows).
+          points: mapPts.map(pt => ({
+            PointId:   String(pt.PointId),
+            PointNo:   pt.PointNo || '',
+            PointType: pt.PointType || '',
+            ProjectNo: pt.ProjectNo || '',
+          })),
+        },
       })
-      refreshGroupData() // markers recolour from the saved truth
-      setGrpMsg(`${label} → ${pointIds.length} point${pointIds.length === 1 ? '' : 's'}`)
+      refreshGroupData() // markers + Grouping tab recolour from the saved truth
+      setGrpMsg(`${label} → ${mapPts.length} point${mapPts.length === 1 ? '' : 's'}`)
     } catch (err) {
       setGrpMsg(`Save failed: ${err}`)
     }
@@ -627,14 +638,12 @@ export default function MapPage() {
 
   function assignInsidePolygon() {
     if (grpVerts.length < 3) return
-    const ids = visiblePoints
-      .filter(pt => pointInPolygonLatLng(pt.latlng, grpVerts))
-      .map(pt => pt.PointId)
+    const inside = visiblePoints.filter(pt => pointInPolygonLatLng(pt.latlng, grpVerts))
     setGrpDrawing(false)
     setGrpVerts([])
     setGrpFromAddon(null)
-    if (!ids.length) { setGrpMsg('No points inside the polygon'); return }
-    assignGroupToPoints(ids)
+    if (!inside.length) { setGrpMsg('No points inside the polygon'); return }
+    assignGroupToPoints(inside)
   }
 
   // Handlers reached from memoised markers / addon layers via refs — always
@@ -645,7 +654,7 @@ export default function MapPage() {
   assignRef.current = assignGroupToPoints
   const mapPointClickRef = useRef(null)
   mapPointClickRef.current = (grpMode && !grpDrawing)
-    ? (pt) => assignRef.current?.([pt.PointId])
+    ? (pt) => assignRef.current?.([pt])
     : null
 
   // #262: in grouping mode an addon polygon click stages its ring as the

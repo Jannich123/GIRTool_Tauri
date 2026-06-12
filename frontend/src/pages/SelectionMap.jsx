@@ -694,32 +694,31 @@ export default function SelectionMap() {
     }
   }
 
-  // Select every DB point inside the region, adding their parent projects (Q-B2).
-  async function selectInside(points) {
-    if (!points || points.length < 3) return
-    setLoading(true); setLoadStatus('querying databases…')
-    try {
-      const { feats, skipped, noEpsg } = await queryPointsInPolygon(points)
-      if (noEpsg) { setLoadStatus('no usable coordinate systems found in the configured databases'); return }
-      const have = new Set((selectedPoints || []).map(p => `${p.db_id ?? '?'}_${p.PointId}`))
-      const toAdd = feats.filter(f => !have.has(f.id))
-      if (toAdd.length) {
-        setSelectedPoints([...(selectedPoints || []), ...toAdd.map(f => f.p)])
-        const projKeys = new Set((selectedProjects || []).map(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}`))
-        const newProjs = []
-        for (const f of toAdd) {
-          const pk = `${f.p.db_id ?? '?'}||${f.p.ProjectId}`
-          if (!projKeys.has(pk) && projIndex.current[pk]) { projKeys.add(pk); newProjs.push(projIndex.current[pk]) }
-        }
-        if (newProjs.length) setSelectedProjects([...(selectedProjects || []), ...newProjs])
+  // #264: ✚ Select inside operates on the VISIBLE markers only (loaded ∪
+  // selected-project points, minus hidden sources) — points that were never
+  // ⬇ Loaded onto the map are NOT selected invisibly, and neither are their
+  // parent projects.  (The old behaviour ran a DB spatial query.)
+  function selectInside(polyLatLng) {
+    if (!polyLatLng || polyLatLng.length < 3) return
+    const byId = new Map()
+    pts.forEach(f => { if (!hiddenDbs.has(f.p.db_id)) byId.set(f.id, f) })
+    loaded.forEach(f => { if (!byId.has(f.id) && !hiddenDbs.has(f.p.db_id)) byId.set(f.id, f) })
+    const have = new Set((selectedPoints || []).map(p => `${p.db_id ?? '?'}_${p.PointId}`))
+    const toAdd = [...byId.values()]
+      .filter(f => !have.has(f.id) && pointInPolygonLatLng(f.latlng, polyLatLng))
+    if (toAdd.length) {
+      setSelectedPoints([...(selectedPoints || []), ...toAdd.map(f => f.p)])
+      const projKeys = new Set((selectedProjects || []).map(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}`))
+      const newProjs = []
+      for (const f of toAdd) {
+        const pk = `${f.p.db_id ?? '?'}||${f.p.ProjectId}`
+        if (!projKeys.has(pk) && projIndex.current[pk]) { projKeys.add(pk); newProjs.push(projIndex.current[pk]) }
       }
-      const skip = skipped ? ` · ${skipped} EPSG(s) skipped` : ''
-      setLoadStatus(`${toAdd.length} point${toAdd.length === 1 ? '' : 's'} selected${skip}`)
-    } catch (e) {
-      setLoadStatus(`error: ${String(e).slice(0, 140)}`)
-    } finally {
-      setLoading(false)
+      if (newProjs.length) setSelectedProjects([...(selectedProjects || []), ...newProjs])
     }
+    setLoadStatus(toAdd.length
+      ? `${toAdd.length} visible point${toAdd.length === 1 ? '' : 's'} selected inside the polygon`
+      : 'No visible unselected points inside the polygon — ⬇ Load first to bring points onto the map')
   }
 
   // Remove every selected point inside the polygon (client-side, no query).
@@ -773,7 +772,7 @@ export default function SelectionMap() {
     setVertices([])
     setPolyFromAddon(null)
     if (action === 'load') loadInside(ring4326)
-    else if (action === 'select') selectInside(ring4326)
+    else if (action === 'select') selectInside(polyLatLng)
     else if (action === 'remove') removeInside(polyLatLng)
     else if (action === 'removeProjects') removeProjectsInside(polyLatLng)
   }
