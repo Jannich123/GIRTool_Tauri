@@ -257,6 +257,7 @@ Performance (load a few thousand points first):
 - [ ] **CPT layer table**: Strata column filter; edits land on the right layer.
 - [ ] **Charts statistics**: Group column filter trims the rows.
 - [ ] Dropdown closes on outside click / Escape; opening near the screen edge stays on screen; sort-by-header still works (the funnel doesn't trigger sorting).
+- [ ] (#250) The dropdown always renders ON TOP — e.g. the Selected table's filter is not covered by the Available table's sticky header below.
 
 ## 7. Quick regression sweep
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // Excel-style column set-filters (#248).
 //
@@ -138,7 +139,10 @@ export function ColumnFilterButton({ col, label, items, getRow, filters, setColF
       >
         ▾
       </button>
-      {open && (
+      {/* #250: portal to <body> — rendered inside the sticky <thead>, the
+          popup is trapped in that header's stacking context and the NEXT
+          table's sticky header paints over it regardless of z-index. */}
+      {open && createPortal(
         <div
           ref={popRef}
           className="colfilter-pop"
@@ -176,7 +180,8 @@ export function ColumnFilterButton({ col, label, items, getRow, filters, setColF
             )}
             {matching.length === 0 && <div className="colfilter-capnote">No values match.</div>}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   )
