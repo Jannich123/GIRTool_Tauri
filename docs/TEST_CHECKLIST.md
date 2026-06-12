@@ -188,6 +188,14 @@ Performance (load a few thousand points first):
 - [ ] Dataforsyningen WMS layers (built-in Orthophoto/Topo AND user-added with token) now actually **render tiles** — the service was rejecting every request over lowercase `transparent=true`.
 - [ ] Other WMS addons (e.g. GEUS) still render (uppercase TRUE/FALSE is the WMS-spec spelling, universally accepted).
 
+### 6p. Project map shows downloaded points only (#228)
+
+- [ ] With datasheets downloaded: the Project map shows **only points that appear in a downloaded datasheet**; the header counts "N points · with downloaded data".
+- [ ] Points selected but never downloaded do NOT appear; after ⬇ Download / ⊕ Append (any window) the map updates by itself ('datasheets' sync).
+- [ ] With selected points but NO downloaded data: map is empty with the hint "No downloaded data for the selected points — …".
+- [ ] Selection map unchanged (still shows everything selectable).
+- [ ] Legacy datasheets without a DB column still light their points up (wildcard match).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
