@@ -307,6 +307,12 @@ Performance (load a few thousand points first):
 - [ ] The row checkbox still works as a plain additive toggle; master select-all row, search, sort and Reset unchanged.
 - [ ] Selecting every item ends as "no filter" (badge disappears); filters persist + sync as before.
 
+### 6ae. New / Copy project from Settings (#272)
+
+- [ ] Settings → Project selection: **🆕 New project…** browses to an (empty) folder, seeds Datasheets/ + GIRTool_settings.json and connects to it (full flow: DB config, multi-DB, restore, background re-index).
+- [ ] **⧉ Copy project to…** copies the CURRENT folder (all data) to a chosen empty location and switches to the copy; refuses a non-empty destination with a clear error.
+- [ ] Both appear in recent folders afterwards; the sidebar project name updates.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

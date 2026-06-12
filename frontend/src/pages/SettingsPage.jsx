@@ -358,19 +358,54 @@ export default function SettingsPage({ setPage }) {
     }
   }
 
+  // ── New / Copy project (#272 — same backend as the startup screen) ──────────
+  const newProject = async () => {
+    setFolderMsg('')
+    try {
+      const r = await invoke('browse_folder', { initial: form.output_folder || '' })
+      if (!r?.path) return
+      const path = await invoke('create_project', { path: r.path })
+      await testFolder(path)
+    } catch (err) {
+      setFolderStatus('error')
+      setFolderMsg(String(err || 'Could not create the project'))
+    }
+  }
+
+  const copyProjectTo = async () => {
+    const src = form.output_folder
+    if (!src) return
+    setFolderMsg('')
+    try {
+      const r = await invoke('browse_folder', { initial: src })
+      if (!r?.path) return
+      const path = await invoke('copy_project', { src, dst: r.path })
+      await testFolder(path)
+    } catch (err) {
+      setFolderStatus('error')
+      setFolderMsg(String(err || 'Could not copy the project'))
+    }
+  }
+
   // ── Test & save folder — then auto-load DB config and restore session ────────
-  const testFolder = async () => {
+  const testFolder = async (folderArg) => {
+    // #272: optional explicit path (New project / Copy project) — falls back
+    // to the form value; the plain button passes a click event, ignored here.
+    const folder = (typeof folderArg === 'string' && folderArg.trim()) ? folderArg : form.output_folder
+    if (typeof folderArg === 'string' && folderArg.trim()) {
+      setForm(prev => ({ ...prev, output_folder: folder }))
+    }
     setFolderStatus('testing'); setFolderMsg('')
     try {
       // 1. Verify the folder is accessible
-      const folderRes = await invoke('test_folder', { path: form.output_folder })
+      const folderRes = await invoke('test_folder', { path: folder })
 
       // 2. Look in {folder}/GIRTool_settings.json for stored DB credentials.
       //    If present, use those — they belong to this project.  Otherwise
       //    fall back to whatever is currently in the form (legacy or first-time).
       let dbCfg = { found: false, server: '', database: '', auth_method: '', username: '', password: '' }
       try {
-        const r = await invoke('load_folder_db_config', { folder: form.output_folder })
+        const r = await invoke('load_folder_db_config', { folder })
         if (r) {
           dbCfg = {
             found:       !!r.found,
@@ -389,7 +424,7 @@ export default function SettingsPage({ setPage }) {
         auth_method:   dbCfg.found ? dbCfg.auth_method : form.auth_method,
         username:      dbCfg.found ? dbCfg.username    : form.username,
         password:      dbCfg.found ? dbCfg.password    : form.password,
-        output_folder: form.output_folder,
+        output_folder: folder,
       }
       if (dbCfg.found) setForm(merged)
       saveConnection(merged)
@@ -925,6 +960,25 @@ export default function SettingsPage({ setPage }) {
             title={form.output_folder ? 'Open the project folder in Explorer' : 'Pick a folder first'}
           >
             📂 Open in Explorer
+          </button>
+          {/* #272: create / duplicate a project straight from Settings. */}
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={newProject}
+            disabled={folderStatus === 'testing'}
+            title="Pick (or create) an empty folder — it is seeded with Datasheets/ + settings and connected"
+          >
+            🆕 New project…
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={copyProjectTo}
+            disabled={!form.output_folder || folderStatus === 'testing'}
+            title="Copy the CURRENT project folder (all data) to a new empty location and switch to the copy"
+          >
+            ⧉ Copy project to…
           </button>
         </div>
 
