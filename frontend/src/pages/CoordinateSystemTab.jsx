@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 
 // Issue #145 — Coordinate system Settings subtab (plan §A5).
@@ -96,7 +97,7 @@ export default function CoordinateSystemTab() {
     const config = { target_epsg: effectiveEpsg, elevation_offsets: cleanOffsets }
     setSaving(true)
     try {
-      await invoke('save_coordinate_system', { config })
+      await invokeAndNotify('coordinate_system', 'save_coordinate_system', { config })
       // Push into context so points re-convert live (no project reload).
       setCoordinateSystem?.(config)
       setMsg({ ok: true, text: 'Saved.' })

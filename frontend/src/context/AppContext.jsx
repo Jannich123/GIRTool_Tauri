@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { invoke, listen, emit, windowLabel } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { mergeBuiltins } from '../lib/baseLayers'
 
 const AppContext = createContext(null)
@@ -330,7 +331,7 @@ export function AppProvider({ children }) {
       try {
         setXlsxSaveStatus('saving')
         const pid = selectedProjectsRef.current[0]?.ProjectId
-        await invoke('save_colors', {
+        await invokeAndNotify('colors', 'save_colors', {
           projectId: pid,
           body: {
             type_styles:         typeStylesRef.current,
@@ -404,27 +405,44 @@ export function AppProvider({ children }) {
   }, [connected])
 
   // Persist + update map addons in one call (used by the Settings subtab).
-  // #211: also mirrored to every other window over the event bus — colour /
-  // opacity / visibility edits and added or removed layers show up live on
-  // all open maps, not just the window where the edit was made.
+  // #211/#213: announced on the data:changed bus so every other window's maps
+  // restyle live (colour / opacity / visibility edits, added/removed layers).
   const saveMapAddons = useCallback((next) => {
     setMapAddons(next)
-    invoke('save_map_addons', { addons: next }).catch(() => {})
-    emit('mapaddons:updated', { src: winLabel, addons: next })
-  }, [winLabel])
+    invokeAndNotify('map_addons', 'save_map_addons', { addons: next }).catch(() => {})
+  }, [])
 
-  // Receive addon edits from other windows.  Applied directly (the sender's
-  // list is the full unified list, builtins included) and never re-saved or
-  // re-emitted, so there is no echo.
-  useEffect(() => {
-    let off = null
-    listen('mapaddons:updated', (e) => {
-      const p = e?.payload
-      if (!p || p.src === winLabel || !Array.isArray(p.addons)) return
-      setMapAddons(p.addons)
-    }).then(fn => { off = fn })
-    return () => { if (typeof off === 'function') off() }
-  }, [])  // eslint-disable-line
+  // ── Cross-window re-fetchers (#213) ───────────────────────────────────────
+  // Writes in OTHER windows announce a domain on the data:changed bus; this
+  // window re-fetches whatever it caches locally for that domain.  (Own-window
+  // writes are skipped — local state was already set by the saving code.)
+  const connectedRef = useRef(connected)
+  useEffect(() => { connectedRef.current = connected }, [connected])
+  useDataChanged('map_addons', () => {
+    if (!connectedRef.current) return
+    invoke('get_map_addons').then(a => setMapAddons(mergeBuiltins(a))).catch(() => {})
+  })
+  useDataChanged('coordinate_system', () => {
+    if (!connectedRef.current) return
+    invoke('get_coordinate_system')
+      .then(cfg => setCoordinateSystem(cfg && cfg.target_epsg ? cfg : null))
+      .catch(() => {})
+  })
+  // Type / strata-layer styles live in localStorage, which all windows share —
+  // a 'colors' announce just re-reads it.
+  useDataChanged('colors', () => {
+    setTypeStyles(loadTypeStyles())
+    setStrataLayerColors(loadStrataLayerColors())
+  })
+  // Boundaries saved via the BoundariesPage commands (the patch_session path
+  // already has its own session:boundaries:updated event).
+  useDataChanged('boundaries', () => {
+    const pid = selectedProjectsRef.current[0]?.ProjectId
+    if (!pid) return
+    invoke('get_session', { projectId: pid })
+      .then(r => setBoundaries(Array.isArray(r?.boundaries) ? r.boundaries : []))
+      .catch(() => {})
+  })
 
   return (
     <AppContext.Provider value={{

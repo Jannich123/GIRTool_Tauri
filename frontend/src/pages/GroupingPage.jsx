@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { useDragSelect } from '../hooks/useDragSelect'
@@ -99,7 +100,7 @@ export default function GroupingPage() {
     if (!projectId) return
     setSaveStatus('saving'); setSaveError('')
     try {
-      await invoke('save_grouping', {
+      await invokeAndNotify('grouping', 'save_grouping', {
         projectId,
         body: {
           systems:     sys,
@@ -178,6 +179,11 @@ export default function GroupingPage() {
 
   // ── Load grouping data ─────────────────────────────────────────────────────
 
+  // #213: re-load when ANOTHER window changes grouping (e.g. Colors page or a
+  // pop-out).  Own-window saves don't re-trigger (bus skips self).
+  const [syncReloadKey, setSyncReloadKey] = useState(0)
+  useDataChanged('grouping', () => setSyncReloadKey(k => k + 1))
+
   useEffect(() => {
     if (!projectId) return
     initialized.current = false
@@ -197,7 +203,7 @@ export default function GroupingPage() {
         // Allow auto-save after React has committed the loaded state
         requestAnimationFrame(() => { initialized.current = true })
       })
-  }, [projectId])
+  }, [projectId, syncReloadKey]) // eslint-disable-line
 
   // ── System CRUD ────────────────────────────────────────────────────────────
 

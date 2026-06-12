@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import QueryConfigTab from './QueryConfigTab'
 import CoordinateSystemTab from './CoordinateSystemTab'
@@ -133,7 +134,7 @@ export default function SettingsPage({ setPage }) {
           const changed = canonical.some((d, i) => d.id !== arr[i].id)
           setDbRows(canonical.map(d => ({ ...DEFAULT_DB_ROW(), ...d })))
           if (changed) {
-            invoke('save_databases', { body: { databases: canonical } })
+            invokeAndNotify('databases', 'save_databases', { body: { databases: canonical } })
               .catch(err => console.warn('canonicalise save_databases failed:', err))
           }
         }
@@ -239,8 +240,8 @@ export default function SettingsPage({ setPage }) {
     }
     setDbBusy(true)
     try {
-      await invoke('save_databases', { body: { databases: dbRows } })
-      const results = await invoke('connect_all_databases')
+      await invokeAndNotify('databases', 'save_databases', { body: { databases: dbRows } })
+      const results = await invokeAndNotify('databases', 'connect_all_databases')
       const next = {}
       ;(results || []).forEach(r => { next[r.id] = { ok: !!r.ok, message: r.message || '' } })
       setDbStatus(next)
@@ -381,7 +382,7 @@ export default function SettingsPage({ setPage }) {
       //     on total failure; partial failure surfaces in the status line.
       let multiDb = { total: 0, okCount: 0, failCount: 0 }
       try {
-        const results = await invoke('connect_all_databases')
+        const results = await invokeAndNotify('databases', 'connect_all_databases')
         if (Array.isArray(results) && results.length > 0) {
           multiDb.total     = results.length
           multiDb.okCount   = results.filter(r => r && r.ok).length

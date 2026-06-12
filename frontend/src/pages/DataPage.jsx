@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { applyCoordinateSystem, normaliseEpsg } from '../lib/proj'
@@ -20,7 +21,7 @@ function CptReduceSection({ datasheets, cfg, onPatch, onDone }) {
     if (!isFinite(w) || w <= 0) { setMsg({ ok: false, text: 'Window must be a positive number of centimetres.' }); return }
     setBusy(true)
     try {
-      const r = await invoke('reduce_cpt_data', { fname: c.fname, windowCm: w, method: c.method })
+      const r = await invokeAndNotify('datasheets', 'reduce_cpt_data', { fname: c.fname, windowCm: w, method: c.method })
       setMsg({ ok: true, text: `${r.file}: ${r.rows_before} → ${r.rows_after} rows` })
       onDone?.(c.fname)
     } catch (e) {
@@ -128,12 +129,18 @@ export default function DataPage() {
       .then(c => setReduceCfg({ fname: 'CPTData', window_cm: '2', method: 'average', auto_apply: false, ...(c || {}) }))
       .catch(() => setReduceCfg({ fname: 'CPTData', window_cm: '2', method: 'average', auto_apply: false }))
   }, [connection?.output_folder])
+  // #213: reduction settings changed in another window (incl. Auto-apply).
+  useDataChanged('cpt', () => {
+    invoke('get_cpt_reduction_config')
+      .then(c => setReduceCfg(prev => ({ ...(prev || {}), ...(c || {}) })))
+      .catch(() => {})
+  })
   function patchReduceCfg(patch) {
     setReduceCfg(prev => {
       const next = { ...(prev || {}), ...patch }
       clearTimeout(reduceSaveTimer.current)
       reduceSaveTimer.current = setTimeout(() => {
-        invoke('save_cpt_reduction_config', { config: next }).catch(() => {})
+        invokeAndNotify('cpt', 'save_cpt_reduction_config', { config: next }).catch(() => {})
       }, 400)
       return next
     })
@@ -146,7 +153,7 @@ export default function DataPage() {
     if (!isFinite(w) || w <= 0) return
     markStatuses([name], { state: 'pending', text: '⏳ reducing…' })
     try {
-      const r = await invoke('reduce_cpt_data', { fname: name, windowCm: w, method: rc.method || 'average' })
+      const r = await invokeAndNotify('datasheets', 'reduce_cpt_data', { fname: name, windowCm: w, method: rc.method || 'average' })
       markStatuses([name], {
         state: 'ok',
         text: `✓ ${Number(r.rows_before).toLocaleString()} → ${Number(r.rows_after).toLocaleString()} rows (reduced)`,
@@ -207,6 +214,13 @@ export default function DataPage() {
       setPreloading(false)
     }
   }
+
+  // #213: another window downloaded / appended / reduced datasheets — drop
+  // the preview cache (we don't know which files changed) and re-list.
+  useDataChanged('datasheets', () => {
+    previewCacheRef.current.clear()
+    refreshDatasheets({ keepActive: true })
+  })
 
   async function refreshDatasheets({ keepActive = true, invalidate = null, autoSwitchView = false } = {}) {
     try {
@@ -346,7 +360,7 @@ export default function DataPage() {
     for (const name of queryNames) {
       markStatuses([name], { state: 'pending', text: '⏳ downloading…' })
       try {
-        const res = await invoke('download_data', { projectId, query: { ...base, query_names: [name] } })
+        const res = await invokeAndNotify('datasheets', 'download_data', { projectId, query: { ...base, query_names: [name] } })
         agg.folder = res?.folder ?? agg.folder
         for (const f of (res?.saved ?? [])) agg.saved.push(f)
         for (const e of (res?.errors ?? [])) agg.errors.push(e)
@@ -377,7 +391,7 @@ export default function DataPage() {
     for (const name of queryNames) {
       markStatuses([name], { state: 'pending', text: '⏳ appending…' })
       try {
-        const res = await invoke('append_data', { projectId, query: { ...base, query_names: [name] } })
+        const res = await invokeAndNotify('datasheets', 'append_data', { projectId, query: { ...base, query_names: [name] } })
         agg.folder = res?.folder ?? agg.folder
         for (const f of (res?.saved ?? res?.results ?? [])) agg.results.push(f)
         for (const e of (res?.errors ?? [])) agg.errors.push(e)
@@ -405,7 +419,7 @@ export default function DataPage() {
     const strataNames = queries.filter(q => q.apply_strata === 'Yes').map(q => q.fname)
     markStatuses(strataNames, { state: 'pending', text: '⏳ re-adding strata…' })
     try {
-      const res = await invoke('readd_strata', { projectId, query: buildPayload([]) })
+      const res = await invokeAndNotify('datasheets', 'readd_strata', { projectId, query: buildPayload([]) })
       setReaddResult(res)
       applyResultStatuses(res, f => `🪨 ✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
       const touched = new Set((res?.updated ?? []).map(s => s.file.replace(/\.xlsx$/i, '')))
