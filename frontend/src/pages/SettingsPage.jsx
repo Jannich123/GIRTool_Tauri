@@ -26,6 +26,13 @@ const DEFAULT_DB_ROW = () => ({
 // `[A-Za-z0-9_-]+` — same validation the backend enforces.
 const ID_RE = /^[A-Za-z0-9_-]+$/
 
+// #274: fresh installs seed BOTH company databases, named after the database
+// itself so the ID is meaningful everywhere a db_id shows up.
+const DEFAULT_DATABASES = () => ([
+  { ...DEFAULT_DB_ROW(), id: 'GeoGIS2020',        server: 'DKLYDB08', database: 'GeoGIS2020' },
+  { ...DEFAULT_DB_ROW(), id: 'GeoGIS2020aalborg', server: 'DKLYDB08', database: 'GeoGIS2020aalborg' },
+])
+
 // Issue #73: per-row IDs are auto-generated and read-only.  Numbers start at
 // `DB1` and grow as the user adds rows.  `nextDbId` returns the lowest unused
 // `DB<N>` so deleting a middle row and re-adding fills the gap rather than
@@ -47,25 +54,24 @@ function nextDbId(rows) {
 //   ['DB5', 'primary']      → ['DB5', 'DB1']     (DB5 kept; primary → DB1)
 const DB_ID_RE = /^DB\d+$/
 function canonicaliseDbIds(rows) {
+  // #274: IDs are user-editable now, so custom names (e.g. "GeoGIS2020") are
+  // first-class and must survive reloads — this only FILLS rows whose id is
+  // empty/missing with the lowest unused DB<N>; it never rewrites a set id.
   const taken = new Set()
-  // Pass 1: rows already canonical keep their id; record their number.
-  const out = rows.map(r => {
+  for (const r of rows) {
     if (typeof r?.id === 'string' && DB_ID_RE.test(r.id)) {
       taken.add(parseInt(r.id.slice(2), 10))
-      return r
     }
-    return null
-  })
-  // Pass 2: fill the placeholders with the lowest unused DB<N>.
+  }
   let nextN = 1
-  for (let i = 0; i < out.length; i++) {
-    if (out[i] !== null) continue
+  return rows.map(r => {
+    if (typeof r?.id === 'string' && r.id.trim()) return r
     while (taken.has(nextN)) nextN += 1
-    out[i] = { ...rows[i], id: `DB${nextN}` }
+    const id = `DB${nextN}`
     taken.add(nextN)
     nextN += 1
-  }
-  return out
+    return { ...r, id }
+  })
 }
 
 export default function SettingsPage({ setPage }) {
@@ -111,19 +117,23 @@ export default function SettingsPage({ setPage }) {
     invoke('list_databases')
       .then(list => {
         const arr = Array.isArray(list) ? list : []
-        // If the user has nothing saved yet, seed a single empty row from
-        // the legacy `connection` form so they aren't staring at a blank table.
+        // If the user has nothing saved yet: migrate the legacy single-DB
+        // form when it holds a connection, otherwise seed the two named
+        // company defaults (#274).
         if (arr.length === 0) {
-          // Fresh install — seed with a single auto-numbered row (#73).
-          setDbRows([{
-            ...DEFAULT_DB_ROW(),
-            id:          'DB1',
-            server:      form.server      || '',
-            database:    form.database    || '',
-            auth_method: form.auth_method || 'windows',
-            username:    form.username    || '',
-            password:    form.password    || '',
-          }])
+          if (form.server && form.database) {
+            setDbRows([{
+              ...DEFAULT_DB_ROW(),
+              id:          'DB1',
+              server:      form.server,
+              database:    form.database,
+              auth_method: form.auth_method || 'windows',
+              username:    form.username    || '',
+              password:    form.password    || '',
+            }])
+          } else {
+            setDbRows(DEFAULT_DATABASES())
+          }
         } else {
           // Issue #97: canonicalise legacy IDs (`primary`, `db_2`, …) to
           // the `DB<N>` format on load.  Rows already matching the
@@ -143,8 +153,8 @@ export default function SettingsPage({ setPage }) {
         setDbLoaded(true)
       })
       .catch(() => {
-        // No saved settings + list_databases failed — start with one fresh row.
-        setDbRows([{ ...DEFAULT_DB_ROW(), id: 'DB1' }])
+        // No saved settings + list_databases failed — seed the defaults (#274).
+        setDbRows(DEFAULT_DATABASES())
         setDbLoaded(true)
       })
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,6 +219,23 @@ export default function SettingsPage({ setPage }) {
     setOpenDbRows(prev => new Set([...prev, id])) // new rows open for editing
   }
 
+  // #274: IDs are editable (must stay unique — validated at Save & connect
+  // all).  Renaming swaps the expand-state key so the panel stays open.
+  const renameDbRow = (idx, rawId) => {
+    const next = rawId.replace(/\s+/g, '')
+    const prevId = dbRows[idx]?.id
+    updateRow(idx, { id: next })
+    if (prevId != null && prevId !== next) {
+      setOpenDbRows(prev => {
+        if (!prev.has(prevId)) return prev
+        const s = new Set(prev)
+        s.delete(prevId)
+        s.add(next)
+        return s
+      })
+    }
+  }
+
   // #215: duplicate a connection (fresh auto-ID, status cleared) — for
   // setups that differ only in e.g. the database name.  Lands right below
   // the source row, expanded.
@@ -260,6 +287,10 @@ export default function SettingsPage({ setPage }) {
     setDbMsg(null)
     if (dbRows.length === 0) {
       setDbMsg({ ok: false, text: 'At least one database is required.' })
+      return
+    }
+    if (dbRows.some(r => !r.id || !r.id.trim())) {
+      setDbMsg({ ok: false, text: 'Every database needs an ID.' })
       return
     }
     if (duplicateIds.size > 0) {
@@ -672,8 +703,8 @@ export default function SettingsPage({ setPage }) {
               {/* Auto-generated ID (issue #73); legacy custom ids kept. */}
               <span
                 style={{ fontFamily: 'monospace', fontWeight: 600, color: isDup || isBad ? '#dc2626' : '#111827' }}
-                title={isDup ? 'Duplicate ID — should not happen with auto-numbering'
-                     : isBad ? 'Legacy ID outside the DB<N> format — kept for backwards compatibility'
+                title={isDup ? 'Duplicate ID — every database needs a unique ID'
+                     : isBad ? 'Invalid ID — only letters, digits, _ and - are allowed'
                      : undefined}
               >
                 {row.id}
@@ -731,13 +762,17 @@ export default function SettingsPage({ setPage }) {
                 }}
               >
                 <label style={labelStyle}>
-                  ID (auto-generated)
+                  ID (unique — used as the DB tag everywhere)
                   <input
                     value={row.id}
-                    readOnly
+                    onChange={e => renameDbRow(idx, e.target.value)}
+                    placeholder="e.g. GeoGIS2020"
+                    title={isDup ? 'Duplicate ID — every database needs a unique ID'
+                         : isBad ? 'Only letters, digits, _ and - are allowed'
+                         : 'Unique identifier — appears as the DB column/pill on points, projects and datasheets'}
                     style={{
-                      marginBottom: 0, background: '#f3f4f6', color: '#374151', cursor: 'default',
-                      borderColor: isDup || isBad ? '#ef4444' : undefined,
+                      marginBottom: 0,
+                      borderColor: isDup || isBad || !row.id ? '#ef4444' : undefined,
                     }}
                   />
                 </label>
@@ -912,7 +947,7 @@ export default function SettingsPage({ setPage }) {
       {/* ── Project selection subtab (issue #137) ── */}
       {tab === 'folder' && (
       <>
-      <div className="card" style={{ maxWidth: 520 }}>
+      <div className="card" style={{ maxWidth: 920 }}>
         <h3 className="section-title">Project selection</h3>
         <p className="hint" style={{ marginBottom: '0.75rem' }}>
           Downloaded Excel files and session data will be saved here automatically.
