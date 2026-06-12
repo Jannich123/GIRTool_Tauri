@@ -1523,6 +1523,12 @@ export default function ChartsPage() {
           point_ids:   hasPtDb
             ? selectedPoints.map(p => ({ db_id: p.db_id, PointId: p.PointId }))
             : selectedPoints.map(p => p.PointId),
+          // #267: downloaded datasheets identify points by DB + PointNo —
+          // used when the chart sources the curated xlsx instead of the DB.
+          point_nos:   selectedPoints.map(p => ({
+            db_id: p.db_id ?? null,
+            point_no: String(p.PointNo ?? ''),
+          })),
           query_name:  chart.queryName,
         },
       }))

@@ -97,7 +97,34 @@ pub struct ChartQuery {
     pub project_ids: crate::commands::download::ProjectIdsArg,
     #[serde(default)]
     pub point_ids: crate::commands::download::PointIdsArg,
+    /// #267: the selected points as (db_id, PointNo) — downloaded datasheets
+    /// identify points by PointNo + DB column (no PointId), so the
+    /// datasheet-sourced path filters with these.
+    #[serde(default)]
+    pub point_nos: Vec<PointNoEntry>,
     pub query_name: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PointNoEntry {
+    #[serde(default)]
+    pub db_id: Option<String>,
+    pub point_no: String,
+}
+
+/// Stringify a datasheet cell for identity comparison (PointNo / DB columns
+/// may arrive as strings or numbers depending on the writer).
+fn chart_cell_str(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.trim().to_string(),
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i64() { i.to_string() }
+            else if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 { format!("{}", f as i64) } else { f.to_string() }
+            } else { String::new() }
+        }
+        _ => String::new(),
+    }
 }
 
 /// Sanitise a single ID for interpolation into a SQL IN clause.
@@ -188,6 +215,69 @@ pub async fn run_chart_query(
 
     // Issue #124: fan out across every configured DB.  Mirrors the
     // download_data refactor in #105 and the get_strata_data path in #79.
+    // #267: when the datasheet has been DOWNLOADED, chart it — that file is
+    // the curated data (CPT reduction, appends, injected strata/group columns,
+    // user formula columns), i.e. exactly what the Data preview and Excel
+    // show.  The DB query below remains the fallback for sheets that were
+    // never downloaded.  Rows are filtered to the selected points via the
+    // sheet's DB + PointNo columns.
+    if let Some(folder) = state.output_folder() {
+        let fname = query.query_name.clone();
+        let path = crate::commands::download::datasheets_dir(&folder)
+            .join(format!("{fname}.xlsx"));
+        if path.exists() {
+            let folder_c = folder.clone();
+            let loaded = tokio::task::spawn_blocking(move || -> Option<(Vec<String>, Vec<Vec<Value>>)> {
+                if let Some(cached) = crate::commands::download::read_datasheet_cached(&folder_c, &fname) {
+                    let cols: Vec<String> = cached["columns"].as_array()?
+                        .iter().map(|c| c.as_str().unwrap_or("").to_string()).collect();
+                    let rows: Vec<Vec<Value>> = cached["rows"].as_array()?
+                        .iter().filter_map(|r| r.as_array().cloned()).collect();
+                    return Some((cols, rows));
+                }
+                crate::commands::download::read_existing_datasheet(&path).map(|(c, r, _)| (c, r))
+            })
+            .await
+            .map_err(|e| format!("internal task error: {e}"))?;
+
+            if let Some((columns, mut rows)) = loaded {
+                if !query.point_nos.is_empty() {
+                    let pn_i = columns.iter().position(|c| c.trim().eq_ignore_ascii_case("pointno"));
+                    let db_i = columns.iter().position(|c| c.trim().eq_ignore_ascii_case("db"));
+                    if let Some(pn_i) = pn_i {
+                        use std::collections::HashSet;
+                        let want: HashSet<String> = query.point_nos.iter()
+                            .map(|p| format!("{}||{}", p.db_id.clone().unwrap_or_default(), p.point_no.trim()))
+                            .collect();
+                        let want_any_db: HashSet<String> = query.point_nos.iter()
+                            .map(|p| p.point_no.trim().to_string())
+                            .collect();
+                        rows.retain(|r| {
+                            let pn = chart_cell_str(r.get(pn_i));
+                            if pn.is_empty() { return false; }
+                            match db_i {
+                                Some(di) => {
+                                    let db = chart_cell_str(r.get(di));
+                                    want.contains(&format!("{db}||{pn}"))
+                                        || (db.is_empty() && want_any_db.contains(&pn))
+                                }
+                                None => want_any_db.contains(&pn),
+                            }
+                        });
+                    }
+                }
+                let truncated = rows.len() > MAX_CHART_ROWS;
+                rows.truncate(MAX_CHART_ROWS);
+                return Ok(json!({
+                    "columns":   columns,
+                    "rows":      rows,
+                    "truncated": truncated,
+                    "source":    "datasheet",
+                }));
+            }
+        }
+    }
+
     let databases = crate::commands::multi_db::active_databases(&state);
     if databases.is_empty() {
         return Err("No database connection configured.".into());

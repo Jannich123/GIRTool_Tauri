@@ -195,7 +195,7 @@ pub(crate) fn write_datasheet_cache(
 /// the cache exists AND is at least as new as the source xlsx.  Returns
 /// `None` (caller falls through to the slow xlsx parse) when the cache is
 /// missing, stale, or unparseable.
-fn read_datasheet_cached(folder: &str, fname: &str) -> Option<Value> {
+pub(crate) fn read_datasheet_cached(folder: &str, fname: &str) -> Option<Value> {
     let xlsx  = datasheets_dir(folder).join(format!("{fname}.xlsx"));
     let cache = datasheet_cache_path(folder, fname);
     let xlsx_mtime  = xlsx.metadata().ok()?.modified().ok()?;
