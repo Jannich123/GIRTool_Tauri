@@ -165,6 +165,17 @@ Performance (load a few thousand points first):
 - [ ] Selecting/deselecting points on the map is still instant (marker memoisation didn't break click handlers — tooltips' select/deselect wording still flips).
 - [ ] Jupiter hover tooltips + cyklogram still load; addon polygon click-as-boundary (#209) still works.
 
+### 6m. Map batch (#222)
+
+- [ ] **Single click** on a map point still toggles just that point (now fires after ~¼ s).
+- [ ] **Double-click** on a point of an UNSELECTED project → project + ALL its points enter the selection (status line confirms).
+- [ ] **Double-click** on a point of a selected project → project AND all its points leave the selection.
+- [ ] Double-click does not zoom the map (suppressed on markers; plain map double-click still zooms).
+- [ ] Layer panel (both maps): list reads top = drawn in front; **▲ Bring forward / ▼ Send backward** behave accordingly.
+- [ ] Settings → Map addons: **Built-in background maps** table shows the fixed WMS/XYZ services with URL, layer, format + working Project/Selection/Visible toggles; user addons listed under "Your addons".
+- [ ] Hovering a DB point (selection map) shows the Jupiter-style list: PointNo · type, ProjectNo, Project name, Database, Z1, **Depth (Bottom − Top)**, CRS line, click hints. Polygon-loaded points show Depth too (new Top/Bottom columns).
+- [ ] Settings → Query config: new sections **Map — distinct coordinate systems** and **Map — points inside polygon** (override per query type; defaults shown from the builtin templates).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

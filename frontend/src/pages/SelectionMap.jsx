@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, CircleMarker, Polygon, Polyline, Tooltip, useMap, useMapEvents } from 'react-leaflet'
+import L from 'leaflet'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
@@ -364,12 +365,15 @@ export default function SelectionMap() {
   // ── Selection from the map (M4.4a) ──────────────────────────────────────────
   // Project index for resolving a clicked point's parent project.
   const projIndex = useRef({})
+  // Version bump so memoised tooltips (#222) recompute once the index loads.
+  const [projIndexVersion, setProjIndexVersion] = useState(0)
   useEffect(() => {
     invoke('list_projects')
       .then(rows => {
         const idx = {}
         for (const r of (rows || [])) idx[`${r.db_id ?? '?'}||${r.ProjectId}`] = r
         projIndex.current = idx
+        setProjIndexVersion(v => v + 1)
       })
       .catch(() => {})
   }, [])
@@ -396,6 +400,59 @@ export default function SelectionMap() {
     }
   }
 
+  // #222: double-click selects/deselects the point's WHOLE parent project.
+  // Not selected → add the project + ALL its points (fetched via the cached
+  // get_points).  Already selected → remove the project and its points.
+  async function toggleProjectByPoint(p) {
+    const pk = `${p.db_id ?? '?'}||${p.ProjectId}`
+    const proj = projIndex.current[pk]
+    const isSelected = (selectedProjects || []).some(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` === pk)
+    if (isSelected) {
+      setSelectedProjects(prev => (prev || []).filter(sp => `${sp.db_id ?? '?'}||${sp.ProjectId}` !== pk))
+      setSelectedPoints(prev => (prev || []).filter(pt => `${pt.db_id ?? '?'}||${pt.ProjectId}` !== pk))
+      setLoadStatus(`Removed project ${proj?.ProjectNo ?? p.ProjectId} and its points from the selection`)
+      return
+    }
+    if (!proj) {
+      setLoadStatus('Parent project not found in the project list')
+      return
+    }
+    setSelectedProjects(prev => [...(prev || []), proj])
+    try {
+      const rows = await invoke('get_points', { projectIds: [{ db_id: p.db_id, ProjectId: p.ProjectId }] })
+      setSelectedPoints(prev => {
+        const have = new Set((prev || []).map(x => `${x.db_id ?? '?'}_${x.PointId}`))
+        const fresh = (Array.isArray(rows) ? rows : []).filter(x => !have.has(`${x.db_id ?? '?'}_${x.PointId}`))
+        return fresh.length ? [...(prev || []), ...fresh] : (prev || [])
+      })
+      setLoadStatus(`Added project ${proj.ProjectNo ?? p.ProjectId} with all its points`)
+    } catch (err) {
+      setLoadStatus(`Failed to load the project's points: ${err}`)
+    }
+  }
+
+  // Click vs double-click disambiguation (#222): a double-click also fires
+  // two clicks, so the single-point toggle waits 260 ms and is cancelled
+  // when the second click arrives.  Map double-click zoom is suppressed
+  // while handling a marker double-click.
+  const clickTimerRef = useRef(null)
+  useEffect(() => () => { clearTimeout(clickTimerRef.current) }, [])
+  function onMarkerClick(p) {
+    clearTimeout(clickTimerRef.current)
+    clickTimerRef.current = setTimeout(() => toggleSelectRef.current(p), 260)
+  }
+  function onMarkerDblClick(p, e) {
+    clearTimeout(clickTimerRef.current)
+    try { if (e?.originalEvent) L.DomEvent.stopPropagation(e.originalEvent) } catch { /* best effort */ }
+    if (map?.doubleClickZoom) {
+      try {
+        map.doubleClickZoom.disable()
+        setTimeout(() => { try { map.doubleClickZoom.enable() } catch { /* gone */ } }, 350)
+      } catch { /* best effort */ }
+    }
+    toggleProjectByPointRef.current(p)
+  }
+
   // Visible points (loaded ∪ selected-project) that are selected → red ring.
   const ringPoints = useMemo(() => {
     const byId = new Map()
@@ -412,8 +469,41 @@ export default function SelectionMap() {
   // closures.
   const toggleSelectRef = useRef(null)
   toggleSelectRef.current = toggleSelect
+  const toggleProjectByPointRef = useRef(null)
+  toggleProjectByPointRef.current = toggleProjectByPoint
+  const markerClickRef = useRef(null)
+  markerClickRef.current = onMarkerClick
+  const markerDblRef = useRef(null)
+  markerDblRef.current = onMarkerDblClick
   const loadCyklogramRef = useRef(null)
   loadCyklogramRef.current = loadCyklogram
+
+  // #222: labelled multi-line tooltip for DB points (mirrors the Jupiter
+  // style).  Lines appear only when the value exists; Depth = Bottom − Top.
+  function pointTooltip(p, id) {
+    const proj = projIndex.current[`${p.db_id ?? '?'}||${p.ProjectId}`]
+    const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v)
+    const top = num(p.Top)
+    const bottom = num(p.Bottom)
+    const depth = (top != null && bottom != null) ? Math.round((bottom - top) * 100) / 100 : null
+    const z = num(p.Z1)
+    const projectNo = p.ProjectNo ?? proj?.ProjectNo
+    const crsLine = crsTip(p)
+    return (
+      <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 280 }}>
+        <strong>{p.PointNo ?? p.PointId}</strong>{p.PointType ? ` · ${p.PointType}` : ''}<br />
+        {projectNo != null && <>ProjectNo: {projectNo}<br /></>}
+        {proj?.Title ? <>Project name: {proj.Title}<br /></> : null}
+        Database: {p.db_id ?? '?'}<br />
+        {z != null && <>Z1: {z} m<br /></>}
+        {depth != null && <>Depth: {depth} m (Bottom − Top)<br /></>}
+        {crsLine && <>{crsLine}<br /></>}
+        <span style={{ opacity: 0.7 }}>
+          click = {selectedIds.has(id) ? 'deselect' : 'select'} point · double-click = whole project
+        </span>
+      </div>
+    )
+  }
 
   // X/Y line for point tooltips in the project's target CRS (#217).
   const crsTip = useCallback((p) => {
@@ -468,50 +558,42 @@ export default function SelectionMap() {
   ), [jupiter, jupiterCats, cykVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const availMarkers = useMemo(() => (
-    loaded.filter(f => !ptIdSet.has(f.id) && !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => {
-      const crsLine = crsTip(p)
-      return (
-        <CircleMarker
-          key={`avail_${id}`}
-          center={latlng}
-          radius={5}
-          // Available = hollow ring in the source colour.  Click to select.
-          pathOptions={{ color: colorFor(p.db_id), weight: 2, fillColor: colorFor(p.db_id), fillOpacity: 0.2 }}
-          eventHandlers={{ click: () => toggleSelectRef.current(p) }}
-        >
-          <Tooltip>
-            <span style={{ fontSize: '.75rem' }}>
-              {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
-              {crsLine && <><br />{crsLine}</>}
-            </span>
-          </Tooltip>
-        </CircleMarker>
-      )
-    })
-  ), [loaded, ptIdSet, hiddenDbs, dbColors, selectedIds, crsTip]) // eslint-disable-line react-hooks/exhaustive-deps
+    loaded.filter(f => !ptIdSet.has(f.id) && !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
+      <CircleMarker
+        key={`avail_${id}`}
+        center={latlng}
+        radius={5}
+        // Available = hollow ring in the source colour.  Click selects the
+        // point; double-click toggles the whole parent project (#222).
+        pathOptions={{ color: colorFor(p.db_id), weight: 2, fillColor: colorFor(p.db_id), fillOpacity: 0.2 }}
+        eventHandlers={{
+          click: () => markerClickRef.current(p),
+          dblclick: (e) => markerDblRef.current(p, e),
+        }}
+      >
+        <Tooltip>{pointTooltip(p, id)}</Tooltip>
+      </CircleMarker>
+    ))
+  ), [loaded, ptIdSet, hiddenDbs, dbColors, selectedIds, crsTip, projIndexVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const ptsMarkers = useMemo(() => (
-    pts.filter(f => !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => {
-      const crsLine = crsTip(p)
-      return (
-        <CircleMarker
-          key={id}
-          center={latlng}
-          radius={6}
-          // Selected-project point, solid fill in the source colour.  Click to select.
-          pathOptions={{ color: '#fff', weight: 1.5, fillColor: colorFor(p.db_id), fillOpacity: 0.95 }}
-          eventHandlers={{ click: () => toggleSelectRef.current(p) }}
-        >
-          <Tooltip>
-            <span style={{ fontSize: '.75rem' }}>
-              {p.PointNo ?? p.PointId} · {p.PointType || '—'} · {p.db_id ?? '?'}{p.ProjectNo ? ` · ${p.ProjectNo}` : ''} · click to {selectedIds.has(id) ? 'deselect' : 'select'}
-              {crsLine && <><br />{crsLine}</>}
-            </span>
-          </Tooltip>
-        </CircleMarker>
-      )
-    })
-  ), [pts, hiddenDbs, dbColors, selectedIds, crsTip]) // eslint-disable-line react-hooks/exhaustive-deps
+    pts.filter(f => !hiddenDbs.has(f.p.db_id)).map(({ id, latlng, p }) => (
+      <CircleMarker
+        key={id}
+        center={latlng}
+        radius={6}
+        // Selected-project point, solid fill in the source colour.  Click
+        // selects the point; double-click toggles the whole project (#222).
+        pathOptions={{ color: '#fff', weight: 1.5, fillColor: colorFor(p.db_id), fillOpacity: 0.95 }}
+        eventHandlers={{
+          click: () => markerClickRef.current(p),
+          dblclick: (e) => markerDblRef.current(p, e),
+        }}
+      >
+        <Tooltip>{pointTooltip(p, id)}</Tooltip>
+      </CircleMarker>
+    ))
+  ), [pts, hiddenDbs, dbColors, selectedIds, crsTip, projIndexVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const ringMarkers = useMemo(() => (
     ringPoints.map(f => (

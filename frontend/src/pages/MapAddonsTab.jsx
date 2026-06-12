@@ -157,9 +157,48 @@ export default function MapAddonsTab() {
         local files (shapefile / CSV / Excel) come in a later update.
       </p>
 
+      {/* Built-in background maps (#222): the fixed WMS/XYZ services, shown so
+          the URLs and layers in use are visible.  Static fields are read-only
+          (defined in code — baseLayers.js); the toggles edit the same entries
+          the on-map layer panel manages. */}
+      <h4 style={{ margin: '0 0 .35rem' }}>Built-in background maps</h4>
+      <table className="data-table" style={{ maxWidth: 900, marginBottom: '1.25rem' }}>
+        <thead>
+          <tr>
+            <th>Name</th><th>Type</th><th>Service URL</th><th>Layer</th><th>Format</th>
+            <th style={{ width: 70, textAlign: 'center' }}>Project</th>
+            <th style={{ width: 80, textAlign: 'center' }}>Selection</th>
+            <th style={{ width: 70, textAlign: 'center' }}>Visible</th>
+          </tr>
+        </thead>
+        <tbody>
+          {addons.filter(a => a?.builtin).map(a => (
+            <tr key={a.id}>
+              <td>{a.name}</td>
+              <td>{(a.type || 'wms').toUpperCase()}</td>
+              <td style={{ fontSize: '.72rem', fontFamily: 'monospace', wordBreak: 'break-all' }} title={a.url}>
+                {a.url}
+              </td>
+              <td style={{ fontSize: '.8rem' }}>{a.layer || '—'}</td>
+              <td style={{ fontSize: '.8rem' }}>{a.format || (a.type === 'xyz' ? 'tiles' : '—')}</td>
+              <td style={{ textAlign: 'center' }}>
+                <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
+              </td>
+              <td style={{ textAlign: 'center' }}>
+                <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
+              </td>
+              <td style={{ textAlign: 'center' }}>
+                <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
       {/* Existing addons */}
+      <h4 style={{ margin: '0 0 .35rem' }}>Your addons</h4>
       {userAddons.length === 0 ? (
-        <p className="hint">No addons yet. (Background maps live in the map's top-right layer panel.)</p>
+        <p className="hint">No addons yet.</p>
       ) : (
         <table className="data-table" style={{ maxWidth: 900, marginBottom: '1rem' }}>
           <thead>

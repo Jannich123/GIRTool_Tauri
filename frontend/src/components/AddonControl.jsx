@@ -14,9 +14,15 @@ export default function AddonControl({ target }) {
   const list = addons.filter(a => a && a.maps?.[target])
   if (list.length === 0) return null
 
+  // #222: the panel lists layers top-of-list = drawn ON TOP of the map.  The
+  // addons array stores bottom→top (zIndex = 200 + array position), so the
+  // display order is the reverse of storage order.
+  const display = [...list].reverse()
+
   const patched = (id, patch) => addons.map(a => (a.id === id ? { ...a, ...patch } : a))
 
-  // Move a layer up/down among the same-target layers, keeping others in place.
+  // Move a layer within the same-target layers, keeping others in place.
+  // dir +1 = later in the ARRAY = drawn further to the front.
   function move(id, dir) {
     const idxs = addons.map((a, i) => (a && a.maps?.[target] ? i : -1)).filter(i => i >= 0)
     const subset = idxs.map(i => addons[i])
@@ -44,8 +50,11 @@ export default function AddonControl({ target }) {
         fontSize: '.75rem', width: 220,
       }}
     >
-      <div style={{ fontWeight: 700, marginBottom: '.3rem' }}>Map layers</div>
-      {list.map((a, i) => (
+      <div style={{ fontWeight: 700, marginBottom: '.3rem' }}>
+        Map layers
+        <span style={{ fontWeight: 400, color: '#64748b', marginLeft: '.4rem' }}>(top = in front)</span>
+      </div>
+      {display.map((a, i) => (
         <div key={a.id} style={{ marginBottom: '.45rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem' }}>
             <input
@@ -55,8 +64,8 @@ export default function AddonControl({ target }) {
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.name}>
               {a.name}
             </span>
-            <button style={btn} disabled={i === 0} onClick={() => move(a.id, -1)} title="Move up">↑</button>
-            <button style={btn} disabled={i === list.length - 1} onClick={() => move(a.id, 1)} title="Move down">↓</button>
+            <button style={btn} disabled={i === 0} onClick={() => move(a.id, +1)} title="Bring forward (draw above)">▲</button>
+            <button style={btn} disabled={i === display.length - 1} onClick={() => move(a.id, -1)} title="Send backward (draw below)">▼</button>
           </div>
           {a.visible !== false && (
             <input
