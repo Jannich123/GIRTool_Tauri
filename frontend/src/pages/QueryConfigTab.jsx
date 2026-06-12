@@ -30,6 +30,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 
 // Section metadata — keep names in sync with the backend constants.
 const SECTIONS = [
@@ -131,6 +132,10 @@ export default function QueryConfigTab() {
     }
   }, [])
   useEffect(() => { reload() }, [reload])
+
+  // #213: query configs changed in another window — reload.  Note this drops
+  // local unsaved drafts (last writer wins, same as everywhere else).
+  useDataChanged('query_configs', reload)
 
   // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -256,7 +261,7 @@ export default function QueryConfigTab() {
     setBusy(true); setMsg(null)
     try {
       const merged = mergedForSave()
-      await invoke('save_query_configs', { configs: merged })
+      await invokeAndNotify('query_configs', 'save_query_configs', { configs: merged })
       setConfigs(merged)
       setDrafts({})
       setDirty({})
@@ -275,7 +280,7 @@ export default function QueryConfigTab() {
   const resetOverride = async (section, qt) => {
     setBusy(true); setMsg(null)
     try {
-      await invoke('reset_query_config', { section, queryType: qt })
+      await invokeAndNotify('query_configs', 'reset_query_config', { section, queryType: qt })
       // Drop any draft for this (section, qt) so getValue falls back cleanly.
       setDrafts(prev => {
         const next = { ...prev }
@@ -321,7 +326,7 @@ export default function QueryConfigTab() {
       // For each section, drop the qt bucket via reset_query_config.
       for (const sec of SECTIONS) {
         try {
-          await invoke('reset_query_config', { section: sec.key, queryType: qt })
+          await invokeAndNotify('query_configs', 'reset_query_config', { section: sec.key, queryType: qt })
         } catch (e) {
           console.warn(`reset_query_config failed for ${sec.key}/${qt}:`, e)
         }

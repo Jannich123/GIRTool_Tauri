@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 
 // CPT – Calculations (M8, issue #182 / plan §E).
@@ -48,7 +49,7 @@ export default function CptCalcPage() {
       const next = { ...(prev || {}), ...patch }
       clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
-        invoke('save_cpt_calc_config', { config: next }).catch(() => {})
+        invokeAndNotify('cpt', 'save_cpt_calc_config', { config: next }).catch(() => {})
       }, 500)
       return next
     })
@@ -78,7 +79,7 @@ export default function CptCalcPage() {
   async function run() {
     setRunMsg(null); setRunning(true)
     try {
-      const r = await invoke('run_cpt_calc', { fname })
+      const r = await invokeAndNotify('datasheets', 'run_cpt_calc', { fname })
       setRunMsg({ ok: true, text: `${r.file}: ${r.columns_written} column(s) written across ${r.rows} rows.` })
     } catch (e) {
       setRunMsg({ ok: false, text: String(e).slice(0, 220) })
@@ -146,7 +147,7 @@ export default function CptCalcPage() {
       const next = prev.map((r, j) => (j === i ? { ...r, [key]: raw === '' ? null : Number(String(raw).replace(',', '.')) } : r))
       clearTimeout(pointSaveTimer.current)
       pointSaveTimer.current = setTimeout(() => {
-        invoke('save_cpt_point_data', { rows: next }).catch(() => {})
+        invokeAndNotify('cpt', 'save_cpt_point_data', { rows: next }).catch(() => {})
       }, 600)
       return next
     })
@@ -180,12 +181,21 @@ export default function CptCalcPage() {
 
   useEffect(() => { loadLayerData() }, [loadLayerData])
 
+  // #213: CPT settings changed in another window — reload the calc config and
+  // both settings tables.  (Own-window saves are skipped by the bus.)
+  useDataChanged('cpt', () => {
+    if (!hasFolder) return
+    invoke('get_cpt_calc_config').then(c => setConfig(c || null)).catch(() => {})
+    loadPointData()
+    loadLayerData()
+  })
+
   // 📂 Open the settings workbooks in Excel (#198): persist the current rows
   // first so the file matches the UI, then open it.
   async function openSettingsXlsx(which) {
     try {
-      if (which === 'point') await invoke('save_cpt_point_data', { rows: pointRows })
-      else await invoke('save_cpt_layer_data', { rows: layerRows })
+      if (which === 'point') await invokeAndNotify('cpt', 'save_cpt_point_data', { rows: pointRows })
+      else await invokeAndNotify('cpt', 'save_cpt_layer_data', { rows: layerRows })
     } catch { /* best-effort — open anyway */ }
     invoke('open_cpt_settings_xlsx', { which }).catch(() => {})
   }
@@ -193,7 +203,7 @@ export default function CptCalcPage() {
   function persistLayers(next) {
     clearTimeout(layerSaveTimer.current)
     layerSaveTimer.current = setTimeout(() => {
-      invoke('save_cpt_layer_data', { rows: next }).catch(() => {})
+      invokeAndNotify('cpt', 'save_cpt_layer_data', { rows: next }).catch(() => {})
     }, 600)
   }
   function editLayer(i, key, raw) {

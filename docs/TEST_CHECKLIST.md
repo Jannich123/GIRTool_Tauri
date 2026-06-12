@@ -128,6 +128,19 @@ Tick boxes as you go; anything broken → tell Claude which checkbox failed.
 - [ ] Same for **opacity** slider and the **on/off** toggle.
 - [ ] **Add** a new layer (WMS or file) → it appears on the other window's map; **remove** it → it disappears there.
 
+### 6j. Everything syncs across windows (#213)
+
+With a pop-out open next to the main window:
+
+- [ ] Change the **coordinate system** in Settings → the other window's Points table / map coordinates re-convert.
+- [ ] Edit a **group** (assignments or colors) → the other window's Grouping/Colors pages and map/filter groupings follow.
+- [ ] Edit a **strata correction** and save → the other window's Strata tab reloads; strata-layer filters update.
+- [ ] **Download / Append / CPT-reduce** in one window → the other window's Data tab re-lists datasheets and drops stale previews.
+- [ ] Change **CPT calc settings / point / layer data** → the other window's CPT-Calc page reloads them; CPT-reduction settings (incl. Auto-apply) follow in Data.
+- [ ] Edit **query configs** → the other window's Query config tab reloads.
+- [ ] **Boundaries** edits propagate (was already live, still works).
+- [ ] Editing in the SAME window never reloads under your hands (own-window events are skipped).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

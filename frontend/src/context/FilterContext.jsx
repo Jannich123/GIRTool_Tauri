@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { invoke, listen } from '../tauri-api'
+import { useDataChanged } from '../lib/dataChanged'
 import { useApp } from './AppContext'
 
 // ── Serialisation helpers ─────────────────────────────────────────────────────
@@ -80,6 +81,11 @@ export function FilterProvider({ children }) {
       .then(r => setPointStrataLayers(r?.point_layers || {}))
       .catch(() => {})
   }, [projectId, setStrataLayersList])
+
+  // #213: re-fetch when ANOTHER window changes grouping or strata data (the
+  // data:changed bus).  Both callbacks no-op harmlessly without a project.
+  useDataChanged('grouping', fetchGroupData)
+  useDataChanged(['strata', 'datasheets'], fetchStrataLayers)
 
   // ── Cross-window sync bookkeeping ─────────────────────────────────────────
   // lastSavedFiltersRef stores the JSON form of the filters we last either

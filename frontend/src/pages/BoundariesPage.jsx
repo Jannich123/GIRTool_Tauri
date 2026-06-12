@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -188,7 +189,7 @@ export default function BoundariesPage() {
     if (!projectId) return
     try {
       setXlsxStatus('saving')
-      await invoke('save_boundaries', { projectId, boundaries: list })
+      await invokeAndNotify('boundaries', 'save_boundaries', { projectId, boundaries: list })
       setXlsxStatus('saved')
       clearTimeout(xlsxTimerRef.current)
       xlsxTimerRef.current = setTimeout(() => setXlsxStatus('idle'), 2500)
@@ -203,7 +204,7 @@ export default function BoundariesPage() {
     if (!projectId) return
     try {
       setXlsxStatus('loading')
-      const res = await invoke('load_boundaries_from_excel', { projectId })
+      const res = await invokeAndNotify('boundaries', 'load_boundaries_from_excel', { projectId })
       const merged = res.boundaries ?? []
       saveBoundaries(merged)
       // Select first new boundary added (if any)

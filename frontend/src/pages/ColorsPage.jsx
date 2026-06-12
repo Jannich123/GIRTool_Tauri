@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 
@@ -115,7 +116,7 @@ export default function ColorsPage() {
     if (!projectId) return
     setSaveStatus('saving'); setSaveError('')
     try {
-      await invoke('save_grouping', {
+      await invokeAndNotify('grouping', 'save_grouping', {
         projectId,
         body: {
           systems:     sys,
@@ -189,7 +190,7 @@ export default function ColorsPage() {
           })
           // Persist the updated group system colors back to grouping backend
           if (projectId) {
-            invoke('save_grouping', {
+            invokeAndNotify('grouping', 'save_grouping', {
               projectId,
               body: {
                 systems:     next,
@@ -206,6 +207,12 @@ export default function ColorsPage() {
   }, [updateTypeStyle, updateStrataLayerStyle, projectId])
 
   // ── Load ───────────────────────────────────────────────────────────────────
+
+  // #213: re-load when ANOTHER window changes grouping (group colours travel
+  // with save_grouping).  Type/strata styles refresh via AppContext's
+  // 'colors' listener, so 'grouping' is the only domain needed here.
+  const [syncReloadKey, setSyncReloadKey] = useState(0)
+  useDataChanged('grouping', () => setSyncReloadKey(k => k + 1))
 
   useEffect(() => {
     if (!projectId) return
@@ -226,7 +233,7 @@ export default function ColorsPage() {
         setLoading(false)
         requestAnimationFrame(() => { initialized.current = true })
       })
-  }, [projectId])
+  }, [projectId, syncReloadKey]) // eslint-disable-line
 
   // Re-save when strata layer data arrives (e.g. after Transfer Strata) so
   // the xlsx stays current with the new default layer rows.

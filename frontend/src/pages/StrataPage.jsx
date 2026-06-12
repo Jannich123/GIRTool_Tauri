@@ -17,6 +17,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { invoke } from '../tauri-api'
+import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 
@@ -181,7 +182,7 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   async function handleDownload() {
     setDownloading(true); setDlMsg(null); setTransferMsg(null); setOpenMsg(null)
     try {
-      const r = await invoke('download_strata', {
+      const r = await invokeAndNotify('strata', 'download_strata', {
         body: {
           project_ids: projectIds,
           point_ids:   pointIds,
@@ -211,7 +212,7 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
   async function handleTransfer() {
     setTransferring(true); setTransferMsg(null); setDlMsg(null); setOpenMsg(null)
     try {
-      const r = await invoke('transfer_strata', {
+      const r = await invokeAndNotify('strata', 'transfer_strata', {
         body: {
           project_ids: projectIds,
           point_ids:   pointIds,
@@ -475,10 +476,13 @@ function ErrorTab({ onErrorCountChange }) {
     }
   }
 
+  // #213: re-load when another window edits / re-downloads / transfers strata.
+  useDataChanged('strata', loadStrata)
+
   async function saveCorrections() {
     setSaving(true); setSaveMsg(null)
     try {
-      const r = await invoke('update_strata', { rows })
+      const r = await invokeAndNotify('strata', 'update_strata', { rows })
       setSaveMsg({ ok: true, text: `Saved ${r.rows} row${r.rows !== 1 ? 's' : ''} back to the Strata sheet` })
       // Re-read the Strata sheet so Colors & Symbols layer lists stay current.
       refreshStrataLayers()
