@@ -67,9 +67,10 @@ pub fn run() {
             commands::points_xlsx::save_points_xlsx,
             commands::points_xlsx::load_points_xlsx,
             commands::points_xlsx::open_points_xlsx,
-            // data import wizard (issue #278)
+            // data import wizard (issues #278, #280)
             commands::import::pick_import_path,
             commands::import::import_preview,
+            commands::import::datasheet_columns,
             commands::import::import_data,
             // queries
             commands::queries::list_queries,

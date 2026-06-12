@@ -339,6 +339,17 @@ Performance (load a few thousand points first):
 - [ ] points.xlsx upsert: brand-new PointNos appear as points with db `imported` (PointId `imported_<PointNo>`, X1/Y1/Z1/Projection1 from mapped columns when present); an EXISTING PointNo only gets its MISSING coordinate fields filled - never overwritten - and the live selection (all windows) reflects the change without a restart.
 - [ ] Danish CSVs import correctly: `;` delimiter and decimal commas parsed as numbers, ae/oe/aa intact (Windows-1252 fallback), leading-zero PointNos like `007` stay text.
 
+### 6ai. Import wizard v2 - headerless files, query-driven mapping, ID sources (#280)
+
+- [ ] **No header**: untick "file has a header row" -> the first data row defaults to 1, source columns are addressed by letter only (A, B, C...), and the mapping/ID dropdowns show plain letters; clicking a row number in the preview re-enables the header at that row.
+- [ ] **Destination-driven mapping**: typing/choosing a target datasheet loads its column list - left side = datasheet columns (read-only), right side = source column dropdown with a "- skip -" option. For an EXISTING sheet the hint says "existing sheet - N columns".
+- [ ] **Generated table from query**: choosing a datasheet name that does not exist on disk but matches a datasheet query (e.g. WaterLevels, SPTData) shows "new sheet generated from the <name> query - N columns" and lists exactly the query's SELECT aliases (+ DB); importing creates the sheet with ALL those columns in query order - unmapped ones exist but stay blank.
+- [ ] Sources auto-match by name (header text == datasheet column, case-insensitive); "+ Add destination column" appends a free-text target that is created as a new column on import.
+- [ ] **ID block**: DB / ProjectId / PointId / PointNo each offer Custom text / File name / any source column. Defaults: DB+ProjectId = text "imported", PointId = text "imported_{PointNo}", PointNo = the column literally headed PointNo else File name; headers named db/db_id/projectid/pointid auto-select their column.
+- [ ] Custom-text IDs left empty turn the field red, the Import button stays disabled and a "Fill in: ..." message lists the missing ones; `{PointNo}` in custom text is replaced per row.
+- [ ] Importing into an existing DOWNLOADED sheet reuses its `db_id` column for the DB value (no duplicate DB column); a sheet with a PointId/ProjectId column gets those filled from the ID block on every imported row.
+- [ ] points.xlsx upsert uses the chosen IDs for NEW points (db_id/ProjectId/PointId as configured); existing PointNos still only get missing coordinates filled.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

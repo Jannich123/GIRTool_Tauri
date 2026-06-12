@@ -85,11 +85,15 @@ function CptReduceSection({ datasheets, cfg, onPatch, onDone }) {
   )
 }
 
-// ── Data import wizard (issue #278) ───────────────────────────────────────────
+// ── Data import wizard (issues #278, #280) ────────────────────────────────────
 // CSV / Excel file (or a folder of them) → an existing or new datasheet.
-// DB is always "imported"; PointNo comes from a column or the file name; new
-// points are upserted into points.xlsx, existing ones only get missing values
-// filled.
+// The mapping is destination-driven: the left side lists the target
+// datasheet's columns (from the file, or generated from its datasheet query
+// when the sheet doesn't exist yet) and the right side picks the source
+// column.  Every ID (DB / ProjectId / PointId / PointNo) comes from a source
+// column, the file name, or custom text ({PointNo} is replaced per row), and
+// must be filled before importing.  New points are upserted into points.xlsx,
+// existing ones only get missing values filled.
 
 const colLetter = (i) => {
   let s = ''
@@ -97,6 +101,23 @@ const colLetter = (i) => {
   return s
 }
 const cellText = (v) => (v == null ? '' : String(v))
+const normCol = (c) => cellText(c).trim().toLowerCase()
+
+const ID_FIELDS = [
+  { key: 'db',         label: 'DB',        hint: 'database tag on every row' },
+  { key: 'project_id', label: 'ProjectId', hint: 'parent project of new points' },
+  { key: 'point_id',   label: 'PointId',   hint: 'unique id of new points' },
+  { key: 'point_no',   label: 'PointNo',   hint: 'borehole / point number' },
+]
+// Destination columns the ID block already covers — kept out of the mapping list.
+const ID_COL_NAMES = new Set(['db', 'db_id', 'pointno', 'projectid', 'pointid'])
+
+const DEFAULT_IDS = () => ({
+  db:         { kind: 'text', value: 'imported' },
+  project_id: { kind: 'text', value: 'imported' },
+  point_id:   { kind: 'text', value: 'imported_{PointNo}' },
+  point_no:   { kind: 'filename', value: '' },
+})
 
 function ImportSection({ datasheets, onDone }) {
   const { setSelectedPoints } = useApp()
@@ -104,25 +125,25 @@ function ImportSection({ datasheets, onDone }) {
   const [files, setFiles]         = useState([])
   const [grid, setGrid]           = useState([])
   const [totalRows, setTotalRows] = useState(0)
+  const [hasHeader, setHasHeader] = useState(true)
   const [headerRow, setHeaderRow] = useState(1) // 1-based
   const [dataRow, setDataRow]     = useState(2) // 1-based
   const [fname, setFname]         = useState('')
-  const [pnSource, setPnSource]   = useState('filename')
-  const [mapping, setMapping]     = useState([]) // [{ target, source }]
+  const [destCols, setDestCols]   = useState([]) // target datasheet columns
+  const [ids, setIds]             = useState(DEFAULT_IDS)
+  const [mapping, setMapping]     = useState([]) // [{ target, source: number|null, fixed }]
   const [busy, setBusy]           = useState(false)
   const [msg, setMsg]             = useState(null)
 
-  const headers = grid[headerRow - 1] || []
+  const headers = hasHeader ? (grid[headerRow - 1] || []) : []
   const nCols = useMemo(() => grid.reduce((m, r) => Math.max(m, r.length), 0), [grid])
   const sheetNames = [...new Set(datasheets.map(d => d.fname))]
+  const sheetExists = sheetNames.some(n => n.toLowerCase() === fname.trim().toLowerCase())
 
-  function prefill(g, hr) {
-    const hdr = g[hr - 1] || []
-    setMapping(hdr.map((h, i) => ({ target: cellText(h).trim(), source: i })).filter(m => m.target))
-    const pnIdx = hdr.findIndex(h => cellText(h).trim().toLowerCase() === 'pointno')
-    setPnSource(pnIdx >= 0 ? `col:${pnIdx}` : 'filename')
+  const srcLabel = (i) => {
+    const h = cellText(headers[i]).trim()
+    return h ? `${colLetter(i)} — ${h}` : colLetter(i)
   }
-
   async function pick(mode) {
     setMsg(null)
     try {
@@ -133,35 +154,94 @@ function ImportSection({ datasheets, onDone }) {
       setFiles(r.files || [])
       setGrid(r.grid || [])
       setTotalRows(r.total_rows ?? 0)
+      setHasHeader(true)
       setHeaderRow(1)
       setDataRow(2)
-      prefill(r.grid || [], 1)
     } catch (e) {
       setMsg({ ok: false, text: String(e).slice(0, 250) })
       setFiles([]); setGrid([])
     }
   }
 
-  function setHeader(hrRaw) {
-    const hr = Math.max(1, Number(hrRaw) || 1)
-    setHeaderRow(hr)
-    setDataRow(d => (d <= hr ? hr + 1 : d))
-    prefill(grid, hr)
+  // ── Destination columns follow the target datasheet name ────────────────
+  useEffect(() => {
+    const name = fname.trim()
+    if (!name) { setDestCols([]); return }
+    let stale = false
+    const timer = setTimeout(async () => {
+      try {
+        const cols = await invoke('datasheet_columns', { fname: name })
+        if (!stale) setDestCols(Array.isArray(cols) ? cols : [])
+      } catch {
+        if (!stale) setDestCols([])
+      }
+    }, 350)
+    return () => { stale = true; clearTimeout(timer) }
+  }, [fname])
+
+  // ── Defaults regenerate when the file / header structure changes ────────
+  useEffect(() => {
+    if (!grid.length) return
+    const hdr = hasHeader ? (grid[headerRow - 1] || []) : []
+    const idx = (name) => hdr.findIndex(h => normCol(h) === name)
+    const colOr = (i, fallback) => (i >= 0 ? { kind: 'column', value: String(i) } : fallback)
+    const dbIdx = (() => { const a = idx('db'); return a >= 0 ? a : idx('db_id') })()
+    setIds({
+      db:         colOr(dbIdx,            { kind: 'text', value: 'imported' }),
+      project_id: colOr(idx('projectid'), { kind: 'text', value: 'imported' }),
+      point_id:   colOr(idx('pointid'),   { kind: 'text', value: 'imported_{PointNo}' }),
+      point_no:   colOr(idx('pointno'),   { kind: 'filename', value: '' }),
+    })
+  }, [grid, hasHeader, headerRow])
+
+  useEffect(() => {
+    if (!grid.length) return
+    const hdr = hasHeader ? (grid[headerRow - 1] || []) : []
+    if (destCols.length) {
+      // Destination-driven: one row per datasheet column (IDs handled above).
+      setMapping(destCols
+        .filter(c => !ID_COL_NAMES.has(normCol(c)))
+        .map(c => {
+          const i = hdr.findIndex(h => normCol(h) === normCol(c))
+          return { target: cellText(c).trim(), source: i >= 0 ? i : null, fixed: true }
+        }))
+    } else if (hdr.length) {
+      // No known destination: derive editable targets from the source header.
+      setMapping(hdr
+        .map((h, i) => ({ target: cellText(h).trim(), source: i, fixed: false }))
+        .filter(m => m.target && !ID_COL_NAMES.has(normCol(m.target))))
+    } else {
+      setMapping([])
+    }
+  }, [destCols, grid, hasHeader, headerRow])
+
+  function clickHeaderRow(r1) {
+    setHasHeader(true)
+    setHeaderRow(r1)
+    setDataRow(d => (d <= r1 ? r1 + 1 : d))
   }
+
+  const idErrors = ID_FIELDS
+    .filter(f => ids[f.key].kind === 'text' && !ids[f.key].value.trim())
+    .map(f => f.label)
+  const canImport = !busy && path && grid.length > 0 && fname.trim() && idErrors.length === 0
 
   async function runImport() {
     setMsg(null)
-    if (!path) { setMsg({ ok: false, text: 'Choose a file or folder first.' }); return }
-    if (!fname.trim()) { setMsg({ ok: false, text: 'Pick a target datasheet.' }); return }
+    if (!canImport) return
     setBusy(true)
     try {
       const req = {
         path,
         fname: fname.trim(),
         data_row: Math.max(1, Number(dataRow) || 1),
-        point_no_source: pnSource,
+        ids: Object.fromEntries(ID_FIELDS.map(f => [f.key, {
+          kind:  ids[f.key].kind,
+          value: String(ids[f.key].value ?? '').trim(),
+        }])),
+        columns: destCols,
         mapping: mapping
-          .filter(m => m.target.trim())
+          .filter(m => m.source != null && m.target.trim())
           .map(m => ({ target: m.target.trim(), source: m.source })),
       }
       const r = await invokeAndNotify('datasheets', 'import_data', { req })
@@ -206,19 +286,22 @@ function ImportSection({ datasheets, onDone }) {
     }
   }
 
-  const srcLabel = (i) => {
-    const h = cellText(headers[i]).trim()
-    return h ? `${colLetter(i)} — ${h}` : colLetter(i)
-  }
+  const sourceSelect = (value, onChange, { allowSkip = false, width = 220 } = {}) => (
+    <select value={value} onChange={onChange} style={{ width }}>
+      {allowSkip && <option value="">— skip —</option>}
+      {Array.from({ length: nCols }, (_, i) => (
+        <option key={i} value={String(i)}>{srcLabel(i)}</option>
+      ))}
+    </select>
+  )
 
   return (
     <div style={{ maxWidth: 980 }}>
       <h3 className="section-title">Import data</h3>
       <p className="hint" style={{ marginTop: 0 }}>
         Append CSV / Excel data to a datasheet in <code>Datasheets/</code>. Pick a single file or a
-        folder (every CSV/Excel inside is imported with the same settings). <code>DB</code> is set
-        to <code>imported</code>; points missing from <code>points.xlsx</code> are added, existing
-        points only get their missing coordinates filled.
+        folder (every CSV/Excel inside is imported with the same settings). Points missing from{' '}
+        <code>points.xlsx</code> are added; existing points only get their missing coordinates filled.
       </p>
 
       <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.75rem' }}>
@@ -246,7 +329,7 @@ function ImportSection({ datasheets, onDone }) {
             <tbody>
               {grid.map((row, ri) => {
                 const r1 = ri + 1
-                const isHeader = r1 === headerRow
+                const isHeader = hasHeader && r1 === headerRow
                 const isData = r1 >= dataRow
                 return (
                   <tr key={ri} style={{
@@ -254,7 +337,7 @@ function ImportSection({ datasheets, onDone }) {
                     opacity: !isHeader && !isData ? 0.45 : 1,
                   }}>
                     <td
-                      onClick={() => setHeader(r1)}
+                      onClick={() => clickHeaderRow(r1)}
                       title="Click to use this row as the header row"
                       style={{ cursor: 'pointer', fontWeight: 600, color: '#6b7280' }}
                     >
@@ -270,11 +353,29 @@ function ImportSection({ datasheets, onDone }) {
       )}
 
       {grid.length > 0 && (
-        <div className="card" style={{ maxWidth: 720, display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
-          <label>Header row</label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}>
-            <input type="number" min="1" value={headerRow} onChange={e => setHeader(e.target.value)} style={{ width: 70 }} />
-            <span className="hint" style={{ margin: 0 }}>names the columns below (click a row number in the preview)</span>
+        <div className="card" style={{ maxWidth: 760, display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
+          <label>Header</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontWeight: 400 }}>
+              <input type="checkbox" checked={hasHeader} onChange={e => {
+                const on = e.target.checked
+                setHasHeader(on)
+                if (!on) setDataRow(1)
+                else setDataRow(d => (d <= headerRow ? headerRow + 1 : d))
+              }} />
+              file has a header row
+            </label>
+            {hasHeader && (
+              <>
+                <input
+                  type="number" min="1" value={headerRow}
+                  onChange={e => clickHeaderRow(Math.max(1, Number(e.target.value) || 1))}
+                  style={{ width: 70 }}
+                />
+                <span className="hint" style={{ margin: 0 }}>(or click a row number in the preview)</span>
+              </>
+            )}
+            {!hasHeader && <span className="hint" style={{ margin: 0 }}>columns are addressed by letter only</span>}
           </div>
 
           <label>First data row</label>
@@ -288,7 +389,7 @@ function ImportSection({ datasheets, onDone }) {
           </div>
 
           <label>Datasheet</label>
-          <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
             <input
               list="import-sheet-options" value={fname} onChange={e => setFname(e.target.value)}
               placeholder="e.g. CPTData — existing or new"
@@ -297,50 +398,104 @@ function ImportSection({ datasheets, onDone }) {
             <datalist id="import-sheet-options">
               {sheetNames.map(n => <option key={n} value={n} />)}
             </datalist>
+            {fname.trim() && destCols.length > 0 && (
+              <span className="hint" style={{ margin: 0 }}>
+                {sheetExists
+                  ? `existing sheet — ${destCols.length} columns`
+                  : `new sheet generated from the ${fname.trim()} query — ${destCols.length} columns`}
+              </span>
+            )}
+            {fname.trim() && destCols.length === 0 && (
+              <span className="hint" style={{ margin: 0 }}>new sheet — columns come from the mapping below</span>
+            )}
           </div>
 
-          <label>PointNo from</label>
-          <select value={pnSource} onChange={e => setPnSource(e.target.value)} style={{ maxWidth: 300 }}>
-            <option value="filename">File name (one point per file)</option>
-            {Array.from({ length: nCols }, (_, i) => (
-              <option key={i} value={`col:${i}`}>Column {srcLabel(i)}</option>
-            ))}
-          </select>
+          {/* ── Required IDs (#280) ──────────────────────────────────── */}
+          <label style={{ alignSelf: 'start', paddingTop: '.3rem' }}>IDs</label>
+          <div>
+            {ID_FIELDS.map(f => {
+              const s = ids[f.key]
+              const selVal = s.kind === 'column' ? `col:${s.value}` : s.kind
+              return (
+                <div key={f.key} style={{ display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem', flexWrap: 'wrap' }}>
+                  <code style={{ width: 90 }}>{f.label} *</code>
+                  <select
+                    value={selVal}
+                    onChange={e => {
+                      const v = e.target.value
+                      setIds(prev => ({
+                        ...prev,
+                        [f.key]: v.startsWith('col:')
+                          ? { kind: 'column', value: v.slice(4) }
+                          : { kind: v, value: v === 'text' ? (prev[f.key].kind === 'text' ? prev[f.key].value : '') : '' },
+                      }))
+                    }}
+                    style={{ width: 220 }}
+                  >
+                    <option value="text">Custom text…</option>
+                    <option value="filename">File name</option>
+                    {Array.from({ length: nCols }, (_, i) => (
+                      <option key={i} value={`col:${i}`}>Column {srcLabel(i)}</option>
+                    ))}
+                  </select>
+                  {s.kind === 'text' && (
+                    <input
+                      value={s.value}
+                      onChange={e => setIds(prev => ({ ...prev, [f.key]: { kind: 'text', value: e.target.value } }))}
+                      placeholder="required"
+                      style={{ width: 200, borderColor: s.value.trim() ? undefined : '#dc2626' }}
+                    />
+                  )}
+                  <span className="hint" style={{ margin: 0 }}>{f.hint}</span>
+                </div>
+              )
+            })}
+            <p className="hint" style={{ margin: '.25rem 0 0' }}>
+              All four are required. In custom text, <code>{'{PointNo}'}</code> is replaced per row
+              (e.g. <code>imported_{'{PointNo}'}</code>).
+            </p>
+          </div>
 
+          {/* ── Column mapping: destination ← source ─────────────────── */}
           <label style={{ alignSelf: 'start', paddingTop: '.3rem' }}>Columns</label>
           <div>
-            {mapping.length === 0 && <p className="hint" style={{ margin: 0 }}>No columns mapped — add one below.</p>}
+            {mapping.length > 0 && (
+              <div style={{ display: 'flex', gap: '.4rem', marginBottom: '.25rem', fontSize: '.78rem', color: '#6b7280' }}>
+                <span style={{ width: 200 }}>Datasheet column</span>
+                <span style={{ width: 16 }}></span>
+                <span>insert from</span>
+              </div>
+            )}
+            {mapping.length === 0 && <p className="hint" style={{ margin: 0 }}>No columns yet — add one below.</p>}
             {mapping.map((m, i) => (
               <div key={i} style={{ display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' }}>
-                <select
-                  value={m.source}
-                  onChange={e => setMapping(arr => arr.map((x, j) => (j === i ? { ...x, source: Number(e.target.value) } : x)))}
-                  style={{ width: 220 }}
-                >
-                  {Array.from({ length: nCols }, (_, c) => <option key={c} value={c}>{srcLabel(c)}</option>)}
-                </select>
-                <span style={{ color: '#6b7280' }}>→</span>
-                <input
-                  value={m.target}
-                  onChange={e => setMapping(arr => arr.map((x, j) => (j === i ? { ...x, target: e.target.value } : x)))}
-                  placeholder="datasheet column"
-                  style={{ width: 200 }}
-                />
-                <button
-                  className="btn-secondary btn-sm"
-                  title="Remove this column"
-                  onClick={() => setMapping(arr => arr.filter((_, j) => j !== i))}
-                >
-                  ✕
-                </button>
+                {m.fixed
+                  ? <code style={{ width: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={m.target}>{m.target}</code>
+                  : <input
+                      value={m.target}
+                      onChange={e => setMapping(arr => arr.map((x, j) => (j === i ? { ...x, target: e.target.value } : x)))}
+                      placeholder="datasheet column"
+                      style={{ width: 200 }}
+                    />}
+                <span style={{ color: '#6b7280', width: 16, textAlign: 'center' }}>←</span>
+                {sourceSelect(m.source == null ? '' : String(m.source), e => {
+                  const v = e.target.value
+                  setMapping(arr => arr.map((x, j) => (j === i ? { ...x, source: v === '' ? null : Number(v) } : x)))
+                }, { allowSkip: true })}
+                {!m.fixed && (
+                  <button
+                    className="btn-secondary btn-sm"
+                    title="Remove this column"
+                    onClick={() => setMapping(arr => arr.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             ))}
             <div style={{ display: 'flex', gap: '.5rem', marginTop: '.4rem' }}>
-              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', source: 0 }])}>
-                + Add column
-              </button>
-              <button className="btn-secondary btn-sm" onClick={() => prefill(grid, headerRow)} title="Re-derive all mappings from the header row">
-                ↻ Reset from header row
+              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', source: null, fixed: false }])}>
+                + Add destination column
               </button>
             </div>
           </div>
@@ -348,9 +503,12 @@ function ImportSection({ datasheets, onDone }) {
       )}
 
       <div style={{ marginTop: '.85rem', display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
-        <button className="btn-primary" onClick={runImport} disabled={busy || !path || grid.length === 0}>
+        <button className="btn-primary" onClick={runImport} disabled={!canImport}>
           {busy ? 'Importing…' : '📥 Import'}
         </button>
+        {idErrors.length > 0 && grid.length > 0 && (
+          <span className="msg err">Fill in: {idErrors.join(', ')}</span>
+        )}
         {msg && <span className={`msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</span>}
       </div>
     </div>
