@@ -367,6 +367,15 @@ Performance (load a few thousand points first):
 - [ ] Computed Level is rounded to 3 decimals (matches downloaded data); rows with no parseable Depth get no Level.
 - [ ] No Level/Depth columns in the sheet -> nothing changes (feature only triggers when both exist).
 
+### 6al. Data-selection map: legend actions, point date, corner Map-layers dropdown (#286)
+
+- [ ] Bottom-left legend header reads **Data sources (Selectable)** ("(Selectable)" in grey).
+- [ ] Below the data-source list: grey line **click = select point · double-click = whole project**; below the Jupiter (GEUS) list: grey line **click -> borerapport**. Neither hint appears inside the hover tooltips any more.
+- [ ] Hovering a data-source point (project point or polygon-loaded point) shows a **Date:** line from the Points **DateEnd** column - date only, no time (blank/absent DateEnd -> no line). Jupiter hover is unchanged (still shows info + cyklogram).
+- [ ] Map layers box sits in the **top-right corner** at the same inset as the +/- zoom buttons (top-left); collapsed it shows only **Map layers (N)**.
+- [ ] Clicking the header expands the dropdown to the full layer list (checkbox, name, up/down reorder, opacity slider); clicking again collapses it. Collapse state is independent per map (Data selection vs Project map).
+- [ ] Project map (MapPage) Map-layers box behaves the same (shared control); nothing else top-right collides with it.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

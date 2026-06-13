@@ -70,6 +70,7 @@ SELECT
     ROUND(A.[Z1], 2)      AS [Z1],
     ROUND(A.[Top], 2)     AS [Top],
     ROUND(A.[Bottom], 2)  AS [Bottom],
+    CONVERT(VARCHAR(10), A.[DateEnd], 23) AS [DateEnd],
     A.[Projection1],
     A.[VerticalRefId1]    AS [LevelReference],
     C.[Projection]        AS [CoordinateSystem]
