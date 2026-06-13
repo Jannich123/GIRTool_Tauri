@@ -19,9 +19,15 @@ After adding or changing files here, run (from the repo root):
 python scripts/index_knowledge.py
 ```
 
-This writes `../ai_rag_index.json`. It is **incremental** — only new or changed
-files are re-processed, and deleted files are dropped. (PDF extraction needs
-`pip install pypdf`.)
+**PDF extraction needs `pip install pypdf`** (one-time). Without it, PDFs are
+skipped with a warning and the index is left without them — the usual reason
+"stored PDFs aren't being searched".
+
+This writes `../ai_rag_index.json` (bundled into builds) **and** copies it to the
+running app's override at `%APPDATA%/GIRTool/ai_rag_index.json`, clearing the
+embeddings cache — so the **running app picks up the new knowledge on the next
+question, no rebuild**. It is **incremental** — only new or changed files are
+re-processed, and deleted files are dropped.
 
 ## ⚠ Confidentiality
 
