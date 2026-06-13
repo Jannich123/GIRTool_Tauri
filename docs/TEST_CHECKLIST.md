@@ -456,6 +456,13 @@ Performance (load a few thousand points first):
 - [ ] Editing GIRTool_Column_Reference.xlsx (and rebuilding) changes what the assistant reports - the reference is generated from that workbook, not hard-coded.
 - [ ] General orientation answers match the real tool (download datasheets, CPT reduction, import with unit conversion, charts read datasheets, reads DB / writes local Excel only).
 
+### 6aw. AI assistant button gated on a working API (#310)
+
+- [ ] With a valid API key in ai_config.json, the sidebar "🤖 AI assistant" button is enabled and opens the chat.
+- [ ] With no config / blank key / an invalid key / an unreachable base URL, the button is greyed out (opacity, not-allowed cursor) and disabled - hovering shows the reason ("not configured" / "missing or invalid API key" / "API unreachable").
+- [ ] On startup the button is briefly disabled while the health check runs, then enables if the API works; fixing the key (and restarting) re-enables it.
+- [ ] Offline at startup -> button greyed (API unreachable), no crash.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
