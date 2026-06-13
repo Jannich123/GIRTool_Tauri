@@ -881,9 +881,21 @@ export default function SelectionMap() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '.4rem', marginBottom: '.5rem' }}>
         {/* Row 1 — fixed */}
         <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn-secondary btn-sm" onClick={loadInView} disabled={!map || loading}>
-            {loading ? 'Loading…' : '⬇ Load in view'}
-          </button>
+          {/* #334: one button — "Load in view" normally, but "Load inside" when
+              a polygon shape is selected (reverts on deselect). */}
+          {(() => {
+            const selPoly = !drawing && selected && (selected.type === 'Polygon' || selected.type === 'MultiPolygon')
+            return (
+              <button
+                className="btn-secondary btn-sm"
+                onClick={selPoly ? () => applySelectedPolygon('load') : loadInView}
+                disabled={!map || loading}
+                title={selPoly ? 'Load all points inside the selected polygon' : 'Load all points currently in the map view'}
+              >
+                {loading ? 'Loading…' : (selPoly ? '⬇ Load inside' : '⬇ Load in view')}
+              </button>
+            )
+          })()}
           {(loaded.length > 0 || jupiter.length > 0) && (
             <button className="btn-secondary btn-sm" onClick={() => { setLoaded([]); setJupiter([]); setLoadStatus('') }} disabled={loading}>
               Clear loaded
@@ -906,10 +918,14 @@ export default function SelectionMap() {
           {loadStatus && !drawing && <span className="hint" style={{ margin: 0 }}>{loadStatus}</span>}
         </div>
 
-        {/* Row 2 — contextual (only when drawing an area, or a shape is selected/edited) */}
-        {(drawing || selected || editing) && (
-          <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            {drawing ? (
+        {/* Row 2 — contextual.  #334: always rendered with a reserved height so
+            the map below doesn't bounce up/down when a shape is selected. */}
+        <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap', minHeight: 30 }}>
+          {!drawing && !selected && !editing ? (
+            <span className="hint" style={{ margin: 0, opacity: .55 }}>
+              Draw a polygon or line, or click a shape on the map to edit it.
+            </span>
+          ) : drawing ? (
               <>
                 <button className="btn-secondary btn-sm" onClick={() => applyPolygon('load')} disabled={vertices.length < 3 || loading}>
                   ⬇ Load{vertices.length ? ` (${vertices.length})` : ''}
@@ -941,7 +957,7 @@ export default function SelectionMap() {
               <>
                 {selected && (selected.type === 'Polygon' || selected.type === 'MultiPolygon') && (
                   <>
-                    <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('load')} disabled={loading}>⬇ Load inside</button>
+                    {/* ⬇ Load inside lives in row 1 now (merged with Load in view, #334). */}
                     <button className="btn-primary btn-sm" onClick={() => applySelectedPolygon('select')} disabled={loading}>✚ Select inside</button>
                     <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('remove')} disabled={loading}>✖ Remove inside</button>
                     <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('removeProjects')} disabled={loading}
@@ -953,7 +969,6 @@ export default function SelectionMap() {
               </>
             )}
           </div>
-        )}
       </div>
 
       <div

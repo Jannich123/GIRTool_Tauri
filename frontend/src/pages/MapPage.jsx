@@ -15,6 +15,7 @@ import AddonControl from '../components/AddonControl'
 import MapSearch from '../components/MapSearch'
 import ShapeDraw from '../components/ShapeDraw'
 import ShapeActions from '../components/ShapeActions'
+import { useShapeTools } from '../lib/shapeTools'
 
 const { BaseLayer } = LayersControl
 
@@ -394,6 +395,8 @@ export default function MapPage() {
   const [grpFromAddon, setGrpFromAddon] = useState(null)
   const [projMap, setProjMap] = useState(null) // #324: captured Leaflet map for the toolbar shape tools
   const [grpMsg,       setGrpMsg]       = useState('')
+  // #334: drives the reserved shape-actions row (so it shows a hint when idle).
+  const { selected: shapeSelected, editing: shapeEditing } = useShapeTools()
 
   // Active project for session lookups.
   const projectId = selectedProjects[0]?.ProjectId
@@ -913,11 +916,11 @@ export default function MapPage() {
           </div>
         )}
 
-        {/* #324/#330: shape tools — draw a line, then edit/offset/delete by
-            clicking a shape. */}
+        {/* #324/#330/#334: shape tools — draw a polygon or line; edit/offset/
+            delete live in the reserved row below (so selecting a shape doesn't
+            reflow this wrapping toolbar and bounce the map). */}
         <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .1rem' }} />
         <ShapeDraw map={projMap} target="project" />
-        <ShapeActions />
 
         <div style={{ flex: 1 }} />
 
@@ -936,6 +939,19 @@ export default function MapPage() {
             {wfsPoints.length > 0 ? ' (WFS)' : ' · with downloaded data'}
           </span>
         )}
+      </div>
+
+      {/* #334: reserved shape-actions row — always present (fixed height) so a
+          selected shape's edit/offset/delete buttons appear here instead of
+          reflowing the toolbar and bouncing the map. */}
+      <div style={{
+        display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap',
+        minHeight: 34, padding: '.25rem 1.25rem', background: '#fff',
+        borderBottom: '1px solid var(--border)', flexShrink: 0,
+      }}>
+        {!shapeSelected && !shapeEditing
+          ? <span className="hint" style={{ margin: 0, opacity: .55 }}>Click a shape on the map to edit, offset, or delete it.</span>
+          : <ShapeActions />}
       </div>
 
       {/* ── Map ── */}

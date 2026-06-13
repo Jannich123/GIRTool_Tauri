@@ -529,6 +529,13 @@ Performance (load a few thousand points first):
 - [ ] With a POLYGON addon selected, ⬇ Load inside / ✚ Select inside / ✖ Remove inside / 🗑 Remove projects act on that polygon's area (same as the temp draw); for lines, the offset/edit/delete actions still show.
 - [ ] Edit (double-click) / Offset / Delete still work; re-selecting a different shape works.
 
+### 6bg. Map toolbar improvements — project-map polygon, no bounce, coord readout, merged Load (#334)
+
+- [ ] **Project map polygon**: the Map page toolbar now offers "✏ Polygon" beside "／ Line"; drawing a polygon (double-click to finish) prompts for a name and saves it as a map addon that appears on both maps. The line draw still works the same.
+- [ ] **No bounce**: selecting a shape on EITHER map no longer shifts the map up/down — the contextual button row is always present (reserved height) on the Data Selection map, and the Map page has a fixed-height shape-actions row below its toolbar (shows a hint when nothing is selected).
+- [ ] **Coordinate readout**: hovering the map shows a live cursor readout (bottom-right). With a target CRS set in Settings → Coordinate system it shows projected easting/northing; with NO target CRS it falls back to WGS84 lon/lat (it no longer disappears).
+- [ ] **Merged Load button**: on the Data Selection map, "⬇ Load in view" becomes "⬇ Load inside" when a polygon shape is selected (loads points inside it) and reverts to "Load in view" when deselected; the separate "Load inside" button is gone from the second row, while ✚ Select inside / ✖ Remove inside / 🗑 Remove projects remain.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
