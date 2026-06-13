@@ -495,7 +495,8 @@ export default function SelectionMap() {
 
   // #222: labelled multi-line tooltip for DB points (mirrors the Jupiter
   // style).  Lines appear only when the value exists; Depth = Bottom − Top.
-  function pointTooltip(p, id) {
+  // The click/double-click hint now lives in the legend (#286).
+  function pointTooltip(p) {
     const proj = projIndex.current[`${p.db_id ?? '?'}||${p.ProjectId}`]
     const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v)
     const top = num(p.Top)
@@ -504,19 +505,21 @@ export default function SelectionMap() {
     const z = num(p.Z1)
     const projectNo = p.ProjectNo ?? proj?.ProjectNo
     const crsLine = crsTip(p)
+    // #286: point date from the DateEnd column — date part only (the backend
+    // already returns YYYY-MM-DD, but slice defends against a full timestamp).
+    const dateEnd = (p.DateEnd != null && String(p.DateEnd).trim() !== '')
+      ? String(p.DateEnd).slice(0, 10) : null
     return (
       <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 280 }}>
         <strong>{p.PointNo ?? p.PointId}</strong>{p.PointType ? ` · ${p.PointType}` : ''}<br />
         {projectNo != null && <>ProjectNo: {projectNo}<br /></>}
         {proj?.Title ? <>Project name: {proj.Title}<br /></> : null}
         Database: {p.db_id ?? '?'}<br />
+        {dateEnd && <>Date: {dateEnd}<br /></>}
         {z != null && <>Z1: {z} m<br /></>}
         {depth != null && <>Depth: {depth} m (Bottom − Top)<br /></>}
         {srcCrsLabel(p) && <>Source CRS: {srcCrsLabel(p)}<br /></>}
-        {crsLine && <>{crsLine}<br /></>}
-        <span style={{ opacity: 0.7 }}>
-          click = {selectedIds.has(id) ? 'deselect' : 'select'} point · double-click = whole project
-        </span>
+        {crsLine && <>{crsLine}</>}
       </div>
     )
   }
@@ -575,7 +578,6 @@ export default function SelectionMap() {
               if (cyk === null) return <div style={small}>Cyklogram: ingen data</div>
               return null // loads on hover (tooltipopen)
             })()}
-            <div style={{ opacity: 0.7, marginTop: 2 }}>click → borerapport</div>
           </div>
         </Tooltip>
       </CircleMarker>
@@ -596,7 +598,7 @@ export default function SelectionMap() {
           dblclick: (e) => markerDblRef.current(p, e),
         }}
       >
-        <Tooltip>{pointTooltip(p, id)}</Tooltip>
+        <Tooltip>{pointTooltip(p)}</Tooltip>
       </CircleMarker>
     ))
   ), [loaded, ptIdSet, hiddenDbs, dbColors, selectedIds, crsTip, projIndexVersion]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -615,7 +617,7 @@ export default function SelectionMap() {
           dblclick: (e) => markerDblRef.current(p, e),
         }}
       >
-        <Tooltip>{pointTooltip(p, id)}</Tooltip>
+        <Tooltip>{pointTooltip(p)}</Tooltip>
       </CircleMarker>
     ))
   ), [pts, hiddenDbs, dbColors, selectedIds, crsTip, projIndexVersion]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -921,7 +923,9 @@ export default function SelectionMap() {
             fontSize: '.75rem', lineHeight: 1.7, maxWidth: 240,
           }}
         >
-          <div style={{ fontWeight: 700, marginBottom: '.15rem' }}>Data sources</div>
+          <div style={{ fontWeight: 700, marginBottom: '.15rem' }}>
+            Data sources <span style={{ fontWeight: 400, color: '#64748b' }}>(Selectable)</span>
+          </div>
           {Object.entries(dbColors).map(([id, c]) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer' }}>
               <input type="checkbox" checked={!hiddenDbs.has(id)} onChange={() => toggleDb(id)} />
@@ -929,6 +933,8 @@ export default function SelectionMap() {
               {id}
             </label>
           ))}
+          {/* #286: per-point actions, moved here from the hover tooltip. */}
+          <div style={{ color: '#64748b', marginTop: '.1rem' }}>click = select point · double-click = whole project</div>
           <div style={{ fontWeight: 700, margin: '.3rem 0 .05rem' }}>Jupiter (GEUS)</div>
           {JUPITER_CATS.map(c => (
             <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '.45rem', cursor: 'pointer' }}>
@@ -937,6 +943,8 @@ export default function SelectionMap() {
               {c.label}
             </label>
           ))}
+          {/* #286: Jupiter click action, moved here from the hover tooltip. */}
+          <div style={{ color: '#64748b', marginTop: '.1rem' }}>click → borerapport</div>
           {(pts.length > 0 || loaded.length > 0) && (
             <div className="hint" style={{ marginTop: '.3rem' }}>● in project · ○ available · ⭕ selected</div>
           )}

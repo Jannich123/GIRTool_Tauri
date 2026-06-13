@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useThrottledAddons } from '../lib/useThrottledAddons'
 
 // On-map overlay control (M4.5a follow-up): a top-right panel listing the WMS
@@ -9,8 +10,13 @@ import { useThrottledAddons } from '../lib/useThrottledAddons'
 // #218: slider drags commit through the throttled committer — the old
 // per-input-tick saveMapAddons re-rendered every point marker (context
 // update), wrote settings.json and emitted a cross-window event ~20× per drag.
+//
+// #286: sits in the top-right corner at the same 10px inset as the zoom
+// buttons, and is a dropdown — collapsed shows just the "Map layers" header
+// (with the layer count); click it to expand the list.
 export default function AddonControl({ target }) {
   const { addons, updateThrottled, updateNow } = useThrottledAddons()
+  const [open, setOpen] = useState(false)
   const list = addons.filter(a => a && a.maps?.[target])
   if (list.length === 0) return null
 
@@ -45,17 +51,29 @@ export default function AddonControl({ target }) {
   return (
     <div
       style={{
-        position: 'absolute', top: 48, right: 10, zIndex: 1000,
+        position: 'absolute', top: 10, right: 10, zIndex: 1000,
         background: 'rgba(255,255,255,0.95)', borderRadius: 6,
-        padding: '.5rem .6rem', boxShadow: '0 1px 4px rgba(0,0,0,.25)',
-        fontSize: '.75rem', width: 220,
+        padding: open ? '.5rem .6rem' : '.3rem .55rem',
+        boxShadow: '0 1px 4px rgba(0,0,0,.25)',
+        fontSize: '.75rem', width: open ? 220 : 'auto',
       }}
     >
-      <div style={{ fontWeight: 700, marginBottom: '.3rem' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        title={open ? 'Collapse' : 'Show map layers'}
+        style={{
+          fontWeight: 700, cursor: 'pointer', userSelect: 'none',
+          display: 'flex', alignItems: 'center', gap: '.4rem', whiteSpace: 'nowrap',
+          marginBottom: open ? '.3rem' : 0,
+        }}
+      >
+        <span style={{ width: 9, color: '#475569', fontSize: '.7rem' }}>{open ? '▾' : '▸'}</span>
         Map layers
-        <span style={{ fontWeight: 400, color: '#64748b', marginLeft: '.4rem' }}>(top = in front)</span>
+        <span style={{ fontWeight: 400, color: '#64748b' }}>
+          {open ? '(top = in front)' : `(${list.length})`}
+        </span>
       </div>
-      {display.map((a, i) => (
+      {open && display.map((a, i) => (
         <div key={a.id} style={{ marginBottom: '.45rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem' }}>
             <input

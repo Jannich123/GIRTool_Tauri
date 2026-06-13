@@ -52,6 +52,7 @@ SELECT
     ROUND(A.[Z1], 2)     AS [Z1],
     ROUND(A.[Top], 2)    AS [Top],
     ROUND(A.[Bottom], 2) AS [Bottom],
+    CONVERT(VARCHAR(10), A.[DateEnd], 23) AS [DateEnd],
     A.[Projection1]
 FROM #DB#[Points] A
 WHERE A.[X1] IS NOT NULL AND A.[Y1] IS NOT NULL AND A.[Projection1] IS NOT NULL
