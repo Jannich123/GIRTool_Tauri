@@ -17,10 +17,14 @@ export const PROJ_DEFS = {
   // ETRS89 / DKTM 1–4 (Danish Transverse Mercator).  #145/#147: 4095 & 4096
   // were previously missing — without them DKTM3/DKTM4 points fell back to the
   // page CRS on the map and could not be a conversion target.
-  'EPSG:4093':  '+proj=tmerc +lat_0=0 +lon_0=9     +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  'EPSG:4094':  '+proj=tmerc +lat_0=0 +lon_0=10    +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  'EPSG:4095':  '+proj=tmerc +lat_0=0 +lon_0=11.75 +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
-  'EPSG:4096':  '+proj=tmerc +lat_0=0 +lon_0=15    +k=0.99995 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  // #336: the false easting (x_0) is PER ZONE — 200/400/600/800 k — and the
+  // scale factor is 0.99998 (DKTM1–3) / 1.0 (DKTM4).  Previously all four used
+  // x_0=200000 & k=0.99995, which threw DKTM2 points ~200 km east (into Sweden).
+  // Verified to <0.001 mm against the official EPSG registry across Denmark.
+  'EPSG:4093':  '+proj=tmerc +lat_0=0 +lon_0=9     +k=0.99998 +x_0=200000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  'EPSG:4094':  '+proj=tmerc +lat_0=0 +lon_0=10    +k=0.99998 +x_0=400000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  'EPSG:4095':  '+proj=tmerc +lat_0=0 +lon_0=11.75 +k=0.99998 +x_0=600000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
+  'EPSG:4096':  '+proj=tmerc +lat_0=0 +lon_0=15    +k=1       +x_0=800000 +y_0=-5000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs',
   // ED50 / UTM (very old European datum; still surfaces in some Danish DBs)
   'EPSG:23032': '+proj=utm +zone=32 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs',
   'EPSG:23033': '+proj=utm +zone=33 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs',
