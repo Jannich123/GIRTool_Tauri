@@ -551,6 +551,20 @@ Performance (load a few thousand points first):
 - [ ] Grouping mode (🏷 Assign groups) still assigns by clicking individual points; the target picker shows in the toolbar; results message appears in the reserved row.
 - [ ] Selection map is unchanged: its ✏ Polygon still does Load/Select/Remove inside + Save; ／ Line still draws.
 
+### 6bj. Project map — assign groups only via polygon (#340)
+
+- [ ] The always-on '🏷 Assign groups' button is gone from the Map toolbar (no grouping mode, no click-a-point-to-assign).
+- [ ] Clicking a point now just opens its popup (PointNo / Type / group / project / coords) as before.
+- [ ] Group assignment still works via the polygon flow: draw a ✏ Polygon → pick group + 🏷 Assign inside, or select a polygon → pick group + 🏷 Assign inside. The group picker shows in the reserved row in those contexts.
+- [ ] Colour-by-group still colours the points; the legend is unchanged.
+
+### 6bj. Project map — assign groups only via polygon (#340)
+
+- [ ] The always-on '🏷 Assign groups' button is gone from the Map page toolbar (no grouping mode toggle, no click-a-point-to-assign).
+- [ ] Colour-by-group still works (Color by Group selector); point popups still show the group + CRS lines.
+- [ ] Group assignment still works via the polygon flow: draw a ✏ Polygon -> pick group -> 🏷 Assign inside; and select a polygon -> pick group -> 🏷 Assign inside.
+- [ ] Clicking a single point opens its popup (it no longer assigns a group).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
