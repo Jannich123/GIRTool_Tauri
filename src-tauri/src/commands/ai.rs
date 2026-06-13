@@ -58,24 +58,41 @@ fn ai_config_path() -> Result<PathBuf, String> {
     Ok(ai_dir()?.join("ai_config.json"))
 }
 
-pub(crate) fn read_config() -> AiConfig {
-    ai_config_path()
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+/// Read the AI config.  The developer sets tokens + model in the bundled
+/// `resources/ai_config.json` (shipped in the installer); the end user never
+/// edits it.  A `%APPDATA%/GIRTool/ai_config.json` override (with a non-empty
+/// chat URL) wins for local testing.
+pub(crate) fn read_config(app: &AppHandle) -> AiConfig {
+    if let Ok(p) = ai_config_path() {
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            if let Ok(c) = serde_json::from_str::<AiConfig>(&s) {
+                if !c.chat.base_url.trim().is_empty() {
+                    return c;
+                }
+            }
+        }
+    }
+    if let Ok(p) = app
+        .path()
+        .resolve("resources/ai_config.json", tauri::path::BaseDirectory::Resource)
+    {
+        if let Ok(s) = std::fs::read_to_string(p) {
+            if let Ok(c) = serde_json::from_str::<AiConfig>(&s) {
+                return c;
+            }
+        }
+    }
+    AiConfig::default()
 }
 
+/// Readiness for the slim chat window — never returns the key.
 #[tauri::command]
-pub async fn get_ai_config() -> Result<AiConfig, String> {
-    Ok(read_config())
-}
-
-#[tauri::command]
-pub async fn save_ai_config(config: AiConfig) -> Result<(), String> {
-    let path = ai_config_path()?;
-    let json = serde_json::to_string_pretty(&config).map_err(|e| format!("Serialise error: {e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("Failed to write {}: {e}", path.display()))
+pub async fn ai_status(app: AppHandle) -> Result<Value, String> {
+    let cfg = read_config(&app);
+    Ok(json!({
+        "configured": !cfg.chat.base_url.trim().is_empty() && !cfg.chat.model.trim().is_empty(),
+        "model": cfg.chat.model,
+    }))
 }
 
 /// System preprompt: a user override at `%APPDATA%/GIRTool/AGENTS.md` wins,
@@ -140,9 +157,9 @@ pub(crate) fn build_system_prompt(app: &AppHandle, cfg: &AiConfig, extra_context
 /// assistant's reply text.  OpenAI-compatible request/response shape.
 #[tauri::command]
 pub async fn ai_chat(app: AppHandle, messages: Vec<ChatMessage>) -> Result<String, String> {
-    let cfg = read_config();
+    let cfg = read_config(&app);
     if cfg.chat.base_url.trim().is_empty() || cfg.chat.model.trim().is_empty() {
-        return Err("AI is not configured — set the chat API URL and model in the ⚙ Connection panel.".into());
+        return Err("The assistant isn't configured yet — the developer sets the API in the bundled ai_config.json.".into());
     }
 
     // RAG (#302): when the embeddings endpoint is configured and there's a
@@ -486,7 +503,7 @@ async fn retrieve_context(
 #[tauri::command]
 pub async fn ai_rag_status(app: AppHandle) -> Result<Value, String> {
     let chunks = load_rag_index(&app);
-    let cfg = read_config();
+    let cfg = read_config(&app);
     let mut sources: Vec<String> = chunks.iter().map(|c| c.source.clone()).collect();
     sources.sort();
     sources.dedup();
@@ -513,7 +530,7 @@ pub async fn ai_rag_status(app: AppHandle) -> Result<Value, String> {
 /// Force a (re)embed of the knowledge base via the configured embeddings API.
 #[tauri::command]
 pub async fn ai_rebuild_embeddings(app: AppHandle) -> Result<Value, String> {
-    let cfg = read_config();
+    let cfg = read_config(&app);
     if cfg.embeddings.base_url.trim().is_empty() || cfg.embeddings.model.trim().is_empty() {
         return Err("Configure the embeddings API (base URL + model) first.".into());
     }
@@ -528,4 +545,100 @@ pub async fn ai_rebuild_embeddings(app: AppHandle) -> Result<Value, String> {
         "chunk_count": chunks.len(),
         "embedded": !chunks.is_empty() && vectors.len() == chunks.len(),
     }))
+}
+
+// ── Chat history (saved under the app data root: %APPDATA%/GIRTool/ai_chats) ────
+//
+// One JSON file per conversation, so the window can offer a ChatGPT-style list
+// of past chats.  Persisted automatically after each assistant reply.
+
+fn ai_chats_dir() -> Result<PathBuf, String> {
+    let dir = ai_dir()?.join("ai_chats");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create ai_chats dir: {e}"))?;
+    Ok(dir)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredMsg {
+    role: String,
+    content: String,
+    /// What to show for a user message (the typed text, vs `content` which may
+    /// also carry attached-file text). Absent for assistant messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StoredChat {
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    updated: i64,
+    #[serde(default)]
+    messages: Vec<StoredMsg>,
+}
+
+/// Chat ids are generated by the frontend; restrict to a safe filename charset.
+fn safe_chat_id(id: &str) -> Result<String, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("Invalid chat id.".into());
+    }
+    Ok(id.to_string())
+}
+
+#[tauri::command]
+pub async fn ai_list_chats() -> Result<Vec<Value>, String> {
+    let dir = ai_chats_dir()?;
+    let mut out: Vec<Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                if let Ok(c) = serde_json::from_str::<StoredChat>(&s) {
+                    out.push(json!({ "id": c.id, "title": c.title, "updated": c.updated }));
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        b.get("updated").and_then(|v| v.as_i64()).unwrap_or(0)
+            .cmp(&a.get("updated").and_then(|v| v.as_i64()).unwrap_or(0))
+    });
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn ai_load_chat(id: String) -> Result<Value, String> {
+    let id = safe_chat_id(&id)?;
+    let path = ai_chats_dir()?.join(format!("{id}.json"));
+    let s = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read chat: {e}"))?;
+    let c: StoredChat = serde_json::from_str(&s).map_err(|e| format!("Corrupt chat file: {e}"))?;
+    serde_json::to_value(c).map_err(|e| format!("Serialise error: {e}"))
+}
+
+#[tauri::command]
+pub async fn ai_save_chat(chat: StoredChat) -> Result<(), String> {
+    let id = safe_chat_id(&chat.id)?;
+    let mut chat = chat;
+    chat.updated = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let path = ai_chats_dir()?.join(format!("{id}.json"));
+    let s = serde_json::to_string_pretty(&chat).map_err(|e| format!("Serialise error: {e}"))?;
+    std::fs::write(&path, s).map_err(|e| format!("Cannot write chat: {e}"))
+}
+
+#[tauri::command]
+pub async fn ai_delete_chat(id: String) -> Result<(), String> {
+    let id = safe_chat_id(&id)?;
+    let path = ai_chats_dir()?.join(format!("{id}.json"));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("Cannot delete chat: {e}"))?;
+    }
+    Ok(())
 }

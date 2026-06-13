@@ -1,0 +1,13 @@
+{
+  "chat": {
+    "base_url": "",
+    "api_key": "",
+    "model": ""
+  },
+  "embeddings": {
+    "base_url": "",
+    "api_key": "",
+    "model": ""
+  },
+  "system_prompt": ""
+}

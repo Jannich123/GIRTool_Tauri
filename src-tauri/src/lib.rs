@@ -74,14 +74,17 @@ pub fn run() {
             commands::import::import_data,
             // map address / place search (issue #294)
             commands::geocode::geocode_search,
-            // AI assistant (issue #300)
-            commands::ai::get_ai_config,
-            commands::ai::save_ai_config,
+            // AI assistant (issues #300, #302, #304)
+            commands::ai::ai_status,
             commands::ai::get_agents_md,
             commands::ai::ai_chat,
             commands::ai::ai_pick_file,
             commands::ai::ai_rag_status,
             commands::ai::ai_rebuild_embeddings,
+            commands::ai::ai_list_chats,
+            commands::ai::ai_load_chat,
+            commands::ai::ai_save_chat,
+            commands::ai::ai_delete_chat,
             // queries
             commands::queries::list_queries,
             commands::queries::save_query,
