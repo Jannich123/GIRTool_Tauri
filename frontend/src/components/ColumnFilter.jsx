@@ -63,13 +63,26 @@ export function ColumnFilterButton({ col, label, items, getRow, filters, setColF
   const isActive = current != null
 
   // Lazy unique values + occurrence counts — only while the dropdown is open.
-  const uniques = useMemo(() => {
-    if (!open) return []
+  // #312: respect the OTHER columns' active filters (Excel slicer
+  // cross-filtering) so this dropdown lists/counts only the values present in
+  // rows that pass those filters.  `fullKeys` is the column's complete value
+  // set (ignoring every filter) — the basis for the include/exclude maths so
+  // unchecking a value never silently drops values the cross-filter hides.
+  const { uniques, fullKeys } = useMemo(() => {
+    if (!open) return { uniques: [], fullKeys: new Set() }
     const acc = getRow || ((x) => x)
+    const otherCols = Object.keys(filters || {}).filter((c) => c !== col)
     const counts = new Map()
+    const fullKeys = new Set()
     for (const it of (items || [])) {
-      const k = keyOf(acc(it)?.[col])
-      counts.set(k, (counts.get(k) || 0) + 1)
+      const r = acc(it)
+      const k = keyOf(r?.[col])
+      fullKeys.add(k)
+      let pass = true
+      for (const oc of otherCols) {
+        if (!filters[oc].has(keyOf(r?.[oc]))) { pass = false; break }
+      }
+      if (pass) counts.set(k, (counts.get(k) || 0) + 1)
     }
     const arr = [...counts.entries()]
     const allNum = arr.every(([k]) => k === BLANK || isFinite(Number(k)))
@@ -80,9 +93,9 @@ export function ColumnFilterButton({ col, label, items, getRow, filters, setColF
         ? Number(a[0]) - Number(b[0])
         : a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: 'base' })
     })
-    return arr
+    return { uniques: arr, fullKeys }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, items, col])
+  }, [open, items, col, filters])
 
   const needle = q.trim().toLowerCase()
   const matching = useMemo(
@@ -92,11 +105,13 @@ export function ColumnFilterButton({ col, label, items, getRow, filters, setColF
   const visible = matching.slice(0, LIST_CAP)
 
   const toggleVal = (k) => {
-    const all = new Set(uniques.map(([u]) => u))
-    const cur = current ? new Set(current) : new Set(all)
+    // Base the include/exclude set on the column's FULL value set so toggling a
+    // value only changes that value — values currently hidden by another
+    // column's filter stay included (#312).
+    const cur = current ? new Set(current) : new Set(fullKeys)
     if (cur.has(k)) cur.delete(k)
     else cur.add(k)
-    setColFilter(col, cur.size >= all.size ? null : cur)
+    setColFilter(col, cur.size >= fullKeys.size ? null : cur)
   }
 
   const openPop = (e) => {
