@@ -92,7 +92,7 @@ export default function MapSearch() {
   }
 
   const ui = (
-    <div style={{ position: 'absolute', top: 10, left: 52, zIndex: 1000, width: 280, fontSize: '.8rem' }}>
+    <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, width: 280, fontSize: '.8rem' }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: '.3rem',
         background: 'rgba(255,255,255,0.96)', borderRadius: 6,

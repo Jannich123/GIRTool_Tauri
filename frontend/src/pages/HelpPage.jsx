@@ -14,8 +14,9 @@ const HELP = [
         h: 'Typical workflow', ordered: true, items: [
           { b: 'Settings', t: 'connect a database and choose an output folder (where all the Excel files live).' },
           { b: 'Data Selection', t: 'pick the boreholes / points you want to work with, on the map or in the lists.' },
+          { b: 'Strata', t: 'define and correct the soil layering for your points — normally done before downloading, so the layers can tag the downloaded data.' },
           { b: 'Data', t: 'download the selection into datasheets (CPTData, SPTData, …); import external CSV/Excel if needed.' },
-          { b: 'Strata / CPT – Calc', t: 'derive the soil layering and CPT parameters.' },
+          { b: 'CPT – Calculations (optional)', t: 'derive CPT parameters — only if you need them.' },
           { b: 'Grouping / Colors & Symbols', t: 'organise the points into groups and theme how they look.' },
           { b: 'Project map / Charts / Boundaries', t: 'visualise and plot the results.' },
         ],
@@ -60,7 +61,7 @@ const HELP = [
   },
   {
     key: 'strata', icon: '🪨', label: 'Strata',
-    intro: 'Define the soil / rock layering (strata) for your points and fix any gaps or overlaps, so the layers can correctly tag your datasheet rows (Primary / Secondary Layer) and feed the CPT layer calculations.',
+    intro: 'Define the soil / rock layering (strata) for your points and fix any gaps or overlaps, so the layers can correctly tag your datasheet rows (Primary / Secondary Layer) and feed the CPT layer calculations. This is normally done BEFORE downloading data, so the layers are applied to it.',
     sections: [
       {
         h: 'Download strata', items: [
@@ -108,8 +109,8 @@ const HELP = [
     ],
   },
   {
-    key: 'cpt', icon: '🧮', label: 'CPT – Calc',
-    intro: 'Run the CPT calculation pipeline to derive geotechnical parameters from CPTData, with full control over which columns are produced.',
+    key: 'cpt', icon: '🧮', label: 'CPT – Calculations',
+    intro: 'Optional — only needed if you want derived CPT parameters. Runs the CPT calculation pipeline on CPTData, with full control over which columns are produced.',
     sections: [
       {
         h: 'CPT calculations', items: [

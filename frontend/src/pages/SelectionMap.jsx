@@ -290,6 +290,7 @@ export default function SelectionMap() {
         borid, latlng, cat,
         dgunr: p.dgunr || '', formaal: p.formaal_tekst || '',
         ejer: p.dataejer || '', terraen: p.terraen_kote ?? '',
+        driller: p.broendborer || '',
         dybde: p.dybde || '', aar: p.aar || '', status: p.kode_tekst || '',
         cyklogram: p.cyklogram || '', url: p.url || '',
       })
@@ -558,9 +559,10 @@ export default function SelectionMap() {
         <Tooltip sticky>
           <div style={{ fontSize: '.72rem', lineHeight: 1.45, maxWidth: 280 }}>
             <strong>DGU {f.dgunr || '?'}</strong>{f.formaal ? ` · ${f.formaal}` : ''}<br />
-            {f.ejer ? <>Ejer: {f.ejer}<br /></> : null}
-            {(f.terraen !== '' && f.terraen != null) ? <>Terræn: {f.terraen} m<br /></> : null}
-            {f.dybde ? <>Dybde: {f.dybde}</> : null}
+            {f.ejer ? <>Data responsible: {f.ejer}<br /></> : null}
+            {f.driller ? <>Driller: {f.driller}<br /></> : null}
+            {(f.terraen !== '' && f.terraen != null) ? <>Terrain level: {f.terraen} m<br /></> : null}
+            {f.dybde ? <>Depth: {f.dybde}</> : null}
             {f.aar ? ` · ${f.aar}` : ''}
             {f.status ? ` · ${f.status}` : ''}
             {(f.dybde || f.aar || f.status) ? <br /> : null}
@@ -875,6 +877,7 @@ export default function SelectionMap() {
           zoom={mapStore.view
             ? (dkGrid ? clampDkZoom(mapStore.view.zoom) : clampMercZoom(mapStore.view.zoom))
             : (dkGrid ? DK_DEFAULT_ZOOM : MERC_DEFAULT_ZOOM)}
+          zoomControl={false}
           scrollWheelZoom preferCanvas style={{ height: '100%', width: '100%' }}
         >
           <MapRef onMap={setMap} />

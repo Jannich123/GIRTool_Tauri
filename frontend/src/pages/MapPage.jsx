@@ -937,6 +937,7 @@ export default function MapPage() {
           zoom={savedPos
             ? (dkGrid ? clampDkZoom(savedPos.zoom) : clampMercZoom(savedPos.zoom))
             : (dkGrid ? DK_DEFAULT_ZOOM : MERC_DEFAULT_ZOOM)}
+          zoomControl={false}
           style={{ width: '100%', height: '100%' }}
         >
           {/* Background maps + WMS addons — one unified layer list (M4.5a).
