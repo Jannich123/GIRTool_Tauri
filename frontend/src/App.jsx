@@ -19,6 +19,7 @@ import ColorsPage      from './pages/ColorsPage'
 import MapPage         from './pages/MapPage'
 import BoundariesPage  from './pages/BoundariesPage'
 import CptCalcPage    from './pages/CptCalcPage'
+import AiChatPage     from './pages/AiChatPage'
 import './index.css'
 
 function Placeholder({ title }) {
@@ -200,6 +201,12 @@ function Shell() {
   // project is opened.
   if (!projectOpen) {
     return <StartupScreen onOpen={openProject} />
+  }
+
+  // #300: the AI assistant opens in its own window — a clean, full-window chat
+  // with no sidebar (it doesn't need the project navigation).
+  if (page === 'ai') {
+    return <AiChatPage />
   }
 
   return (

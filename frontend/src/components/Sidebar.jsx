@@ -137,6 +137,16 @@ export default function Sidebar({ page, setPage }) {
         )}
 
         <div className="sidebar-divider" />
+        {/* #300: AI assistant — opens in its own window (a dedicated chat). */}
+        <button
+          className="nav-item"
+          onClick={() => invoke('open_window', { page: 'ai', title: 'GIRTool — AI assistant' })
+            .catch(err => console.warn('open_window failed:', err))}
+          title={collapsed ? 'AI assistant' : 'Open the AI assistant in its own window'}
+        >
+          <span className="nav-icon">🤖</span>
+          <span className="nav-label">AI assistant</span>
+        </button>
         <button
           className={`nav-item ${page === 'settings' ? 'active' : ''}`}
           onClick={() => setPage('settings')}
