@@ -10,6 +10,7 @@ import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 import CrsCursorReadout from '../components/CrsCursorReadout'
 import MapSearch from '../components/MapSearch'
+import ShapeDraw from '../components/ShapeDraw'
 import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom, mapGridFor, clampMercZoom, MERC_DEFAULT_ZOOM } from '../lib/crsDk'
 import { pointInPolygonLatLng, ringFromFeature } from '../lib/geo'
 
@@ -923,6 +924,7 @@ export default function SelectionMap() {
           {/* Live cursor X/Y in the project coordinate system (#217). */}
           <CrsCursorReadout targetEpsg={coordinateSystem?.target_epsg} />
           <MapSearch />
+          <ShapeDraw target="selection" />
         </MapContainer>
 
         {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}

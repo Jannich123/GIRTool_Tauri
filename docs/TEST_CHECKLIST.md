@@ -478,6 +478,13 @@ Performance (load a few thousand points first):
 - [ ] Selecting a tab shows a detailed explanation (intro + sections + bullet/numbered lists) of what that page does; content scrolls; the descriptions match the actual features.
 - [ ] Works in the main window and from a pop-out; opens without a project connected.
 
+### 6az. Draw shapes and save as Map addons (#320, item 5 of shape editing)
+
+- [ ] Both maps show a draw toolbar (top-centre): "✏ Polygon" / "／ Line". Picking one starts drawing (click to add points, double-click to finish, Esc cancels).
+- [ ] Finishing a shape shows an inline "name" field + Save / Discard; Save writes it to map addons/ and it appears as a styleable addon (colour/opacity/order in the layer panel) on the chosen maps; Discard drops it.
+- [ ] The saved shape persists (reload / restart), syncs to other windows, and a polygon saved this way is clickable as a selection boundary like other addons.
+- [ ] Drawing works on the Danish 25832 grid and on a web-mercator base; the existing "select inside" polygon draw on the Data Selection map still works separately.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

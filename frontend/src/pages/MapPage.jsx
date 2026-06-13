@@ -13,6 +13,7 @@ import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, clampDkZoom, mapGridFor, clampMercZoom,
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 import MapSearch from '../components/MapSearch'
+import ShapeDraw from '../components/ShapeDraw'
 
 const { BaseLayer } = LayersControl
 
@@ -972,6 +973,7 @@ export default function MapPage() {
           {/* Live cursor X/Y in the project coordinate system (#217). */}
           <CrsCursorReadout targetEpsg={coordinateSystem?.target_epsg} />
           <MapSearch />
+          <ShapeDraw target="project" />
         </MapContainer>
 
         {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}
