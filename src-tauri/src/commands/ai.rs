@@ -144,6 +144,15 @@ pub(crate) fn build_system_prompt(app: &AppHandle, cfg: &AiConfig, extra_context
         }
         sys.push_str(cfg.system_prompt.trim());
     }
+    // #306: the datasheet column reference (names + units + meaning) so the
+    // assistant understands the data; auto-built from the bundled workbook.
+    let cols = crate::commands::columns::column_reference_text(app);
+    if !cols.trim().is_empty() {
+        if !sys.is_empty() {
+            sys.push_str("\n\n");
+        }
+        sys.push_str(cols.trim());
+    }
     if !extra_context.trim().is_empty() {
         if !sys.is_empty() {
             sys.push_str("\n\n");

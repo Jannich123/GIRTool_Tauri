@@ -140,3 +140,80 @@ pub async fn get_column_dictionary(app: AppHandle) -> Result<Value, String> {
     let cached = DICT_CACHE.get_or_init(|| parsed);
     Ok(cached.clone())
 }
+
+// ── Column reference for the AI assistant (issue #306) ──────────────────────────
+
+static REF_CACHE: OnceLock<String> = OnceLock::new();
+
+/// A compact, grouped reference of every datasheet column with its unit and
+/// meaning, built from the same bundled workbook as the dictionary.  Injected
+/// into the AI assistant's system prompt so it knows the columns + units; cached
+/// for the process lifetime.  Empty string when the workbook is unavailable.
+pub(crate) fn column_reference_text(app: &AppHandle) -> String {
+    if let Some(s) = REF_CACHE.get() {
+        return s.clone();
+    }
+    let text = build_reference_text(app).unwrap_or_default();
+    let _ = REF_CACHE.set(text.clone());
+    text
+}
+
+fn build_reference_text(app: &AppHandle) -> Option<String> {
+    let path = app
+        .path()
+        .resolve(
+            "resources/GIRTool_Column_Reference.xlsx",
+            tauri::path::BaseDirectory::Resource,
+        )
+        .ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let mut wb = open_workbook_auto(&path).ok()?;
+    let sheet = wb.sheet_names().first().cloned()?;
+    let range = wb.worksheet_range(&sheet).ok()?;
+
+    // Group rows by datasheet, preserving first-seen order.
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for row in range.rows().skip(1) {
+        let ds = row.first().and_then(cell_str).unwrap_or_else(|| "(other)".to_string());
+        let col = match row.get(1).and_then(cell_str) {
+            Some(c) => c,
+            None => continue,
+        };
+        let full = row.get(2).and_then(cell_str).unwrap_or_default();
+        let desc = row.get(3).and_then(cell_str).unwrap_or_default();
+        let unit = row.get(4).and_then(cell_str).unwrap_or_default();
+
+        let mut line = col.clone();
+        if !full.is_empty() && full != col {
+            line.push_str(&format!(" — {full}"));
+        }
+        if !unit.is_empty() {
+            line.push_str(&format!(" [{unit}]"));
+        }
+        if !desc.is_empty() {
+            line.push_str(&format!(": {desc}"));
+        }
+
+        if let Some(g) = groups.iter_mut().find(|(n, _)| n == &ds) {
+            g.1.push(line);
+        } else {
+            groups.push((ds, vec![line]));
+        }
+    }
+    if groups.is_empty() {
+        return None;
+    }
+
+    let mut out = String::from(
+        "## Datasheet columns (units and meaning)\n\nThese are the columns of GIRTool's downloaded datasheets, each with its unit of measurement. This is the source of truth — answer column/unit questions from it and never invent columns or units. Format: `Column — Full name [unit]: description`.\n",
+    );
+    for (ds, cols) in &groups {
+        out.push_str(&format!("\n### {ds}\n"));
+        for line in cols {
+            out.push_str(&format!("- {line}\n"));
+        }
+    }
+    Some(out)
+}

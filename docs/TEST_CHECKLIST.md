@@ -449,6 +449,13 @@ Performance (load a few thousand points first):
 - [ ] RAG still works without any user action: with embeddings set in ai_config.json and docs indexed, the first question lazily builds + caches embeddings and answers cite the docs.
 - [ ] Attaching a text file still adds it as context; provider can be any OpenAI-compatible host (not Anthropic-locked).
 
+### 6av. AI assistant - accurate capabilities + column/unit knowledge (#306)
+
+- [ ] Ask the assistant "can I draw and save a polygon on the map?" -> it correctly says no: drawn polygons are transient (select/load/group); permanent map shapes come only from Settings -> Map addons import; Boundaries are coordinate-defined chart overlays.
+- [ ] Ask "what unit is qc / fs / Depth in?" -> it answers from the column reference (qc MPa, fs kPa, Depth m) without being told; it can list a datasheet's columns + units; it does not invent columns.
+- [ ] Editing GIRTool_Column_Reference.xlsx (and rebuilding) changes what the assistant reports - the reference is generated from that workbook, not hard-coded.
+- [ ] General orientation answers match the real tool (download datasheets, CPT reduction, import with unit conversion, charts read datasheets, reads DB / writes local Excel only).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
