@@ -588,6 +588,74 @@ pub async fn import_addon_file(
     .map_err(|e| format!("internal task error: {e}"))?
 }
 
+// ── Save a drawn / edited GeoJSON shape as an addon (issue #320) ────────────────
+// (Reuses collect_geojson_features from the GeoJSON-addon import above.)
+
+#[derive(Debug, Deserialize)]
+pub struct SaveGeojsonAddonRequest {
+    pub name: String,
+    /// GeoJSON drawn on the map (Feature / FeatureCollection / geometry).
+    pub geojson: Value,
+    /// EPSG of the coordinates (drawn shapes are WGS84 → 4326).
+    #[serde(default)]
+    pub epsg: Option<i64>,
+    /// { project: bool, selection: bool }
+    #[serde(default)]
+    pub maps: Option<Value>,
+}
+
+/// Write a drawn/edited GeoJSON shape to `{output}/map addons/` and return the
+/// addon entry the frontend appends to `map_addons` (mirrors import_addon_file).
+#[tauri::command]
+pub async fn save_geojson_addon(
+    req: SaveGeojsonAddonRequest,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return Err("Give the shape a name.".into());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let mut features = Vec::new();
+        collect_geojson_features(&req.geojson, &mut features);
+        if features.is_empty() {
+            return Err("No shape geometry to save.".into());
+        }
+        let feature_count = features.len();
+
+        let dir = PathBuf::from(&folder).join("map addons");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create 'map addons' dir: {e}"))?;
+        let id = format!("file_{}", chrono::Utc::now().timestamp_millis());
+        let rel = format!("map addons/{id}.geojson");
+        let gj = json!({ "type": "FeatureCollection", "features": features });
+        std::fs::write(
+            dir.join(format!("{id}.geojson")),
+            serde_json::to_string(&gj).map_err(|e| format!("GeoJSON serialise error: {e}"))?,
+        )
+        .map_err(|e| format!("Cannot write GeoJSON: {e}"))?;
+
+        let color = ADDON_COLORS[(chrono::Utc::now().timestamp_millis() as usize) % ADDON_COLORS.len()];
+        let maps = req.maps.unwrap_or(json!({ "project": true, "selection": true }));
+        Ok(json!({
+            "id": id,
+            "name": name,
+            "type": "geojson",
+            "file": rel,
+            "epsg": req.epsg.unwrap_or(4326),
+            "info_cols": [],
+            "feature_count": feature_count,
+            "color": color,
+            "maps": maps,
+            "visible": true,
+            "opacity": 1.0,
+        }))
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
 // ── Cache load / delete ───────────────────────────────────────────────────────
 
 /// Validate an addon-relative path: must live directly under `map addons/`.

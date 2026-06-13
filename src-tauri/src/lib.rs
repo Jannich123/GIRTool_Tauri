@@ -169,6 +169,7 @@ pub fn run() {
             commands::map_addons::pick_addon_file,
             commands::map_addons::addon_file_preview,
             commands::map_addons::import_addon_file,
+            commands::map_addons::save_geojson_addon,
             commands::map_addons::load_addon_geojson,
             commands::map_addons::delete_addon_file,
             // boundaries
