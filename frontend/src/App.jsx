@@ -21,6 +21,7 @@ import BoundariesPage  from './pages/BoundariesPage'
 import CptCalcPage    from './pages/CptCalcPage'
 import AiChatPage     from './pages/AiChatPage'
 import HelpPage       from './pages/HelpPage'
+import { ShapeToolsProvider } from './lib/shapeTools'
 import './index.css'
 
 function Placeholder({ title }) {
@@ -251,7 +252,9 @@ export default function App() {
   return (
     <AppProvider>
       <FilterProvider>
-        <Shell />
+        <ShapeToolsProvider>
+          <Shell />
+        </ShapeToolsProvider>
       </FilterProvider>
     </AppProvider>
   )

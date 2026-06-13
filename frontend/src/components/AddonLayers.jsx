@@ -4,6 +4,7 @@ import L from 'leaflet'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { reprojectGeoJSON } from '../lib/proj'
+import { useShapeTools } from '../lib/shapeTools'
 
 // Standard WMS operation params that Leaflet's WMSTileLayer adds itself.  If the
 // saved URL already carries them (e.g. a pasted GetCapabilities URL), they
@@ -39,6 +40,13 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
   const color = addon.color || '#7c3aed'
   const opacity = typeof addon.opacity === 'number' ? addon.opacity : 1
 
+  // #322: shape-tools selection — selected addon is highlighted, and clicks in
+  // 'select' mode pick this addon instead of acting as a boundary.
+  const shapeTools = useShapeTools()
+  const shapeToolsRef = useRef(shapeTools)
+  shapeToolsRef.current = shapeTools
+  const isSelected = shapeTools.selected?.id === addon.id
+
   // #254/#256: keep every vector in the SHARED renderer (so canvas
   // hit-testing, tooltips and the polygon-as-boundary clicks all work) and
   // enforce points-above-addons via DRAW ORDER: send the addon to the back
@@ -47,11 +55,13 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
   useEffect(() => {
     const layer = layerRef.current
     if (!layer) return
+    const c = isSelected ? '#ef4444' : color
+    const w = isSelected ? 4 : 2
     layer.setStyle((feat) => (feat?.geometry?.type === 'Point'
-      ? { color: '#fff', weight: 1.2, fillColor: color, fillOpacity: Math.min(0.95, opacity) }
-      : { color, weight: 2, opacity, fillColor: color, fillOpacity: opacity * 0.35 }))
+      ? { color: isSelected ? '#ef4444' : '#fff', weight: isSelected ? 3 : 1.2, fillColor: c, fillOpacity: Math.min(0.95, opacity) }
+      : { color: c, weight: w, opacity, fillColor: c, fillOpacity: opacity * 0.35 }))
     try { layer.bringToBack() } catch { /* not on a map yet */ }
-  }, [color, opacity])
+  }, [color, opacity, isSelected])
 
   useEffect(() => {
     try { layerRef.current?.bringToBack() } catch { /* not on a map yet */ }
@@ -77,11 +87,20 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
             keys.map(k => `${esc(k)}: ${esc(props[k])}`).join('<br/>')
           : `<strong>${esc(addon.name)}</strong>`
         layer.bindTooltip(html, { sticky: true })
-        // #209: polygons double as clickable selection boundaries.
-        const gt = feature?.geometry?.type
-        if (gt === 'Polygon' || gt === 'MultiPolygon') {
-          layer.on('click', (e) => polyClickRef?.current?.(feature, e.latlng, addon.name))
-        }
+        // Click: in shape-tools 'select' mode → select this addon (#322);
+        // otherwise polygons double as clickable selection boundaries (#209).
+        layer.on('click', (e) => {
+          const st = shapeToolsRef.current
+          if (st?.mode === 'select') {
+            L.DomEvent.stop(e)
+            st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file })
+            return
+          }
+          const gt = feature?.geometry?.type
+          if (gt === 'Polygon' || gt === 'MultiPolygon') {
+            polyClickRef?.current?.(feature, e.latlng, addon.name)
+          }
+        })
       }}
     />
   )
