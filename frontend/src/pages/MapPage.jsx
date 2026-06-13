@@ -5,8 +5,9 @@ import proj4 from 'proj4'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
-import { PROJ_DEFS, convertPoint, CRS_LABELS } from '../lib/proj'
+import { PROJ_DEFS, convertPoint, CRS_LABELS, reprojectGeoJSON } from '../lib/proj'
 import { useDataChanged, invokeAndNotify } from '../lib/dataChanged'
+import { useThrottledAddons } from '../lib/useThrottledAddons'
 import { pointInPolygonLatLng, ringFromFeature } from '../lib/geo'
 import CrsCursorReadout from '../components/CrsCursorReadout'
 import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, clampDkZoom, mapGridFor, clampMercZoom, MERC_DEFAULT_ZOOM, DK_DEFAULT_ZOOM } from '../lib/crsDk'
@@ -195,19 +196,23 @@ function MapInstanceRef({ onMap }) {
 
 // ── Polygon draw for grouping mode (#262 — mirrors SelectionMap's) ───────────
 
-function DrawHandler({ active, onVertex }) {
+function DrawHandler({ active, onVertex, onFinish }) {
   const map = useMap()
   useMapEvents({
     click: (e) => { if (active) onVertex([e.latlng.lat, e.latlng.lng]) },
+    // #338: double-click finishes (and saves) without zooming the map.
+    dblclick: (e) => { if (active && onFinish) { L.DomEvent.stop(e); onFinish() } },
   })
   useEffect(() => {
     const pane = map.getPane('overlayPane')
     const container = map.getContainer()
     if (pane) pane.style.pointerEvents = active ? 'none' : ''
     if (container) container.style.cursor = active ? 'crosshair' : ''
+    if (active) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable()
     return () => {
       if (pane) pane.style.pointerEvents = ''
       if (container) container.style.cursor = ''
+      map.doubleClickZoom.enable()
     }
   }, [active, map])
   return null
@@ -392,11 +397,17 @@ export default function MapPage() {
   const [grpTarget,    setGrpTarget]    = useState('')
   const [grpDrawing,   setGrpDrawing]   = useState(false)
   const [grpVerts,     setGrpVerts]     = useState([]) // [[lat, lng], …]
-  const [grpFromAddon, setGrpFromAddon] = useState(null)
   const [projMap, setProjMap] = useState(null) // #324: captured Leaflet map for the toolbar shape tools
   const [grpMsg,       setGrpMsg]       = useState('')
-  // #334: drives the reserved shape-actions row (so it shows a hint when idle).
-  const { selected: shapeSelected, editing: shapeEditing } = useShapeTools()
+  // #334/#338: drives the reserved shape-actions row + lets the ✏ Polygon
+  // button clear the shape selection when a fresh draw starts.
+  const { selected: shapeSelected, editing: shapeEditing, setSelected: setShapeSelected } = useShapeTools()
+  // #338: persist a drawn polygon as a map addon (💾 Save / double-click).
+  const { addons: shapeAddons, updateNow: saveAddons } = useThrottledAddons()
+  const shapeAddonsRef = useRef(shapeAddons); shapeAddonsRef.current = shapeAddons
+  // Latest verts for the double-click finish (fires before setGrpVerts commits).
+  const grpVertsRef = useRef(grpVerts)
+  useEffect(() => { grpVertsRef.current = grpVerts }, [grpVerts])
 
   // Active project for session lookups.
   const projectId = selectedProjects[0]?.ProjectId
@@ -606,7 +617,7 @@ export default function MapPage() {
   // Keep the target group valid + leave the mode when group colouring is off.
   useEffect(() => {
     if (!activeGroupSystem) {
-      if (grpMode) { setGrpMode(false); setGrpDrawing(false); setGrpVerts([]); setGrpFromAddon(null) }
+      if (grpMode) { setGrpMode(false); setGrpDrawing(false); setGrpVerts([]) }
       return
     }
     const names = activeGroupSystem.groups.map(g => g.name)
@@ -656,36 +667,62 @@ export default function MapPage() {
     const inside = visiblePoints.filter(pt => pointInPolygonLatLng(pt.latlng, grpVerts))
     setGrpDrawing(false)
     setGrpVerts([])
-    setGrpFromAddon(null)
     if (!inside.length) { setGrpMsg('No points inside the polygon'); return }
     assignGroupToPoints(inside)
   }
 
-  // Handlers reached from memoised markers / addon layers via refs — always
-  // fresh, never stale closures.
-  const grpStateRef = useRef({})
-  grpStateRef.current = { grpMode, grpDrawing, grpFromAddon }
+  // #338: save the polygon being drawn as a Map addon (💾 Save / double-click).
+  async function savePolygonAsAddon() {
+    const v = grpVertsRef.current
+    if (!v || v.length < 3) return
+    const ring = v.map(([lat, lng]) => [lng, lat])             // → [lng, lat]
+    const [fx, fy] = ring[0]; const [lx, ly] = ring[ring.length - 1]
+    if (fx !== lx || fy !== ly) ring.push([fx, fy])            // close the ring
+    const gj = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } }
+    try {
+      const entry = await invoke('save_geojson_addon', {
+        req: { name: 'Polygon', geojson: gj, epsg: 4326, maps: { project: true, selection: true } },
+      })
+      saveAddons([...(shapeAddonsRef.current || []), entry])
+      setGrpMsg('Polygon saved as a map addon')
+    } catch (e) {
+      setGrpMsg(`Save failed: ${String(e).slice(0, 120)}`)
+    }
+    setGrpDrawing(false); setGrpVerts([])
+  }
+
+  // #338: assign the chosen group to every visible point inside a SELECTED
+  // polygon addon — the click-to-assign-via-polygon path, routed through the
+  // shape selection (the old addon-polygon click handler died with #330).
+  async function assignInsideSelectedPolygon() {
+    if (!shapeSelected) return
+    try {
+      const gj = await invoke('load_addon_geojson', { file: shapeSelected.file })
+      const gj4326 = reprojectGeoJSON(gj, shapeSelected.epsg ?? 25832)
+      const feat = (gj4326.features || []).find(f => {
+        const t = f?.geometry?.type
+        return t === 'Polygon' || t === 'MultiPolygon'
+      })
+      const ring = feat ? ringFromFeature(feat, null) : null
+      if (!ring || ring.length < 3) { setGrpMsg('Could not read the polygon'); return }
+      const inside = visiblePoints.filter(pt => pointInPolygonLatLng(pt.latlng, ring))
+      if (!inside.length) { setGrpMsg('No points inside the polygon'); return }
+      assignGroupToPoints(inside)
+    } catch (e) {
+      setGrpMsg(`Could not read the shape: ${String(e).slice(0, 120)}`)
+    }
+  }
+
+  // Point click-to-assign (grouping mode): reached from memoised markers via a
+  // ref so it never goes stale.  (#338: the old addon-polygon click handler was
+  // dead since #330 — assignment via a polygon now goes through the shape
+  // selection → assignInsideSelectedPolygon — so it was removed.)
   const assignRef = useRef(null)
   assignRef.current = assignGroupToPoints
   const mapPointClickRef = useRef(null)
   mapPointClickRef.current = (grpMode && !grpDrawing)
     ? (pt) => assignRef.current?.([pt])
     : null
-
-  // #262: in grouping mode an addon polygon click stages its ring as the
-  // assignment boundary (same semantics as the selection map's #209 flow).
-  function onAddonPolyClick(feature, latlng) {
-    const s = grpStateRef.current
-    if (!s.grpMode) return
-    if (s.grpDrawing && !s.grpFromAddon) return // hand-drawing — don't hijack
-    const ring = ringFromFeature(feature, latlng)
-    if (!ring) return
-    setGrpVerts(ring)
-    setGrpFromAddon('addon')
-    setGrpDrawing(true)
-  }
-  const onAddonPolyClickRef = useRef(onAddonPolyClick)
-  onAddonPolyClickRef.current = onAddonPolyClick
 
   // Memoised marker tree (#218): unrelated context churn (e.g. addon
   // transparency drags) re-renders this component; a referentially stable
@@ -805,6 +842,23 @@ export default function MapPage() {
 
   const savedPos = loadSavedPos()
 
+  // #338: shared group-target picker (reused in the reserved row) + whether a
+  // polygon addon is selected (→ offer Assign inside).
+  const polySelected = shapeSelected && (shapeSelected.type === 'Polygon' || shapeSelected.type === 'MultiPolygon')
+  const groupTargetSelect = activeGroupSystem ? (
+    <select
+      value={grpTarget}
+      onChange={e => setGrpTarget(e.target.value)}
+      className="map-color-select"
+      title="Group to assign"
+    >
+      {activeGroupSystem.groups.map(g => (
+        <option key={g.name} value={g.name}>{g.name}</option>
+      ))}
+      <option value={UNASSIGN}>Unknown (clear)</option>
+    </select>
+  ) : null
+
   return (
     <div className="map-page">
 
@@ -837,15 +891,17 @@ export default function MapPage() {
             style={grpMode ? { background: '#1d4ed8', borderColor: '#1d4ed8', color: '#fff' } : undefined}
             onClick={() => {
               setGrpMode(m => !m)
-              setGrpDrawing(false); setGrpVerts([]); setGrpFromAddon(null); setGrpMsg('')
+              setGrpDrawing(false); setGrpVerts([]); setGrpMsg('')
             }}
-            title="Assign this group system's groups from the map: click points, draw a polygon, or click an addon polygon"
+            title="Click points on the map to assign this group system's groups (use ✏ Polygon, or select a polygon, to assign an area)"
           >
             🏷 {grpMode ? 'Exit grouping' : 'Assign groups'}
           </button>
         )}
         {grpMode && activeGroupSystem && (
           <>
+            {/* #338: the draw/assign/cancel buttons moved to the reserved row;
+                this just picks the target group for click-to-assign. */}
             <select
               value={grpTarget}
               onChange={e => setGrpTarget(e.target.value)}
@@ -857,34 +913,9 @@ export default function MapPage() {
               ))}
               <option value={UNASSIGN}>Unknown (clear)</option>
             </select>
-            {!grpDrawing ? (
-              <button
-                className="btn-secondary btn-sm"
-                onClick={() => { setGrpVerts([]); setGrpFromAddon(null); setGrpDrawing(true); setGrpMsg('') }}
-              >
-                ✏️ Draw polygon
-              </button>
-            ) : (
-              <>
-                <button className="btn-primary btn-sm" disabled={grpVerts.length < 3} onClick={assignInsidePolygon}>
-                  🏷 Assign inside{grpVerts.length >= 3 ? '' : ` (${grpVerts.length})`}
-                </button>
-                <button
-                  className="btn-secondary btn-sm"
-                  onClick={() => { setGrpDrawing(false); setGrpVerts([]); setGrpFromAddon(null) }}
-                >
-                  Cancel
-                </button>
-              </>
-            )}
             <span className="hint" style={{ margin: 0 }}>
-              {grpDrawing
-                ? (grpFromAddon
-                    ? 'Addon boundary staged — 🏷 Assign inside'
-                    : 'Click to drop vertices, then 🏷 Assign inside')
-                : 'Click a point to assign · ✏️ draw or click an addon polygon for bulk'}
+              Click a point to assign · or ✏ Polygon / select a polygon to assign an area
             </span>
-            {grpMsg && <span className="hint" style={{ margin: 0, color: '#16a34a' }}>{grpMsg}</span>}
           </>
         )}
 
@@ -916,10 +947,23 @@ export default function MapPage() {
           </div>
         )}
 
-        {/* #324/#330/#334: shape tools — draw a polygon or line; edit/offset/
-            delete live in the reserved row below (so selecting a shape doesn't
-            reflow this wrapping toolbar and bounce the map). */}
+        {/* #324/#330/#334/#338: shape tools — one ✏ Polygon (temp draw: assign a
+            group inside or 💾 save) + ／ Line; the contextual actions (assign /
+            save / edit / offset / delete) live in the reserved row below so a
+            selection doesn't reflow this wrapping toolbar and bounce the map. */}
         <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .1rem' }} />
+        <button
+          className="btn-secondary btn-sm"
+          onClick={() => {
+            if (grpDrawing) { setGrpDrawing(false); setGrpVerts([]) }
+            else { setShapeSelected(null); setGrpVerts([]); setGrpDrawing(true); setGrpMsg('') }
+          }}
+          disabled={!projMap}
+          style={grpDrawing ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : undefined}
+          title="Draw a polygon — assign a group to points inside, or save it as a map addon"
+        >
+          ✏ Polygon{grpDrawing ? ' — drawing…' : ''}
+        </button>
         <ShapeDraw map={projMap} target="project" />
 
         <div style={{ flex: 1 }} />
@@ -941,17 +985,57 @@ export default function MapPage() {
         )}
       </div>
 
-      {/* #334: reserved shape-actions row — always present (fixed height) so a
-          selected shape's edit/offset/delete buttons appear here instead of
+      {/* #334/#338: reserved contextual row — always present (fixed height) so
+          the polygon-draw / assign / shape-edit controls appear here instead of
           reflowing the toolbar and bouncing the map. */}
       <div style={{
         display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap',
         minHeight: 34, padding: '.25rem 1.25rem', background: '#fff',
         borderBottom: '1px solid var(--border)', flexShrink: 0,
       }}>
-        {!shapeSelected && !shapeEditing
-          ? <span className="hint" style={{ margin: 0, opacity: .55 }}>Click a shape on the map to edit, offset, or delete it.</span>
-          : <ShapeActions />}
+        {grpDrawing ? (
+          /* Drawing the ✏ Polygon: assign a group inside and/or save it. */
+          <>
+            {groupTargetSelect}
+            {activeGroupSystem && (
+              <button className="btn-primary btn-sm" disabled={grpVerts.length < 3} onClick={assignInsidePolygon}>
+                🏷 Assign inside{grpVerts.length >= 3 ? '' : ` (${grpVerts.length})`}
+              </button>
+            )}
+            <button className="btn-secondary btn-sm" disabled={grpVerts.length < 3} onClick={savePolygonAsAddon}
+              title="Save the drawn polygon as a map addon (or double-click the map)">
+              💾 Save
+            </button>
+            <button className="btn-secondary btn-sm" onClick={() => { setGrpDrawing(false); setGrpVerts([]) }}>
+              Cancel
+            </button>
+            <span className="hint" style={{ margin: 0 }}>
+              Click to drop vertices, then {activeGroupSystem ? '🏷 Assign inside · ' : ''}💾 Save · double-click saves
+            </span>
+          </>
+        ) : polySelected ? (
+          /* A polygon addon is selected → assign a group to points inside it. */
+          <>
+            {groupTargetSelect}
+            {activeGroupSystem && (
+              <>
+                <button className="btn-primary btn-sm" onClick={assignInsideSelectedPolygon}
+                  title="Assign the chosen group to every point inside this polygon">
+                  🏷 Assign inside
+                </button>
+                <span style={{ borderLeft: '1px solid #e2e8f0', height: 18, margin: '0 .1rem' }} />
+              </>
+            )}
+            <ShapeActions />
+          </>
+        ) : (shapeSelected || shapeEditing) ? (
+          <ShapeActions />
+        ) : (
+          <span className="hint" style={{ margin: 0, opacity: .55 }}>
+            Click a shape to edit / offset / delete · ✏ Polygon or select a polygon to assign a group inside.
+          </span>
+        )}
+        {grpMsg && <span className="hint" style={{ margin: 0, color: '#16a34a' }}>{grpMsg}</span>}
       </div>
 
       {/* ── Map ── */}
@@ -979,21 +1063,22 @@ export default function MapPage() {
           <AddonLayers
             target="project"
             grid={grid}
-            onPolygonClick={(feature, latlng) => onAddonPolyClickRef.current?.(feature, latlng)}
           />
 
-          {/* #262: grouping-mode polygon draw + staged boundary overlay. */}
+          {/* #338: ✏ Polygon temp draw + filled preview (assign a group inside
+              or save as an addon).  Double-click finishes + saves. */}
           <DrawHandler
-            active={grpMode && grpDrawing && !grpFromAddon}
+            active={grpDrawing}
             onVertex={(v) => setGrpVerts(prev => [...prev, v])}
+            onFinish={savePolygonAsAddon}
           />
-          {grpMode && grpVerts.length >= 3 && (
+          {grpVerts.length >= 3 && (
             <Polygon positions={grpVerts} pathOptions={{ color: '#1d4ed8', weight: 2, dashArray: '5,5', fillColor: '#1d4ed8', fillOpacity: 0.08 }} />
           )}
-          {grpMode && grpVerts.length === 2 && (
+          {grpVerts.length === 2 && (
             <Polyline positions={grpVerts} pathOptions={{ color: '#1d4ed8', weight: 2, dashArray: '5,5' }} />
           )}
-          {grpMode && !grpFromAddon && grpVerts.map((v, i) => (
+          {grpVerts.map((v, i) => (
             <CircleMarker key={`gv${i}`} center={v} radius={3} pathOptions={{ color: '#1d4ed8', weight: 2, fillColor: '#fff', fillOpacity: 1 }} />
           ))}
 
