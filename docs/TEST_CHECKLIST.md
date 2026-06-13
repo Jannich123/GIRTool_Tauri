@@ -536,6 +536,12 @@ Performance (load a few thousand points first):
 - [ ] **Coordinate readout**: hovering the map shows a live cursor readout (bottom-right). With a target CRS set in Settings → Coordinate system it shows projected easting/northing; with NO target CRS it falls back to WGS84 lon/lat (it no longer disappears).
 - [ ] **Merged Load button**: on the Data Selection map, "⬇ Load in view" becomes "⬇ Load inside" when a polygon shape is selected (loads points inside it) and reverts to "Load in view" when deselected; the separate "Load inside" button is gone from the second row, while ✚ Select inside / ✖ Remove inside / 🗑 Remove projects remain.
 
+### 6bh. DKTM projection fix — points no longer land in Sweden (#336)
+
+- [ ] Set the project CRS to **EPSG:4094 (ETRS89 / DKTM2)** and load points whose X/Y are DKTM2: they now render in the correct Danish location (e.g. x=393359.913369, y=1325300.321314 → northern Jutland, NOT Sweden).
+- [ ] DKTM1 (4093), DKTM3 (4095) and DKTM4 (4096) points also land in the right place; values match https://epsg.io for the same EPSG.
+- [ ] The bottom-right coordinate readout and the points table show DKTM eastings in the expected range for the zone (≈200 k / 400 k / 600 k / 800 k for DKTM1/2/3/4).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
