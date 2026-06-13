@@ -542,6 +542,15 @@ Performance (load a few thousand points first):
 - [ ] DKTM1 (4093), DKTM3 (4095) and DKTM4 (4096) points also land in the right place; values match https://epsg.io for the same EPSG.
 - [ ] The bottom-right coordinate readout and the points table show DKTM eastings in the expected range for the zone (≈200 k / 400 k / 600 k / 800 k for DKTM1/2/3/4).
 
+### 6bi. Project map — merged polygon + assign-group-inside (#338)
+
+- [ ] The Map page has ONE polygon button (✏ Polygon) — the old grouping "✏️ Draw polygon" and the duplicate shape polygon are gone; ／ Line still draws a line.
+- [ ] Clicking ✏ Polygon starts a temp draw with a filled preview; the reserved row shows (when a group system is active) a group picker + 🏷 Assign inside, plus 💾 Save and Cancel. Double-clicking the map finishes + saves (no zoom).
+- [ ] 🏷 Assign inside (while drawing) assigns the chosen group to every visible point inside the polygon; 💾 Save stores it as a map addon (appears on both maps). Drawing/saving works even with no group system active.
+- [ ] **Select a polygon → assign:** click a polygon addon on the map to select it; the reserved row shows the group picker + 🏷 Assign inside; clicking it assigns the chosen group to all points inside that polygon. Edit/Delete (ShapeActions) still available for the selected polygon.
+- [ ] Grouping mode (🏷 Assign groups) still assigns by clicking individual points; the target picker shows in the toolbar; results message appears in the reserved row.
+- [ ] Selection map is unchanged: its ✏ Polygon still does Load/Select/Remove inside + Save; ／ Line still draws.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

@@ -105,29 +105,16 @@ export default function ShapeDraw({ map, target }) {
     )
   }
 
-  const activeBtn = { background: '#2563eb', borderColor: '#2563eb', color: '#fff' }
+  // Line only: each map has its own ✏ Polygon (a temp draw that can load/select
+  // inside or assign a group, then optionally save) — see SelectionMap/MapPage.
   return (
-    <>
-      {/* The selection map has its own ✏ Polygon (temp draw → load/select inside);
-          only the project map draws+saves a polygon addon from here (#334). */}
-      {target !== 'selection' && (
-        <button
-          className="btn-secondary btn-sm"
-          onClick={() => startDraw('Polygon')}
-          style={drawing === 'Polygon' ? activeBtn : undefined}
-          title="Draw a polygon, double-click to finish; saved as a map addon"
-        >
-          ✏ Polygon{drawing === 'Polygon' ? ' — drawing…' : ''}
-        </button>
-      )}
-      <button
-        className="btn-secondary btn-sm"
-        onClick={() => startDraw('Line')}
-        style={drawing === 'Line' ? activeBtn : undefined}
-        title="Draw a line, double-click to finish; saved as a map addon"
-      >
-        ／ Line{drawing === 'Line' ? ' — drawing…' : ''}
-      </button>
-    </>
+    <button
+      className="btn-secondary btn-sm"
+      onClick={() => startDraw('Line')}
+      style={drawing === 'Line' ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : undefined}
+      title="Draw a line, double-click to finish; saved as a map addon"
+    >
+      ／ Line{drawing === 'Line' ? ' — drawing…' : ''}
+    </button>
   )
 }
