@@ -441,6 +441,14 @@ Performance (load a few thousand points first):
 - [ ] Embeddings can point at a DIFFERENT provider/URL than chat; both are OpenAI-compatible. With no embeddings configured or an empty index, chat still works (no RAG, no error).
 - [ ] %APPDATA%/GIRTool/ai_rag_index.json overrides the bundled (empty) index, so confidential extracted text need not be committed.
 
+### 6au. AI assistant - developer config + persisted chats + slim window (#304)
+
+- [ ] The chat window no longer has any ⚙ Connection / RAG settings - only: left chat list + New chat, the conversation, and the 📎 attach button.
+- [ ] Tokens/model come from the bundled resources/ai_config.json (developer-set). With it empty the window says "not set up" and input is disabled; filling it (or a %APPDATA%/GIRTool/ai_config.json override) makes the assistant work - no app restart of the config needed beyond reopening the window.
+- [ ] Chats persist: after a reply a chat appears in the left list (titled from the first message); reopening the window or restarting the app keeps them; selecting one reloads its messages; ✕ deletes it; New chat starts an empty one. Files live in %APPDATA%/GIRTool/ai_chats/.
+- [ ] RAG still works without any user action: with embeddings set in ai_config.json and docs indexed, the first question lazily builds + caches embeddings and answers cite the docs.
+- [ ] Attaching a text file still adds it as context; provider can be any OpenAI-compatible host (not Anthropic-locked).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
