@@ -13,7 +13,7 @@ export default function ShapeDraw({ map, target }) {
   const { addons, updateNow } = useThrottledAddons()
   const addonsRef = useRef(addons)
   addonsRef.current = addons
-  const { selected, setSelected, editing } = useShapeTools()
+  const { selected, setSelected, editing, suppressDeselectRef } = useShapeTools()
 
   const [drawing, setDrawing] = useState(false)
   const [pending, setPending] = useState(null)   // { gj } awaiting a name
@@ -46,6 +46,8 @@ export default function ShapeDraw({ map, target }) {
   useEffect(() => {
     if (!map) return undefined
     const onMapClick = () => {
+      // #332: skip the deselect that fires in the same event as a shape click.
+      if (suppressDeselectRef.current) { suppressDeselectRef.current = false; return }
       const s = selRef.current
       if (s.selected && !s.editing && !s.drawing && !s.pending) setSelected(null)
     }

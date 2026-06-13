@@ -5,7 +5,8 @@ import { invoke } from '../tauri-api'
 import { useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
-import { reproject, toLatLng, pointToLatLng, convertPoint, normaliseEpsg, CRS_LABELS } from '../lib/proj'
+import { reproject, toLatLng, pointToLatLng, convertPoint, normaliseEpsg, CRS_LABELS, reprojectGeoJSON } from '../lib/proj'
+import { useThrottledAddons } from '../lib/useThrottledAddons'
 import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 import CrsCursorReadout from '../components/CrsCursorReadout'
@@ -176,22 +177,28 @@ function MapRef({ onMap }) {
 // Polygon draw (M4.3b): while active, each map click drops a vertex.  Panning
 // (drag) and scroll-zoom are unaffected — Leaflet only fires `click` on a plain
 // click, so the in-progress polygon survives zoom/pan (plan Q-B1).
-function DrawHandler({ active, onVertex }) {
+function DrawHandler({ active, onVertex, onFinish }) {
   const map = useMap()
   useMapEvents({
     click: (e) => { if (active) onVertex([e.latlng.lat, e.latlng.lng]) },
+    // #332: double-click finishes the polygon and saves it as an addon.
+    dblclick: (e) => { if (active && onFinish) { L.DomEvent.stop(e); onFinish() } },
   })
   // While drawing, make existing markers/paths non-interactive (overlay pane
   // pointer-events off) so a click only drops a vertex — never opens a popup or
-  // a Jupiter borerapport — and show a crosshair cursor.
+  // a Jupiter borerapport — show a crosshair cursor, and stop double-click from
+  // zooming (it saves instead).
   useEffect(() => {
     const pane = map.getPane('overlayPane')
     const container = map.getContainer()
     if (pane) pane.style.pointerEvents = active ? 'none' : ''
     if (container) container.style.cursor = active ? 'crosshair' : ''
+    if (active) map.doubleClickZoom?.disable()
+    else map.doubleClickZoom?.enable()
     return () => {
       if (pane) pane.style.pointerEvents = ''
       if (container) container.style.cursor = ''
+      map.doubleClickZoom?.enable()
     }
   }, [active, map])
   return null
@@ -204,6 +211,9 @@ function DrawHandler({ active, onVertex }) {
 export default function SelectionMap() {
   const { allPoints } = useFilter()
   const { selected, setSelected, editing } = useShapeTools() // #330
+  const { addons: shapeAddons, updateNow: saveAddons } = useThrottledAddons() // #332
+  const shapeAddonsRef = useRef(shapeAddons)
+  shapeAddonsRef.current = shapeAddons
   const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem, mapAddons, connection } = useApp()
 
   // #238: wipe folder-foreign session state BEFORE the useState initialisers
@@ -782,17 +792,60 @@ export default function SelectionMap() {
   }
 
   // Apply a finished polygon: load / select / remove the points inside it.
-  function applyPolygon(action) {
-    if (vertices.length < 3) return
-    const polyLatLng = vertices                              // [[lat, lng], …]
-    const ring4326 = vertices.map(([lat, lng]) => [lng, lat]) // → [lng, lat]
-    setDrawing(false)
-    setVertices([])
-    setPolyFromAddon(null)
+  // `ringLatLng` lets a SELECTED polygon addon (#332) reuse the same actions
+  // without going through the hand-draw state.
+  function applyPolygon(action, ringLatLng = null) {
+    const polyLatLng = ringLatLng || vertices                  // [[lat, lng], …]
+    if (polyLatLng.length < 3) return
+    const ring4326 = polyLatLng.map(([lat, lng]) => [lng, lat]) // → [lng, lat]
+    if (!ringLatLng) { setDrawing(false); setVertices([]); setPolyFromAddon(null) }
     if (action === 'load') loadInside(ring4326)
     else if (action === 'select') selectInside(polyLatLng)
     else if (action === 'remove') removeInside(polyLatLng)
     else if (action === 'removeProjects') removeProjectsInside(polyLatLng)
+  }
+
+  // #332: latest drawn vertices (the double-click finish can fire before the
+  // last setVertices render commits).
+  const verticesRef = useRef(vertices)
+  useEffect(() => { verticesRef.current = vertices }, [vertices])
+
+  // #332: save the polygon being drawn as a Map addon (Save button / dbl-click).
+  async function savePolygonAsAddon() {
+    const v = verticesRef.current
+    if (!v || v.length < 3) return
+    const ring = v.map(([lat, lng]) => [lng, lat]) // → [lng, lat]
+    const [fx, fy] = ring[0]
+    const [lx, ly] = ring[ring.length - 1]
+    if (fx !== lx || fy !== ly) ring.push([fx, fy]) // close the ring
+    const gj = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } }
+    try {
+      const entry = await invoke('save_geojson_addon', {
+        req: { name: 'Polygon', geojson: gj, epsg: 4326, maps: { project: true, selection: true } },
+      })
+      saveAddons([...(shapeAddonsRef.current || []), entry])
+      setLoadStatus('Polygon saved as a map addon.')
+    } catch (e) {
+      setLoadStatus(`Save failed: ${String(e).slice(0, 120)}`)
+    }
+    setDrawing(false); setVertices([]); setPolyFromAddon(null)
+  }
+
+  // #332: load/select/remove points within a SELECTED polygon addon's area.
+  async function applySelectedPolygon(action) {
+    if (!selected) return
+    try {
+      const gj = await invoke('load_addon_geojson', { file: selected.file })
+      const gj4326 = reprojectGeoJSON(gj, selected.epsg ?? 25832)
+      const feat = (gj4326.features || []).find(f => {
+        const t = f?.geometry?.type
+        return t === 'Polygon' || t === 'MultiPolygon'
+      })
+      const ring = feat ? ringFromFeature(feat, null) : null
+      if (ring && ring.length >= 3) applyPolygon(action, ring)
+    } catch (e) {
+      setLoadStatus(`Could not read the shape: ${String(e).slice(0, 120)}`)
+    }
   }
 
   // #209: clicking a polygon from a map addon stages it as the active
@@ -871,17 +924,33 @@ export default function SelectionMap() {
                   title="Remove every project with points inside the polygon — the projects AND all their points leave the selection">
                   🗑 Remove projects
                 </button>
+                <button className="btn-secondary btn-sm" onClick={savePolygonAsAddon} disabled={vertices.length < 3 || loading}
+                  title="Save the drawn polygon as a map addon (or double-click the map)">
+                  💾 Save polygon
+                </button>
                 <button className="btn-secondary btn-sm" onClick={() => { setDrawing(false); setVertices([]); setPolyFromAddon(null) }} disabled={loading}>
                   Cancel
                 </button>
                 <span className="hint" style={{ margin: 0 }}>
                   {polyFromAddon
-                    ? <>Boundary from <strong>{polyFromAddon}</strong> — Load / Select / Remove points inside it</>
-                    : <>Click to drop vertices (zoom/pan freely), then Load / Select / Remove inside</>}
+                    ? <>Boundary from <strong>{polyFromAddon}</strong> — Load / Select / Remove inside · 💾 Save</>
+                    : <>Click to drop vertices, then Load / Select / Remove inside · 💾 Save · double-click saves</>}
                 </span>
               </>
             ) : (
-              <ShapeActions />
+              <>
+                {selected && (selected.type === 'Polygon' || selected.type === 'MultiPolygon') && (
+                  <>
+                    <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('load')} disabled={loading}>⬇ Load inside</button>
+                    <button className="btn-primary btn-sm" onClick={() => applySelectedPolygon('select')} disabled={loading}>✚ Select inside</button>
+                    <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('remove')} disabled={loading}>✖ Remove inside</button>
+                    <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('removeProjects')} disabled={loading}
+                      title="Remove every project with points inside this polygon">🗑 Remove projects</button>
+                    <span style={{ borderLeft: '1px solid #e2e8f0', height: 18, margin: '0 .1rem' }} />
+                  </>
+                )}
+                <ShapeActions />
+              </>
             )}
           </div>
         )}
@@ -912,7 +981,7 @@ export default function SelectionMap() {
           <MapRef onMap={setMap} />
           {/* #209: while an addon polygon is staged, map clicks must NOT drop
               vertices — the ring is fixed. */}
-          <DrawHandler active={drawing && !polyFromAddon} onVertex={(v) => setVertices(prev => [...prev, v])} />
+          <DrawHandler active={drawing && !polyFromAddon} onVertex={(v) => setVertices(prev => [...prev, v])} onFinish={savePolygonAsAddon} />
 
           {/* In-progress draw polygon (M4.3b) / staged addon boundary (#209). */}
           {drawing && vertices.length >= 3 && (

@@ -111,6 +111,12 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
           const st = shapeToolsRef.current
           if (st?.editing) return
           L.DomEvent.stop(e)
+          // #332: tell the map-click handler (fires in the same event) not to
+          // deselect what we're about to select; clear it on the next tick.
+          if (st?.suppressDeselectRef) {
+            st.suppressDeselectRef.current = true
+            setTimeout(() => { st.suppressDeselectRef.current = false }, 0)
+          }
           st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file, epsg: addon.epsg })
         })
         // #328: double-click a shape → enter edit mode (unless already editing).

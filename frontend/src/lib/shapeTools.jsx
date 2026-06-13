@@ -16,8 +16,11 @@ export function ShapeToolsProvider({ children }) {
   // Set by AddonLayers: reload(id, fromFile) — fromFile clears the cache + re-reads
   // the file (after Save); otherwise just remounts from cache (Cancel = discard).
   const reloadRef = useRef(null)
+  // #332: a shape click sets this so the map-click that fires in the same event
+  // doesn't immediately deselect the shape we just selected.
+  const suppressDeselectRef = useRef(false)
   return (
-    <ShapeToolsCtx.Provider value={{ selected, setSelected, editing, setEditing, editLayerRef, reloadRef }}>
+    <ShapeToolsCtx.Provider value={{ selected, setSelected, editing, setEditing, editLayerRef, reloadRef, suppressDeselectRef }}>
       {children}
     </ShapeToolsCtx.Provider>
   )
@@ -27,5 +30,6 @@ export function useShapeTools() {
   return useContext(ShapeToolsCtx) || {
     selected: null, setSelected: () => {},
     editing: null, setEditing: () => {}, editLayerRef: { current: null }, reloadRef: { current: null },
+    suppressDeselectRef: { current: false },
   }
 }

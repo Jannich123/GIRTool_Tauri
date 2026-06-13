@@ -522,6 +522,13 @@ Performance (load a few thousand points first):
 - [ ] Double-click a shape still enters edit mode (Save/Cancel in the second row); offset/delete/edit all still work.
 - [ ] ／ Line still draws + saves a line addon; the project map shows the same shape tools (edit/offset/delete) in its toolbar.
 
+### 6bf. Shape tools follow-ups — select fix, save-while-drawing, polygon area actions (#332)
+
+- [ ] Clicking a shape now SELECTS it (highlight + contextual buttons) and it STAYS selected (the empty-map deselect no longer undoes it); clicking empty map still deselects.
+- [ ] While drawing the ✏ Polygon, a 💾 Save polygon button saves the drawn polygon as a map addon; double-clicking the map also finishes + saves it (and no longer zooms).
+- [ ] With a POLYGON addon selected, ⬇ Load inside / ✚ Select inside / ✖ Remove inside / 🗑 Remove projects act on that polygon's area (same as the temp draw); for lines, the offset/edit/delete actions still show.
+- [ ] Edit (double-click) / Offset / Delete still work; re-selecting a different shape works.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
