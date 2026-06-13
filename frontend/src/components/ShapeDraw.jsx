@@ -16,7 +16,7 @@ export default function ShapeDraw({ map, target }) {
   const { addons, updateNow } = useThrottledAddons()
   const addonsRef = useRef(addons)
   addonsRef.current = addons
-  const { mode, setMode, selected, setSelected } = useShapeTools()
+  const { mode, setMode, selected, setSelected, editing, setEditing, editLayerRef, reloadRef } = useShapeTools()
 
   const [drawing, setDrawing] = useState(null)   // 'Polygon' | 'Line' | null
   const [pending, setPending] = useState(null)   // { gj } awaiting a name
@@ -117,6 +117,34 @@ export default function ShapeDraw({ map, target }) {
 
   const isLine = selected && (selected.type === 'LineString' || selected.type === 'MultiLineString')
 
+  // #328: save the in-place geoman edits back to the addon's GeoJSON.
+  async function saveEdit() {
+    const id = editing
+    const layer = editLayerRef.current
+    if (!id || !layer) { setEditing(null); return }
+    setBusy(true); setMsg('')
+    try {
+      const gj = layer.toGeoJSON() // WGS84 lat/lng from the map
+      const addon = (addonsRef.current || []).find(a => a.id === id)
+      if (!addon) throw new Error('Shape no longer exists.')
+      await invoke('update_addon_geojson', { req: { file: addon.file, geojson: gj } })
+      // The file is now WGS84 — set the entry's EPSG so it renders correctly.
+      updateNow((addonsRef.current || []).map(a => (a.id === id ? { ...a, epsg: 4326 } : a)))
+      setEditing(null)
+      reloadRef.current?.(id, true) // reload the saved file + remount
+    } catch (err) {
+      setMsg(String(err).slice(0, 160))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function cancelEdit() {
+    const id = editing
+    setEditing(null)
+    reloadRef.current?.(id, false) // remount from cache → discard the edits
+  }
+
   if (!map) return null
 
   const btn = (active, disabled) => ({
@@ -128,7 +156,13 @@ export default function ShapeDraw({ map, target }) {
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' }}>
-      {pending ? (
+      {editing ? (
+        <>
+          <span style={{ color: '#475569' }}>Editing <strong>{selected?.name || 'shape'}</strong> — drag a vertex; drag a segment midpoint to add one</span>
+          <button style={btn(true, busy)} disabled={busy} onClick={saveEdit}>{busy ? '…' : '✓ Save'}</button>
+          <button style={btn(false, busy)} disabled={busy} onClick={cancelEdit}>✕ Cancel</button>
+        </>
+      ) : pending ? (
         <>
           <span style={{ color: '#475569' }}>Save shape as addon:</span>
           <input

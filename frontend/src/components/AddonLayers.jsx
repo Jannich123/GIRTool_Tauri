@@ -46,6 +46,21 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
   const shapeToolsRef = useRef(shapeTools)
   shapeToolsRef.current = shapeTools
   const isSelected = shapeTools.selected?.id === addon.id
+  const isEditing = shapeTools.editing === addon.id
+
+  // #328: edit mode — enable geoman vertex/edge editing on this layer and
+  // expose it to the toolbar's Save; disable when editing ends.
+  useEffect(() => {
+    const layer = layerRef.current
+    if (!layer?.pm) return undefined
+    if (isEditing) {
+      try { layer.pm.enable({ allowSelfIntersection: true, snappable: false }) } catch { /* noop */ }
+      shapeToolsRef.current.editLayerRef.current = layer
+    } else {
+      try { layer.pm.disable() } catch { /* noop */ }
+    }
+    return () => { try { layerRef.current?.pm?.disable() } catch { /* noop */ } }
+  }, [isEditing])
 
   // #254/#256: keep every vector in the SHARED renderer (so canvas
   // hit-testing, tooltips and the polygon-as-boundary clicks all work) and
@@ -101,6 +116,14 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
             polyClickRef?.current?.(feature, e.latlng, addon.name)
           }
         })
+        // #328: double-click a shape → enter edit mode (unless already editing).
+        layer.on('dblclick', (e) => {
+          const st = shapeToolsRef.current
+          if (st?.editing) return
+          L.DomEvent.stop(e)
+          st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file, epsg: addon.epsg })
+          st.setEditing?.(addon.id)
+        })
       }}
     />
   )
@@ -151,10 +174,29 @@ function applyRenderType(gj, render) {
 // map uses it to stage the polygon as the active selection boundary.
 export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
   const { mapAddons } = useApp()
+  const shapeTools = useShapeTools()
 
   // Local mirror of the session cache (state, so loads trigger a re-render).
   const [geoCache, setGeoCache] = useState({})
   const loadingRef = useRef(new Set())
+  // #328: per-addon remount counter so an edit Save/Cancel can rebuild a
+  // GeoFileLayer (Cancel = remount from cache → discard geoman's in-place edits;
+  // Save = reload the updated file first).
+  const [versions, setVersions] = useState({})
+  const [reloadTick, setReloadTick] = useState(0)
+
+  // Expose a reload(id, fromFile) the toolbar calls after Save / Cancel.
+  useEffect(() => {
+    shapeTools.reloadRef.current = (id, fromFile) => {
+      if (fromFile) {
+        geoFileCache.delete(id)
+        setGeoCache(prev => { const n = { ...prev }; delete n[id]; return n })
+        setReloadTick(t => t + 1)
+      }
+      setVersions(v => ({ ...v, [id]: (v[id] || 0) + 1 }))
+    }
+    return () => { if (shapeTools.reloadRef) shapeTools.reloadRef.current = null }
+  }, [shapeTools.reloadRef])
 
   // Latest click handler in a ref: onEachFeature only runs when a GeoJSON
   // layer mounts, so a directly-captured prop would go stale on re-renders.
@@ -179,7 +221,7 @@ export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
         .catch(err => console.warn(`addon ${a.name}: failed to load GeoJSON:`, err))
         .finally(() => loadingRef.current.delete(a.id))
     }
-  }, [mapAddons, target]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapAddons, target, reloadTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (mapAddons || [])
     .filter(a => a && a.visible !== false && a.maps?.[target])
@@ -207,9 +249,10 @@ export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
         if (!cached) return null
         return (
           <GeoFileLayer
-            // Key carries identity + render type only — colour/opacity changes
-            // restyle the mounted layer in place (#218) instead of remounting.
-            key={`${a.id}_${a.render || 'native'}`}
+            // Key carries identity + render type — colour/opacity changes
+            // restyle in place (#218); the version bumps only on edit
+            // Save/Cancel (#328) to force a clean remount.
+            key={`${a.id}_${a.render || 'native'}_${versions[a.id] || 0}`}
             addon={a}
             data={applyRenderType(cached, a.render)}
             polyClickRef={polyClickRef}
