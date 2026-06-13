@@ -667,6 +667,40 @@ fn addon_cache_path(folder: &str, rel: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(folder).join(norm))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateGeojsonAddonRequest {
+    pub file: String,
+    pub geojson: Value,
+}
+
+/// Overwrite an existing addon's cached GeoJSON with an edited shape (#328).
+/// Returns the new feature count.  Path validated to live under `map addons/`.
+#[tauri::command]
+pub async fn update_addon_geojson(
+    req: UpdateGeojsonAddonRequest,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let folder = state.output_folder().ok_or("No output folder configured.")?;
+    let path = addon_cache_path(&folder, &req.file)?;
+    tokio::task::spawn_blocking(move || {
+        let mut features = Vec::new();
+        collect_geojson_features(&req.geojson, &mut features);
+        if features.is_empty() {
+            return Err("No shape geometry to save.".into());
+        }
+        let n = features.len();
+        let gj = json!({ "type": "FeatureCollection", "features": features });
+        std::fs::write(
+            &path,
+            serde_json::to_string(&gj).map_err(|e| format!("GeoJSON serialise error: {e}"))?,
+        )
+        .map_err(|e| format!("Cannot write GeoJSON: {e}"))?;
+        Ok(n)
+    })
+    .await
+    .map_err(|e| format!("internal task error: {e}"))?
+}
+
 #[tauri::command]
 pub async fn load_addon_geojson(file: String, state: State<'_, AppState>) -> Result<Value, String> {
     let folder = state.output_folder().ok_or("No output folder configured.")?;

@@ -507,6 +507,13 @@ Performance (load a few thousand points first):
 - [ ] The metre width is true ground distance regardless of the map grid / the line addon's source EPSG (line is reprojected to WGS84 before turf buffers it).
 - [ ] Invalid/zero offset shows an error and does nothing; the original line is unchanged.
 
+### 6bd. Edit map shapes — double-click → vertices/edges, Save/Cancel (#328, item 6)
+
+- [ ] Double-click an addon shape (polygon/line) -> edit mode: vertex handles appear; drag a vertex to move it; drag a segment midpoint to add a vertex; drag the shape body to move it all. The toolbar shows "Editing <name>" with ✓ Save / ✕ Cancel.
+- [ ] Save writes the edited geometry to the addon's GeoJSON (stored WGS84); it persists after reload/restart and syncs to other windows. The shape redraws in its new form.
+- [ ] Cancel discards the edits and the shape snaps back to its original geometry (no file change).
+- [ ] Double-click no longer zooms the map on a shape; editing works on the Danish + web-mercator grids; only one shape edits at a time.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
