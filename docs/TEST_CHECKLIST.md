@@ -422,6 +422,16 @@ Performance (load a few thousand points first):
 - [ ] FeatureCollection, a single Feature, a bare geometry, and a top-level array all import; features with null geometry are skipped; a non-GeoJSON .json gives a clear "No GeoJSON features" error.
 - [ ] The imported layer behaves like other geojson addons (reorder / opacity / colour / delete, cross-window sync, persists across restart).
 
+### 6as. AI assistant - chat (tier 1) (#300)
+
+- [ ] Sidebar shows a "🤖 AI assistant" entry just above Settings; clicking it opens a SEPARATE window with a chat (no sidebar). Clicking again focuses the same window.
+- [ ] ⚙ Connection panel: set API base URL, key, model; the provider example links (OpenAI / Groq / Together / OpenRouter / Ollama) fill URL+model; Save persists to %APPDATA%/GIRTool/ai_config.json and survives reopening the window / restart.
+- [ ] With a valid OpenAI-compatible endpoint, asking a question returns a reply; "thinking…" shows while waiting; Enter sends, Shift+Enter newlines; Clear empties the conversation.
+- [ ] Works against a non-Anthropic provider (e.g. OpenAI, Groq, or a local Ollama at http://localhost:11434/v1 with key blank) - nothing is hard-coded to Anthropic.
+- [ ] 📎 attach a .txt/.md/.csv file -> its text is sent as context (a chip shows; oversize files marked "truncated"); the model can answer about it.
+- [ ] The preprompt comes from AGENTS.md: "Show preprompt" displays it; editing %APPDATA%/GIRTool/AGENTS.md overrides the bundled one (no rebuild); the optional System prompt field is appended.
+- [ ] Misconfig (blank URL/model, bad key, wrong URL) shows a clear error, not a crash.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

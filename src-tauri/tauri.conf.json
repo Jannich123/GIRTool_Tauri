@@ -39,7 +39,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/GIRTool_Column_Reference.xlsx"],
+    "resources": ["resources/GIRTool_Column_Reference.xlsx", "resources/AGENTS.md"],
     "windows": {
       "wix": {
         "language": "en-US",
