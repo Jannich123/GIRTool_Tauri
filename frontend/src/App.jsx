@@ -20,6 +20,7 @@ import MapPage         from './pages/MapPage'
 import BoundariesPage  from './pages/BoundariesPage'
 import CptCalcPage    from './pages/CptCalcPage'
 import AiChatPage     from './pages/AiChatPage'
+import HelpPage       from './pages/HelpPage'
 import './index.css'
 
 function Placeholder({ title }) {
@@ -207,6 +208,11 @@ function Shell() {
   // with no sidebar (it doesn't need the project navigation).
   if (page === 'ai') {
     return <AiChatPage />
+  }
+
+  // #314: the Help window — a tab per menu page, no sidebar.
+  if (page === 'help') {
+    return <HelpPage />
   }
 
   return (
