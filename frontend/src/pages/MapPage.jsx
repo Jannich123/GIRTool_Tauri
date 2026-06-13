@@ -255,9 +255,9 @@ function loadSavedPos() {
 }
 
 function SavePosition({ projectId, mapCfgRef }) {
-  // mapCfgRef holds { crs, wfsUrl, colorMode } so we can write a complete
-  // `map` payload without recreating the SavePosition component on each
-  // settings change (which would unmount/remount the Leaflet event hook).
+  // mapCfgRef holds { colorMode } so we can write a complete `map` payload
+  // without recreating the SavePosition component on each settings change
+  // (which would unmount/remount the Leaflet event hook).
   const saveTimer = useRef(null)
   const lastWrittenRef = useRef('')
 
@@ -276,8 +276,6 @@ function SavePosition({ projectId, mapCfgRef }) {
       const payload = {
         center:    { lat: c.lat, lng: c.lng },
         zoom,
-        crs:       mapCfgRef.current?.crs       ?? 'EPSG:25832',
-        wfsUrl:    mapCfgRef.current?.wfsUrl    ?? '',
         colorMode: mapCfgRef.current?.colorMode ?? 'type',
       }
       const str = JSON.stringify(payload)
@@ -325,37 +323,6 @@ function MapLegend({ entries }) {
   )
 }
 
-// ── WFS loader ────────────────────────────────────────────────────────────────
-
-async function loadWFS(wfsUrl, epsg, projectIds) {
-  if (!wfsUrl) return []
-  const url = new URL(wfsUrl)
-  url.searchParams.set('SERVICE',      'WFS')
-  url.searchParams.set('VERSION',      '2.0.0')
-  url.searchParams.set('REQUEST',      'GetFeature')
-  url.searchParams.set('outputFormat', 'application/json')
-  if (projectIds?.length) {
-    url.searchParams.set('CQL_FILTER',
-      `ProjectId IN (${projectIds.map(id => `'${id}'`).join(',')})`)
-  }
-  const gj = await invoke('wfs_proxy', { url: url.toString() })
-  return (gj.features || []).map(f => {
-    const coords = f.geometry?.coordinates
-    if (!coords) return null
-    const [cx, cy] = coords
-    const latlng = toWGS84(cx, cy, epsg)
-    if (!latlng) return null
-    return {
-      id:        f.id || Math.random().toString(36),
-      latlng,
-      PointId:   String(f.properties?.PointId  || f.properties?.pointid  || ''),
-      PointNo:   f.properties?.PointNo   || f.properties?.pointno   || '',
-      PointType: f.properties?.PointType || f.properties?.pointtype || '',
-      ProjectNo: f.properties?.ProjectNo || f.properties?.projectno || '',
-    }
-  }).filter(Boolean)
-}
-
 // ── Settings persistence ──────────────────────────────────────────────────────
 
 const LS_MAP_KEY = 'girtool_map_settings'
@@ -386,8 +353,10 @@ export default function MapPage() {
   } = useFilter()
 
   const saved = loadMapSettings()
-  const [crs,       setCrs]       = useState(saved.crs       || 'EPSG:25832')
-  const [wfsUrl,    setWfsUrl]    = useState(saved.wfsUrl    || '')
+  // #342: coordinate systems live in Settings → Coordinate system; the DB source
+  // CRS just falls back to EPSG:25832 for points whose per-point Projection1 is
+  // unknown.  (WFS moved to Map addons; the old per-map Settings panel is gone.)
+  const crs = 'EPSG:25832'
   const [colorMode, setColorMode] = useState(saved.colorMode || 'type')
 
   // ── Grouping mode (#262): assign the active group system's groups straight
@@ -413,10 +382,10 @@ export default function MapPage() {
 
   // Keep a ref to the live map config so SavePosition's moveend handler
   // always reads the latest settings without re-subscribing.
-  const mapCfgRef = useRef({ crs, wfsUrl, colorMode })
+  const mapCfgRef = useRef({ colorMode })
   useEffect(() => {
-    mapCfgRef.current = { crs, wfsUrl, colorMode }
-  }, [crs, wfsUrl, colorMode])
+    mapCfgRef.current = { colorMode }
+  }, [colorMode])
 
   // ── Hydrate from {output_folder}/GIRTool_settings.json on project change ──
   // The MapContainer is keyed off projectId below so it remounts with the
@@ -435,15 +404,13 @@ export default function MapPage() {
             lat: m.center.lat, lng: m.center.lng, zoom: m.zoom,
           }))
         }
-        if (m.crs       && m.crs       !== crs)       setCrs(m.crs)
-        if (m.wfsUrl    !== undefined && m.wfsUrl    !== wfsUrl)    setWfsUrl(m.wfsUrl)
         if (m.colorMode && m.colorMode !== colorMode) setColorMode(m.colorMode)
       }
       setSessionMap(m)
     }).catch(() => { setSessionMap(null) })
   }, [projectId])  // eslint-disable-line
 
-  // ── Persist crs / wfsUrl / colorMode changes to session ───────────────────
+  // ── Persist colorMode changes to session ──────────────────────────────────
   // (Pan/zoom changes are persisted by SavePosition on each moveend.)
   const cfgSaveTimer = useRef(null)
   useEffect(() => {
@@ -453,19 +420,17 @@ export default function MapPage() {
     if (sessionMap === null) return
     const center = sessionMap?.center ?? { lat: 56, lng: 10 }
     const zoom   = sessionMap?.zoom   ?? 6
-    const payload = { center, zoom, crs, wfsUrl, colorMode }
+    const payload = { center, zoom, colorMode }
     clearTimeout(cfgSaveTimer.current)
     cfgSaveTimer.current = setTimeout(() => {
       invoke('patch_session', { projectId, patch: { map: payload } }).catch(() => {})
     }, 250)
     return () => clearTimeout(cfgSaveTimer.current)
-  }, [projectId, crs, wfsUrl, colorMode, sessionMap])
+  }, [projectId, colorMode, sessionMap])
   // colorMode: 'type'  → color by PointType
   //            gs.id   → color by that group system
 
-  const [wfsPoints, setWfsPoints] = useState([])
   const [status,    setStatus]    = useState('')
-  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // ── Convert database allPoints to map points using X1/Y1 ─────────────────
 
@@ -583,7 +548,7 @@ export default function MapPage() {
   }, [dbPoints, downloadedKeys])
 
   // WFS replaces db points when available; otherwise downloaded-only DB points.
-  const basePoints = wfsPoints.length > 0 ? wfsPoints : dlPoints
+  const basePoints = dlPoints
 
   // Apply cross-filter from Filter Panel
   const visiblePoints = useMemo(() => {
@@ -781,34 +746,11 @@ export default function MapPage() {
     }))
   }, [visiblePoints, activeGroupSystem, typeStyles])
 
-  // ── Save settings ─────────────────────────────────────────────────────────
-
-  function saveSettings() {
-    localStorage.setItem(LS_MAP_KEY, JSON.stringify({ crs, wfsUrl, colorMode }))
-    setSettingsOpen(false)
-  }
-
-  // Persist colorMode change immediately (no need to open settings panel)
+  // Persist colorMode change immediately to localStorage.
   useEffect(() => {
     const s = loadMapSettings()
     localStorage.setItem(LS_MAP_KEY, JSON.stringify({ ...s, colorMode }))
   }, [colorMode])
-
-  // ── WFS loader ────────────────────────────────────────────────────────────
-
-  async function loadWFSPoints() {
-    setStatus('Loading from WFS…'); setWfsPoints([])
-    try {
-      const ids = selectedProjects.map(p => p.ProjectId)
-      const pts = await loadWFS(wfsUrl, crs, ids)
-      setWfsPoints(pts)
-      setStatus(pts.length
-        ? `${pts.length} WFS point${pts.length !== 1 ? 's' : ''} loaded`
-        : 'WFS returned no features — showing database coordinates')
-    } catch (e) {
-      setStatus(`WFS error: ${e.message}`)
-    }
-  }
 
   // ── Guard ─────────────────────────────────────────────────────────────────
 
@@ -870,35 +812,9 @@ export default function MapPage() {
             the map. */}
         {/* #340: no always-on "Assign groups" mode — group assignment happens
             only via the polygon flow (draw a ✏ Polygon or select one, then
-            🏷 Assign inside, in the reserved row below). */}
-
-        {/* Settings */}
-        <button className="btn-secondary btn-sm" onClick={() => setSettingsOpen(o => !o)}>
-          ⚙ Settings
-        </button>
-
-        {settingsOpen && (
-          <div className="wfs-config-row">
-            <label>Coordinate CRS</label>
-            <input
-              type="text"
-              value={crs}
-              onChange={e => setCrs(e.target.value)}
-              placeholder="EPSG:25832"
-              style={{ width: 120 }}
-              title="EPSG code for X1/Y1 database coordinates and WFS geometry"
-            />
-            <label>WFS URL (optional)</label>
-            <input
-              type="text"
-              value={wfsUrl}
-              onChange={e => setWfsUrl(e.target.value)}
-              placeholder="https://…/wfs"
-              style={{ width: 320 }}
-            />
-            <button className="btn-secondary btn-sm" onClick={saveSettings}>Save</button>
-          </div>
-        )}
+            🏷 Assign inside, in the reserved row below).
+            #342: the per-map Settings panel is gone — coordinate systems live in
+            Settings → Coordinate system, and WFS is now a Map addon. */}
 
         {/* #324/#330/#334/#338: shape tools — one ✏ Polygon (temp draw: assign a
             group inside or 💾 save) + ／ Line; the contextual actions (assign /
@@ -921,19 +837,12 @@ export default function MapPage() {
 
         <div style={{ flex: 1 }} />
 
-        {wfsUrl && (
-          <button className="btn-secondary btn-sm" onClick={loadWFSPoints}
-            title="Load points from WFS server">
-            ↺ Load WFS
-          </button>
-        )}
-
         {basePoints.length > 0 && (
           <span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>
             {visiblePoints.length}
             {visiblePoints.length !== basePoints.length ? `/${basePoints.length}` : ''}
             {' point'}{basePoints.length !== 1 ? 's' : ''}
-            {wfsPoints.length > 0 ? ' (WFS)' : ' · with downloaded data'}
+            {' · with downloaded data'}
           </span>
         )}
       </div>
@@ -1055,7 +964,7 @@ export default function MapPage() {
           <div className="map-status" style={{ background: 'rgba(0,0,0,.6)' }}>
             {dbPoints.length > 0
               ? 'No downloaded data for the selected points — the Project map only shows points present in downloaded datasheets (Data → ⬇ Download).'
-              : 'No map coordinates — open ⚙ Settings and set the correct Coordinate CRS for your data'}
+              : 'No map coordinates for these points — check the source coordinate system (Settings → Coordinate system).'}
           </div>
         )}
 

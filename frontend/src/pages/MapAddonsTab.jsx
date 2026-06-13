@@ -19,7 +19,7 @@ export default function MapAddonsTab() {
   const hasFolder = !!connection?.output_folder
   const userAddons = addons.filter(a => !a.builtin) // built-ins managed in the on-map panel
 
-  const [form, setForm] = useState({ service: 'wms', name: '', url: '', layer: '', token: '', project: true, selection: true })
+  const [form, setForm] = useState({ service: 'wms', name: '', url: '', layer: '', token: '', epsg: '25832', project: true, selection: true })
   // #230: full WMTS capabilities of the last Connect — layers carry formats /
   // styles / matrix-set links; matrix_sets carry each grid's CRS so addAddon
   // can pick a web-mercator one (or refuse with the grids it found).
@@ -54,6 +54,11 @@ export default function MapAddonsTab() {
               ? `${arr.length} layer${arr.length === 1 ? '' : 's'} found · Danish-grid tile matrix set: ${merc}`
               : `${arr.length} layer${arr.length === 1 ? '' : 's'} found, but NO EPSG:25832 tile grid (found: ${gridSummary(r)}) — this WMTS can't be drawn on the Danish-grid map; use the service's WMS variant instead.`,
         })
+      } else if (form.service === 'wfs') {
+        const list = await invoke('wfs_capabilities', { url: withToken(form.url.trim(), form.token) })
+        const arr = Array.isArray(list) ? list : []
+        setLayers(arr)
+        setConnectMsg({ ok: arr.length > 0, text: `${arr.length} feature type${arr.length === 1 ? '' : 's'} found` })
       } else {
         const list = await invoke('wms_capabilities', { url: withToken(form.url.trim(), form.token) })
         const arr = Array.isArray(list) ? list : []
@@ -98,12 +103,21 @@ export default function MapAddonsTab() {
     const addon = {
       id: `addon_${Date.now()}_${Math.floor(Math.random() * 1e4)}`,
       name: form.name.trim(),
-      type: form.service === 'wmts' ? 'wmts' : 'wms',
+      type: form.service === 'wmts' ? 'wmts' : form.service === 'wfs' ? 'wfs' : 'wms',
       url: form.url.trim(),
       layer: form.layer.trim(),
       token: form.token.trim(),
       maps: { project: form.project, selection: form.selection },
       visible: true,
+    }
+    // #342: WFS = a vector overlay — needs a feature type + the CRS its geometry
+    // comes back in (reprojected to WGS84 at render time).
+    if (addon.type === 'wfs') {
+      if (!addon.layer) {
+        setMsg({ ok: false, text: 'Pick a feature type first (Connect, then choose from the list).' })
+        return
+      }
+      addon.epsg = parseInt(form.epsg, 10) || 25832
     }
     // #230: WMTS needs a chosen layer and a WEB-MERCATOR tile grid — raster
     // tiles in another projection (e.g. the Danish EPSG:25832-only services)
@@ -127,7 +141,7 @@ export default function MapAddonsTab() {
       addon.style  = li?.styles?.[0] || 'default'
     }
     updateNow([...addons, addon])
-    setForm({ service: form.service, name: '', url: '', layer: '', token: '', project: true, selection: true })
+    setForm({ service: form.service, name: '', url: '', layer: '', token: '', epsg: '25832', project: true, selection: true })
     setMsg({ ok: true, text: `Added "${addon.name}".` })
   }
 
@@ -223,8 +237,9 @@ export default function MapAddonsTab() {
     <div style={{ maxWidth: 920 }}>
       <h3 className="section-title">Map addons</h3>
       <p className="hint" style={{ marginTop: 0 }}>
-        Overlay layers for the Project map and the Selection map. This adds <strong>WMS</strong> services;
-        local files (shapefile / CSV / Excel) come in a later update.
+        Overlay layers for the Project map and the Selection map: <strong>WMS</strong> / <strong>WMTS</strong> raster
+        services, <strong>WFS</strong> vector layers, and local files (shapefile / CSV / Excel). Each layer can be shown
+        on either or both maps.
       </p>
 
       {/* Built-in background maps (#222): the fixed WMS/XYZ services, shown so
@@ -397,8 +412,8 @@ export default function MapAddonsTab() {
         </table>
       )}
 
-      {/* Add WMS / WMTS addon */}
-      <h4 style={{ margin: '0 0 .5rem' }}>Add WMS / WMTS overlay</h4>
+      {/* Add WMS / WMTS / WFS addon */}
+      <h4 style={{ margin: '0 0 .5rem' }}>Add WMS / WMTS / WFS overlay</h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center', maxWidth: 720 }}>
         <label>Service</label>
         <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -409,10 +424,16 @@ export default function MapAddonsTab() {
           >
             <option value="wms">WMS</option>
             <option value="wmts">WMTS</option>
+            <option value="wfs">WFS</option>
           </select>
           {form.service === 'wmts' && (
             <span className="hint" style={{ margin: 0 }}>
               WMTS must publish the Danish EPSG:25832 grid (View1 / KortforsyningTilingDK) — Connect checks and refuses otherwise.
+            </span>
+          )}
+          {form.service === 'wfs' && (
+            <span className="hint" style={{ margin: 0 }}>
+              Vector overlay — Connect lists feature types; features are reprojected to the map from the CRS below.
             </span>
           )}
         </div>
@@ -446,6 +467,17 @@ export default function MapAddonsTab() {
           />
           {connectMsg && <span className={`msg ${connectMsg.ok ? 'ok' : 'err'}`} style={{ margin: 0 }}>{connectMsg.text}</span>}
         </div>
+        {form.service === 'wfs' && (
+          <>
+            <label>Geometry CRS</label>
+            <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select value={form.epsg} onChange={e => setForm({ ...form, epsg: e.target.value })} style={{ maxWidth: 280 }}>
+                {COMMON_CRS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <span className="hint" style={{ margin: 0 }}>The CRS the WFS returns geometry in (reprojected to the map).</span>
+            </div>
+          </>
+        )}
         <label>Token</label>
         <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <input

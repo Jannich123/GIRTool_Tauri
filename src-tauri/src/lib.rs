@@ -157,6 +157,7 @@ pub fn run() {
             commands::charts::open_datasheet,
             // map
             commands::map::wfs_proxy,
+            commands::map::wfs_capabilities,
             commands::map::os_username,
             commands::map::open_url,
             commands::map::wms_capabilities,

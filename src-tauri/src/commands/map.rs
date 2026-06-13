@@ -237,6 +237,107 @@ pub async fn wms_capabilities(url: String) -> Result<Value, String> {
         .collect::<Vec<_>>()))
 }
 
+// ── WFS capabilities (#342) ──────────────────────────────────────────────────
+
+/// Parse a WFS GetCapabilities document's `<FeatureType>` entries into
+/// `(Name, Title)` pairs.  Namespace prefixes (wfs:) are stripped by
+/// `local_name`.  FeatureType doesn't nest, so a single running frame suffices.
+fn parse_wfs_feature_types(xml: &str) -> Vec<(String, String)> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut cur: Option<(Option<String>, Option<String>)> = None;
+    let mut capture: Option<u8> = None; // 1 = Name, 2 = Title
+    let mut out: Vec<(String, String)> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let n = local_name(e.name().as_ref());
+                let parent_is_ft = stack.last().map(|s| s == "FeatureType").unwrap_or(false);
+                if n == "FeatureType" {
+                    cur = Some((None, None));
+                } else if n == "Name" && parent_is_ft {
+                    capture = Some(1);
+                } else if n == "Title" && parent_is_ft {
+                    capture = Some(2);
+                }
+                stack.push(n);
+            }
+            Ok(Event::Text(t)) => {
+                if let Some(which) = capture {
+                    if let Some(frame) = cur.as_mut() {
+                        let txt = t.unescape().unwrap_or_default().trim().to_string();
+                        if which == 1 { frame.0 = Some(txt); } else { frame.1 = Some(txt); }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let n = local_name(e.name().as_ref());
+                stack.pop();
+                if n == "Name" || n == "Title" { capture = None; }
+                if n == "FeatureType" {
+                    if let Some((Some(name), title)) = cur.take() {
+                        out.push((name, title.unwrap_or_default()));
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// Fetch a WFS service's GetCapabilities and return its feature types as
+/// `[{ name, title }]`, so the user can pick a layer instead of typing the
+/// typename.  Preserves any query params already in `url`.
+#[tauri::command]
+pub async fn wfs_capabilities(url: String) -> Result<Value, String> {
+    let mut u = url.trim().to_string();
+    if u.is_empty() {
+        return Err("Enter a WFS service URL first.".into());
+    }
+    let lower = u.to_lowercase();
+    let sep = if u.contains('?') { '&' } else { '?' };
+    let mut extra: Vec<&str> = Vec::new();
+    if !lower.contains("service=") { extra.push("SERVICE=WFS"); }
+    if !lower.contains("request=") { extra.push("REQUEST=GetCapabilities"); }
+    if !lower.contains("version=") { extra.push("VERSION=2.0.0"); }
+    if !extra.is_empty() {
+        u.push(sep);
+        u.push_str(&extra.join("&"));
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client build failed: {e}"))?;
+    let resp = client
+        .get(&u)
+        .send()
+        .await
+        .map_err(|e| format!("WFS request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("WFS server returned HTTP {}", resp.status()));
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read WFS response: {e}"))?;
+
+    let types = parse_wfs_feature_types(&body);
+    if types.is_empty() {
+        let preview: String = body.chars().take(160).collect();
+        return Err(format!("No WFS feature types found (is this a WFS endpoint?). Response began: {preview}"));
+    }
+    Ok(json!(types
+        .into_iter()
+        .map(|(name, title)| json!({ "name": name, "title": title }))
+        .collect::<Vec<_>>()))
+}
+
 // ── WMTS capabilities (#230) ─────────────────────────────────────────────────
 
 #[derive(Default)]
