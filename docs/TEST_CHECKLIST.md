@@ -432,6 +432,15 @@ Performance (load a few thousand points first):
 - [ ] The preprompt comes from AGENTS.md: "Show preprompt" displays it; editing %APPDATA%/GIRTool/AGENTS.md overrides the bundled one (no rebuild); the optional System prompt field is appended.
 - [ ] Misconfig (blank URL/model, bad key, wrong URL) shows a clear error, not a crash.
 
+### 6at. AI assistant - RAG over bundled knowledge (#302)
+
+- [ ] Drop a .pdf/.md/.txt into src-tauri/resources/ai_knowledge/ and run `python scripts/index_knowledge.py` (PDF needs `pip install pypdf`): it writes ai_rag_index.json and reports chunks; re-running with no changes reports "0 (re)built, N unchanged" (incremental); deleting a file drops its chunks on the next run.
+- [ ] In the chat ⚙ panel, the "Document search (RAG)" status shows the chunk/document count; with the embeddings URL+model set, "Build embeddings" embeds them and the status flips to "embedded ✓" (cached in %APPDATA%/GIRTool/ai_rag_embeddings.json).
+- [ ] Ask a question answerable only from a knowledge doc -> the reply uses it and cites the source; an unrelated question is unaffected (weak matches are dropped).
+- [ ] Re-embedding is skipped when nothing changed; changing the embeddings model or editing the docs (+reindex) triggers a re-embed (status shows "not embedded yet" until rebuilt).
+- [ ] Embeddings can point at a DIFFERENT provider/URL than chat; both are OpenAI-compatible. With no embeddings configured or an empty index, chat still works (no RAG, no error).
+- [ ] %APPDATA%/GIRTool/ai_rag_index.json overrides the bundled (empty) index, so confidential extracted text need not be committed.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
