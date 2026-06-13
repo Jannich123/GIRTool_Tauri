@@ -178,6 +178,16 @@ export default function Sidebar({ page, setPage }) {
           <span className="nav-icon">⚙️</span>
           <span className="nav-label">Settings</span>
         </button>
+        {/* #314: Help — opens a window with a detailed tab per menu page. */}
+        <button
+          className="nav-item"
+          onClick={() => invoke('open_window', { page: 'help', title: 'GIRTool — Help' })
+            .catch(err => console.warn('open_window failed:', err))}
+          title={collapsed ? 'Help' : 'Open the help guide in its own window'}
+        >
+          <span className="nav-icon">❓</span>
+          <span className="nav-label">Help</span>
+        </button>
       </nav>
     </aside>
   )

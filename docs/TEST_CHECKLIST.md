@@ -471,6 +471,13 @@ Performance (load a few thousand points first):
 - [ ] Multiple columns filtered together narrow each other's dropdowns consistently; "Select all" / "Clear" still behave; performance stays fine on large datasheets (uniques computed only on open).
 - [ ] In Points/Projects the two tables still filter independently (each table's filters only affect its own dropdowns).
 
+### 6ay. Help window (#314)
+
+- [ ] Sidebar shows a "❓ Help" button below Settings; clicking it opens a SEPARATE window (no sidebar). Clicking again focuses the same window.
+- [ ] The window has a left tab list with one entry per menu page (Getting started, Data Selection, Strata, Data, CPT – Calc, Grouping, Colors & Symbols, Project map, Charts, Boundaries, Settings, AI assistant); icons/labels match the sidebar.
+- [ ] Selecting a tab shows a detailed explanation (intro + sections + bullet/numbered lists) of what that page does; content scrolls; the descriptions match the actual features.
+- [ ] Works in the main window and from a pop-out; opens without a project connected.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
