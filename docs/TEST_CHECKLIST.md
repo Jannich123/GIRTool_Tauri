@@ -407,6 +407,13 @@ Performance (load a few thousand points first):
 - [ ] A search with no matches shows nothing; with no internet the box just returns no results (no crash). Danish letters æøå in the query work.
 - [ ] The pin and box clear when leaving the map; opening a pop-out map window has its own working search.
 
+### 6aq. Map search - global addresses via Photon fallback (#296)
+
+- [ ] A Danish query still returns DAWA results first (addresses 🏠 + places 📍), unchanged from #294.
+- [ ] An international query (e.g. "Bahnhofstrasse Zurich", "10 Downing Street London", "Hamburg") returns global hits with readable labels (street housenr, postcode city, country) and flies the map there.
+- [ ] A Danish query with few DAWA matches is topped up with global hits (DAWA ones stay on top); a query DAWA covers well shows DAWA only (Photon not called).
+- [ ] No key / config needed; Danish letters and non-ASCII (ü, ø) render correctly. Offline -> "unavailable" message, no crash.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
