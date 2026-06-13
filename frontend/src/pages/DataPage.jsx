@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { invoke } from '../tauri-api'
 import { useColumnFilters, ColumnFilterButton } from '../components/ColumnFilter'
-import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
+import { invokeAndNotify, notifyDataChanged, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { applyCoordinateSystem, normaliseEpsg } from '../lib/proj'
@@ -786,6 +786,9 @@ export default function DataPage() {
       const data = previewCacheRef.current.get(d.fname)
       return (data && Array.isArray(data.rows)) ? { ...d, row_count: data.rows.length } : d
     }))
+    // #292: announce so the charts tab (and other windows) re-pull the data —
+    // a manual reload is the user saying "the files on disk changed".
+    notifyDataChanged('datasheets')
   }
 
   // Initial + connection-change load.  Pre-existing files surface before the
