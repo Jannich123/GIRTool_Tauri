@@ -574,6 +574,13 @@ Performance (load a few thousand points first):
 - [ ] Coordinate systems are configured only in Settings -> Coordinate system; the "no map coordinates" hint points there.
 - [ ] Regression: existing WMS / WMTS / local-file (GeoJSON) addons still add and render on both maps.
 
+### 6bl. Project map — group-to-assign picker beside the Color-by dropdown (#344)
+
+- [ ] The Map page toolbar shows two dropdowns side by side: left = **Color by** (Type + group systems), right = **Assign group:** (the target group).
+- [ ] The right "Assign group" dropdown appears only when a group system is the active colour mode; selecting **Color by Type** hides it.
+- [ ] Clicking **✏ Polygon** no longer makes a group dropdown pop out in the row below — that row just shows 🏷 Assign inside / 💾 Save / Cancel.
+- [ ] The group chosen in the top dropdown is what **🏷 Assign inside** applies — both while drawing a polygon and when a polygon addon is selected.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

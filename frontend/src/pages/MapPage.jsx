@@ -770,18 +770,26 @@ export default function MapPage() {
   // #338: shared group-target picker (reused in the reserved row) + whether a
   // polygon addon is selected (→ offer Assign inside).
   const polySelected = shapeSelected && (shapeSelected.type === 'Polygon' || shapeSelected.type === 'MultiPolygon')
+  // #344: the group-to-assign picker sits beside the colour selector (a second
+  // dropdown), not in the reserved row — so it doesn't pop out below when you
+  // start a polygon.  Only shown when a group system is the active colour mode.
   const groupTargetSelect = activeGroupSystem ? (
-    <select
-      value={grpTarget}
-      onChange={e => setGrpTarget(e.target.value)}
-      className="map-color-select"
-      title="Group to assign"
+    <label
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem' }}
+      title="The group that 🏷 Assign inside applies to the points within a polygon"
     >
-      {activeGroupSystem.groups.map(g => (
-        <option key={g.name} value={g.name}>{g.name}</option>
-      ))}
-      <option value={UNASSIGN}>Unknown (clear)</option>
-    </select>
+      <span className="hint" style={{ margin: 0 }}>Assign group:</span>
+      <select
+        value={grpTarget}
+        onChange={e => setGrpTarget(e.target.value)}
+        className="map-color-select"
+      >
+        {activeGroupSystem.groups.map(g => (
+          <option key={g.name} value={g.name}>{g.name}</option>
+        ))}
+        <option value={UNASSIGN}>Unknown (clear)</option>
+      </select>
+    </label>
   ) : null
 
   return (
@@ -791,7 +799,7 @@ export default function MapPage() {
       <div className="map-toolbar">
         <h2>Map</h2>
 
-        {/* Color mode selector */}
+        {/* #344: colour mode (left) + group-to-assign (right), side by side. */}
         <select
           value={colorMode}
           onChange={e => setColorMode(e.target.value)}
@@ -807,6 +815,7 @@ export default function MapPage() {
             </optgroup>
           )}
         </select>
+        {groupTargetSelect}
 
         {/* #262: grouping mode — only offered while a group system colours
             the map. */}
@@ -856,9 +865,9 @@ export default function MapPage() {
         borderBottom: '1px solid var(--border)', flexShrink: 0,
       }}>
         {grpDrawing ? (
-          /* Drawing the ✏ Polygon: assign a group inside and/or save it. */
+          /* Drawing the ✏ Polygon: assign a group inside and/or save it.
+             (#344: the group picker now lives beside the colour selector.) */
           <>
-            {groupTargetSelect}
             {activeGroupSystem && (
               <button className="btn-primary btn-sm" disabled={grpVerts.length < 3} onClick={assignInsidePolygon}>
                 🏷 Assign inside{grpVerts.length >= 3 ? '' : ` (${grpVerts.length})`}
@@ -876,9 +885,9 @@ export default function MapPage() {
             </span>
           </>
         ) : polySelected ? (
-          /* A polygon addon is selected → assign a group to points inside it. */
+          /* A polygon addon is selected → assign a group to points inside it.
+             (#344: the group picker now lives beside the colour selector.) */
           <>
-            {groupTargetSelect}
             {activeGroupSystem && (
               <>
                 <button className="btn-primary btn-sm" onClick={assignInsideSelectedPolygon}
