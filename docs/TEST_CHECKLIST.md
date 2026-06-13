@@ -463,6 +463,14 @@ Performance (load a few thousand points first):
 - [ ] On startup the button is briefly disabled while the health check runs, then enables if the API works; fixing the key (and restarting) re-enables it.
 - [ ] Offline at startup -> button greyed (API unreachable), no crash.
 
+### 6ax. Table column filters cross-filter (Excel slicer) (#312)
+
+- [ ] Filter column A to one value (table shows N rows). Open column B's filter -> it now lists only values present in those N rows, and the counts sum to <= N (previously it showed the whole dataset / counts above the filtered total).
+- [ ] Removing column A's filter restores column B's full value list.
+- [ ] Unchecking a value in an UNFILTERED column while another column is filtered excludes only that value -> removing the other filter does NOT make rows vanish (values hidden by cross-filtering stay included).
+- [ ] Multiple columns filtered together narrow each other's dropdowns consistently; "Select all" / "Clear" still behave; performance stays fine on large datasheets (uniques computed only on open).
+- [ ] In Points/Projects the two tables still filter independently (each table's filters only affect its own dropdowns).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
