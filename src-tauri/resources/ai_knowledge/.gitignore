@@ -1,0 +1,5 @@
+# Knowledge documents are dev-provided and may be confidential — never commit
+# them. Only the README is tracked.
+*
+!.gitignore
+!README.md

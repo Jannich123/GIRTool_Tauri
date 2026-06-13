@@ -30,8 +30,13 @@ export default function AiChatPage() {
   const [attachments, setAttach] = useState([])    // [{name, text, truncated}]
   const [busy, setBusy]         = useState(false)
   const [error, setError]       = useState('')
+  const [ragStatus, setRagStatus] = useState(null)
+  const [embedding, setEmbedding] = useState(false)
 
   const endRef = useRef(null)
+
+  const refreshRag = () => invoke('ai_rag_status').then(setRagStatus).catch(() => setRagStatus(null))
+  useEffect(() => { refreshRag() }, [])
 
   useEffect(() => {
     invoke('get_ai_config')
@@ -49,15 +54,32 @@ export default function AiChatPage() {
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, busy])
 
   const patchChat = (patch) => setCfg(c => ({ ...c, chat: { ...c.chat, ...patch } }))
+  const patchEmb  = (patch) => setCfg(c => ({ ...c, embeddings: { ...c.embeddings, ...patch } }))
 
   async function saveConfig() {
     setSavedMsg('')
     try {
       await invoke('save_ai_config', { config: cfg })
       setSavedMsg('Saved ✓')
+      refreshRag()
       setTimeout(() => setSavedMsg(''), 2500)
     } catch (e) {
       setSavedMsg(String(e).slice(0, 120))
+    }
+  }
+
+  // Embed the bundled knowledge so RAG can search it (uses the embeddings API).
+  async function buildEmbeddings() {
+    setEmbedding(true); setSavedMsg('')
+    try {
+      await invoke('save_ai_config', { config: cfg })
+      const r = await invoke('ai_rebuild_embeddings')
+      setSavedMsg(`Embedded ${r.chunk_count} chunks ✓`)
+      await refreshRag()
+    } catch (e) {
+      setSavedMsg(String(e).slice(0, 180))
+    } finally {
+      setEmbedding(false)
     }
   }
 
@@ -143,6 +165,21 @@ export default function AiChatPage() {
             <textarea value={cfg.system_prompt} onChange={e => setCfg(c => ({ ...c, system_prompt: e.target.value }))}
               placeholder="Optional — appended to AGENTS.md (the base preprompt)."
               rows={2} style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
+
+            {/* Document search (RAG) — separate OpenAI-compatible embeddings endpoint. */}
+            <div style={{ gridColumn: '1 / -1', marginTop: '.35rem', fontWeight: 600, color: '#475569' }}>
+              Document search (RAG)
+              <span className="hint" style={{ marginLeft: '.4rem', fontWeight: 400 }}>embeddings endpoint — searches the bundled knowledge documents</span>
+            </div>
+            <label>Embeddings URL</label>
+            <input value={cfg.embeddings.base_url} onChange={e => patchEmb({ base_url: e.target.value })}
+              placeholder="https://api.openai.com/v1  (can match the chat API)" style={{ width: '100%' }} />
+            <label>Embeddings key</label>
+            <input type="password" value={cfg.embeddings.api_key} onChange={e => patchEmb({ api_key: e.target.value })}
+              placeholder="left blank to reuse a local server" style={{ width: '100%' }} />
+            <label>Embeddings model</label>
+            <input value={cfg.embeddings.model} onChange={e => patchEmb({ model: e.target.value })}
+              placeholder="text-embedding-3-small" style={{ width: '100%' }} />
           </div>
           <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.55rem', flexWrap: 'wrap' }}>
             <button className="btn-primary btn-sm" onClick={saveConfig}>Save</button>
@@ -165,6 +202,29 @@ export default function AiChatPage() {
           </div>
           {agentsMd != null && (
             <pre style={{ marginTop: '.5rem', maxHeight: 180, overflow: 'auto', background: '#f1f5f9', padding: '.5rem', borderRadius: 6, fontSize: '.74rem', whiteSpace: 'pre-wrap' }}>{agentsMd || '(no AGENTS.md found)'}</pre>
+          )}
+          {/* Knowledge / RAG status */}
+          {ragStatus && (
+            <div className="hint" style={{ marginTop: '.45rem', display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' }}>
+              <span>
+                📚 Knowledge: {ragStatus.chunk_count} chunk{ragStatus.chunk_count === 1 ? '' : 's'}
+                {ragStatus.sources?.length ? ` from ${ragStatus.sources.length} document${ragStatus.sources.length === 1 ? '' : 's'}` : ''}
+                {' · '}
+                {ragStatus.chunk_count === 0
+                  ? 'add files to resources/ai_knowledge/ then run scripts/index_knowledge.py'
+                  : (ragStatus.embedded ? 'embedded ✓ (questions search these docs)' : 'not embedded yet')}
+              </span>
+              {ragStatus.chunk_count > 0 && (
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={buildEmbeddings}
+                  disabled={embedding || !cfg.embeddings.base_url.trim() || !cfg.embeddings.model.trim()}
+                  title={!cfg.embeddings.base_url.trim() || !cfg.embeddings.model.trim() ? 'Set the embeddings URL + model first' : 'Embed the knowledge documents'}
+                >
+                  {embedding ? 'Embedding…' : (ragStatus.embedded ? 'Re-embed' : 'Build embeddings')}
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

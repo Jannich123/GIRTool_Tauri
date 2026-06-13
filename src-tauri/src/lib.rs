@@ -80,6 +80,8 @@ pub fn run() {
             commands::ai::get_agents_md,
             commands::ai::ai_chat,
             commands::ai::ai_pick_file,
+            commands::ai::ai_rag_status,
+            commands::ai::ai_rebuild_embeddings,
             // queries
             commands::queries::list_queries,
             commands::queries::save_query,
