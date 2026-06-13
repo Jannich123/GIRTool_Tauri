@@ -485,6 +485,14 @@ Performance (load a few thousand points first):
 - [ ] The saved shape persists (reload / restart), syncs to other windows, and a polygon saved this way is clickable as a selection boundary like other addons.
 - [ ] Drawing works on the Danish 25832 grid and on a web-mercator base; the existing "select inside" polygon draw on the Data Selection map still works separately.
 
+### 6ba. Shape tools — select + delete; polygon-draw button removed (#322)
+
+- [ ] The map shape toolbar no longer has a "Polygon" draw button — only "／ Line" and "☝ Select".
+- [ ] "☝ Select" enters select mode; clicking an addon shape selects it (highlighted red) and the toolbar shows "Selected: <name>" with Delete / Clear.
+- [ ] Delete removes that addon from the map AND deletes its map addons/ geojson; it stays gone after reload/restart and syncs to other windows. Clear / toggling Select off deselects.
+- [ ] In select mode, clicking a shape does NOT trigger the old polygon-as-boundary selection or move the map point-selection; outside select mode, polygon-addon boundary clicks still work.
+- [ ] Drawing a line + saving still works; selecting works on both maps and on the Danish + web-mercator grids.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
