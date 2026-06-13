@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import '@geoman-io/leaflet-geoman-free'
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css'
+import buffer from '@turf/buffer'
 import { invoke } from '../tauri-api'
+import { reprojectGeoJSON } from '../lib/proj'
 import { useThrottledAddons } from '../lib/useThrottledAddons'
 import { useShapeTools } from '../lib/shapeTools'
 
@@ -21,6 +23,7 @@ export default function ShapeDraw({ map, target }) {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [offsetM, setOffsetM] = useState('5')    // #326: line-offset width (metres)
 
   // Reset tool state when the map goes away (leaving the page).
   useEffect(() => () => { setMode(null); setSelected(null) }, [setMode, setSelected])
@@ -88,6 +91,32 @@ export default function ShapeDraw({ map, target }) {
     setSelected(null)
   }
 
+  // #326: offset the selected line by N metres on both sides → corridor polygon.
+  async function offsetSelected() {
+    if (!selected) return
+    const m = parseFloat(String(offsetM).replace(',', '.'))
+    if (!isFinite(m) || m <= 0) { setMsg('Enter a positive offset in metres.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const gj = await invoke('load_addon_geojson', { file: selected.file })
+      // turf works in WGS84 + metres (geodesic), so reproject from the addon's
+      // source CRS first — that's what makes the metre offset true ground width.
+      const gj4326 = reprojectGeoJSON(gj, selected.epsg ?? 25832)
+      const poly = buffer(gj4326, m, { units: 'meters' })
+      if (!poly) throw new Error('Offset produced no geometry.')
+      const entry = await invoke('save_geojson_addon', {
+        req: { name: `${selected.name} +${m}m`, geojson: poly, epsg: 4326, maps: { project: true, selection: true } },
+      })
+      updateNow([...(addonsRef.current || []), entry])
+    } catch (err) {
+      setMsg(String(err).slice(0, 160))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const isLine = selected && (selected.type === 'LineString' || selected.type === 'MultiLineString')
+
   if (!map) return null
 
   const btn = (active, disabled) => ({
@@ -120,6 +149,17 @@ export default function ShapeDraw({ map, target }) {
           {mode === 'select' && selected && (
             <>
               <span style={{ color: '#475569' }}>Selected: <strong>{selected.name}</strong></span>
+              {isLine && (
+                <>
+                  <span style={{ color: '#64748b' }}>offset</span>
+                  <input
+                    value={offsetM} onChange={e => setOffsetM(e.target.value)}
+                    title="Offset in metres (each side)" style={{ width: 54, padding: '.25rem .35rem', borderRadius: 4, border: '1px solid #cbd5e1' }}
+                  />
+                  <span style={{ color: '#64748b' }}>m</span>
+                  <button style={btn(false, busy)} disabled={busy} onClick={offsetSelected} title="Offset the line both sides into a corridor polygon (saved as an addon)">↔ Offset → polygon</button>
+                </>
+              )}
               <button style={{ ...btn(false, busy), borderColor: '#fecaca', color: '#b91c1c' }} disabled={busy} onClick={deleteSelected}>🗑 Delete</button>
               <button style={btn(false, busy)} disabled={busy} onClick={() => setSelected(null)}>Clear</button>
             </>

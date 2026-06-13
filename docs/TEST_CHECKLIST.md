@@ -500,6 +500,13 @@ Performance (load a few thousand points first):
 - [ ] The old per-map controls still work unchanged (Data Selection draw->Select/Load inside; Project map grouping draw/assign).
 - [ ] Select + Delete still work from the merged toolbar; the toolbar only appears once the map is ready.
 
+### 6bc. Offset a line into a corridor polygon (#326, item 7)
+
+- [ ] In Select mode, clicking a LINE addon shows an "offset [m]" field + "↔ Offset → polygon"; polygons/points don't show it.
+- [ ] Offsetting by N metres creates a NEW addon: a corridor polygon ~2N wide along the line (saved like other addons; name "<line> +Nm").
+- [ ] The metre width is true ground distance regardless of the map grid / the line addon's source EPSG (line is reprojected to WGS84 before turf buffers it).
+- [ ] Invalid/zero offset shows an error and does nothing; the original line is unchanged.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

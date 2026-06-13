@@ -93,7 +93,7 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
           const st = shapeToolsRef.current
           if (st?.mode === 'select') {
             L.DomEvent.stop(e)
-            st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file })
+            st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file, epsg: addon.epsg })
             return
           }
           const gt = feature?.geometry?.type
