@@ -358,6 +358,15 @@ Performance (load a few thousand points first):
 - [ ] File name as a column source writes the file's stem on every row of that file (folder import: each file its own value).
 - [ ] Column-sourced cells still keep their original type (numbers stay numbers); auto-matched mappings and skip behaviour are unchanged.
 
+### 6ak. Import wizard - derive Level from point Z1 (#284)
+
+- [ ] Importing into a sheet that has both **Level** and **Depth** columns (e.g. SPTData / WaterLevels generated from their query) with the Level column left on "- skip -": each row's Level is filled as `Z1 - Depth`, where Z1 is the point's value looked up in points.xlsx by (DB id, ProjectId, PointId), falling back to PointNo.
+- [ ] When the point has no Z1 anywhere (no match), Level = `-Depth` (surface treated as 0).
+- [ ] If the file DOES provide a Level value for a row (Level column mapped to a source/text), that value is kept - not overwritten.
+- [ ] If the file carries its own Z1 column per row, that Z1 is used for the row's Level before falling back to the points.xlsx lookup.
+- [ ] Computed Level is rounded to 3 decimals (matches downloaded data); rows with no parseable Depth get no Level.
+- [ ] No Level/Depth columns in the sheet -> nothing changes (feature only triggers when both exist).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

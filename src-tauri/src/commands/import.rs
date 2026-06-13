@@ -203,6 +203,14 @@ fn value_to_f64(v: &Value) -> Option<f64> {
     }
 }
 
+/// Derived Level (#284): `Z1 − Depth` when the point's Z1 is known, else
+/// `−Depth` (surface treated as 0).  Rounded to 3 dp to match the
+/// `round(B.[Z1] − A.[Depth], 3)` of the datasheet queries.
+fn level_from(z1: Option<f64>, depth: f64) -> f64 {
+    let lvl = z1.unwrap_or(0.0) - depth;
+    (lvl * 1000.0).round() / 1000.0
+}
+
 // ── Destination columns from the datasheet queries (#280) ─────────────────────
 
 /// Pull the output column names out of a datasheet query's SELECT list.
@@ -626,6 +634,40 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
         find_ci(&columns, &["projection1"]),
     );
 
+    // ── Derived Level (#284) ──────────────────────────────────────────────
+    // When the sheet has both Level and Depth columns, any row whose Level is
+    // empty gets Level = Z1 − Depth (the datasheet-query convention), with Z1
+    // looked up per point.  No Z1 match → Level = −Depth.  points.xlsx is
+    // loaded here so its Z1 feeds the lookup; the upsert below reuses it.
+    let level_idx = find_ci(&columns, &["level"]);
+    let depth_idx = find_ci(&columns, &["depth"]);
+    let compute_level = level_idx.is_some() && depth_idx.is_some();
+
+    let pts_path = points_xlsx_path(folder);
+    let mut points = if pts_path.exists() {
+        read_points_rows(&pts_path)
+    } else {
+        Vec::new()
+    };
+    let mut z1_by_full: HashMap<(String, String, String), f64> = HashMap::new();
+    let mut z1_by_pn: HashMap<String, f64> = HashMap::new();
+    if compute_level {
+        for p in &points {
+            if let Some(z) = p.z1 {
+                z1_by_full
+                    .entry((
+                        p.db_id.trim().to_string(),
+                        p.project_id.trim().to_string(),
+                        p.point_id.trim().to_string(),
+                    ))
+                    .or_insert(z);
+                if !p.point_no.trim().is_empty() {
+                    z1_by_pn.entry(p.point_no.trim().to_lowercase()).or_insert(z);
+                }
+            }
+        }
+    }
+
     // ── Append data rows from every file ──────────────────────────────────
     let start = req.data_row.max(1) - 1; // 1-based → 0-based
     let mut rows_added = 0usize;
@@ -678,6 +720,29 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
                 row[i] = Value::String(point_id.clone());
             }
 
+            // Derive Level when the file gave none for this row (#284).
+            if let (Some(li), Some(di)) = (level_idx, depth_idx) {
+                if value_to_string(&row[li]).is_empty() {
+                    if let Some(depth) = value_to_f64(&row[di]) {
+                        let z1 = z1_idx
+                            .and_then(|zi| value_to_f64(&row[zi]))
+                            .or_else(|| {
+                                z1_by_full
+                                    .get(&(
+                                        db.trim().to_string(),
+                                        project_id.trim().to_string(),
+                                        point_id.trim().to_string(),
+                                    ))
+                                    .copied()
+                            })
+                            .or_else(|| z1_by_pn.get(&pn.to_lowercase()).copied());
+                        if let Some(num) = serde_json::Number::from_f64(level_from(z1, depth)) {
+                            row[li] = Value::Number(num);
+                        }
+                    }
+                }
+            }
+
             let seed = point_info.entry(pn.clone()).or_insert_with(|| {
                 point_order.push(pn.clone());
                 PointSeed {
@@ -723,12 +788,7 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
     persist_datasheet_meta(folder, &fname, rows.len(), has_strata);
 
     // ── points.xlsx upsert ────────────────────────────────────────────────
-    let pts_path = points_xlsx_path(folder);
-    let mut points = if pts_path.exists() {
-        read_points_rows(&pts_path)
-    } else {
-        Vec::new()
-    };
+    // `points` / `pts_path` were loaded above for the Level lookup.
     let mut points_added = 0usize;
     let mut points_updated = 0usize;
 
@@ -838,5 +898,18 @@ mod tests {
     fn parses_headerless_select() {
         let cols = parse_select_aliases("SELECT DISTINCT A.[Epsg], B.Name AS [CRS] FROM T");
         assert_eq!(cols, vec!["Epsg", "CRS"]);
+    }
+
+    #[test]
+    fn level_from_z1_and_depth() {
+        use super::level_from;
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        // Z1 known: Level = Z1 − Depth.
+        assert!(close(level_from(Some(12.5), 0.5), 12.0));
+        // No Z1 match: surface treated as 0 → Level = −Depth.
+        assert!(close(level_from(None, 4.0), -4.0));
+        assert!(close(level_from(None, 0.0), 0.0));
+        // Rounded to 3 dp (datasheet-query convention).
+        assert!(close(level_from(Some(10.0), 3.456_7), 6.543));
     }
 }

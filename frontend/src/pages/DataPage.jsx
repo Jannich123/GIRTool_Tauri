@@ -528,6 +528,8 @@ function ImportSection({ datasheets, onDone }) {
             <p className="hint" style={{ margin: '.35rem 0 0' }}>
               Each column can come from a source column, the file name, or custom text
               (<code>{'{PointNo}'}</code> is replaced per row — handy for IDs like <code>TestId</code>).
+              If a <code>Level</code> column is left unmapped, it's filled as <code>Z1 − Depth</code>{' '}
+              (the point's Z1 from <code>points.xlsx</code>, else <code>−Depth</code>).
             </p>
           </div>
         </div>
