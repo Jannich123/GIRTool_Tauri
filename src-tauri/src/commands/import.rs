@@ -462,6 +462,10 @@ pub struct MapEntry {
     pub kind: String,
     #[serde(default)]
     pub value: String,
+    /// Unit-conversion multiplier (#288): each numeric value is multiplied by
+    /// this to reach the destination column's unit.  1.0 / absent = no change.
+    #[serde(default)]
+    pub factor: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -608,13 +612,14 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
         Some(i) => i,
         None => col_index(&mut columns, "PointNo", &mut new_columns),
     };
-    let mut map_idx: Vec<(usize, IdValue)> = Vec::new();
+    let mut map_idx: Vec<(usize, IdValue, f64)> = Vec::new();
     for m in &req.mapping {
         if m.target.trim().is_empty() {
             continue;
         }
         let src = IdValue::parse(&m.kind, &m.value, m.target.trim())?;
-        map_idx.push((col_index(&mut columns, &m.target, &mut new_columns), src));
+        let factor = m.factor.filter(|f| f.is_finite() && *f != 0.0).unwrap_or(1.0);
+        map_idx.push((col_index(&mut columns, &m.target, &mut new_columns), src, factor));
     }
     // ProjectId / PointId values land in the sheet only when it has such a
     // column (most datasheet queries carry PointId).
@@ -707,8 +712,18 @@ fn run_import(folder: &str, req: ImportRequest) -> Result<Value, String> {
             };
 
             let mut row = vec![Value::Null; width];
-            for (tgt, source) in &map_idx {
-                row[*tgt] = source.resolve_value(src, &stem, &pn);
+            for (tgt, source, factor) in &map_idx {
+                let mut v = source.resolve_value(src, &stem, &pn);
+                // Unit conversion (#288): scale numeric values only; text and
+                // blanks pass through untouched.
+                if (*factor - 1.0).abs() > f64::EPSILON {
+                    if let Some(n) = value_to_f64(&v) {
+                        if let Some(num) = serde_json::Number::from_f64(n * *factor) {
+                            v = Value::Number(num);
+                        }
+                    }
+                }
+                row[*tgt] = v;
             }
             // IDs win over any mapping that targets the same column.
             row[db_idx] = Value::String(db.clone());
