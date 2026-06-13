@@ -72,6 +72,8 @@ pub fn run() {
             commands::import::import_preview,
             commands::import::datasheet_columns,
             commands::import::import_data,
+            // map address / place search (issue #294)
+            commands::geocode::geocode_search,
             // queries
             commands::queries::list_queries,
             commands::queries::save_query,
