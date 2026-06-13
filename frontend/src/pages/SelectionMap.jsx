@@ -370,7 +370,16 @@ export default function SelectionMap() {
   // project index must follow, or parent-project lookups go stale.
   // includeSelf (#242): the background re-index announce can originate in
   // this window; a pure refetch can't echo.
-  useDataChanged('databases', refetchProjIndex, { includeSelf: true })
+  // #318: a DB id can be RENAMED here.  The loaded points still carry the old
+  // db_id (only allPoints re-pulls with the new one), so the data-source legend
+  // would show both.  Drop the loaded set + hidden toggles (their ids may be
+  // stale) and ask the user to reload — mirrors the folder-change reset below.
+  useDataChanged('databases', () => {
+    refetchProjIndex()
+    setLoaded([])
+    setHiddenDbs(new Set())
+    setLoadStatus('Database configuration changed — loaded map points were cleared (⬇ Load in view to reload).')
+  }, { includeSelf: true })
 
   // #238: folder switched WHILE this map is mounted (e.g. from another
   // window): wipe the module store AND the local copies seeded from it.
