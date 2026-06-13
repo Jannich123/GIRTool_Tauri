@@ -8,7 +8,7 @@ import { createContext, useContext, useRef, useState } from 'react'
 const ShapeToolsCtx = createContext(null)
 
 export function ShapeToolsProvider({ children }) {
-  const [mode, setMode] = useState(null)         // null | 'select'
+  // #330: selection is direct — clicking a shape selects it (no select mode).
   const [selected, setSelected] = useState(null) // { id, name, type, file, epsg } | null
   const [editing, setEditing] = useState(null)   // addon id currently being edited | null
   // Set by the GeoFileLayer being edited → the toolbar reads its edited GeoJSON.
@@ -17,7 +17,7 @@ export function ShapeToolsProvider({ children }) {
   // the file (after Save); otherwise just remounts from cache (Cancel = discard).
   const reloadRef = useRef(null)
   return (
-    <ShapeToolsCtx.Provider value={{ mode, setMode, selected, setSelected, editing, setEditing, editLayerRef, reloadRef }}>
+    <ShapeToolsCtx.Provider value={{ selected, setSelected, editing, setEditing, editLayerRef, reloadRef }}>
       {children}
     </ShapeToolsCtx.Provider>
   )
@@ -25,7 +25,7 @@ export function ShapeToolsProvider({ children }) {
 
 export function useShapeTools() {
   return useContext(ShapeToolsCtx) || {
-    mode: null, setMode: () => {}, selected: null, setSelected: () => {},
+    selected: null, setSelected: () => {},
     editing: null, setEditing: () => {}, editLayerRef: { current: null }, reloadRef: { current: null },
   }
 }

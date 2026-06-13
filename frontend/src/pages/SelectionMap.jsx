@@ -11,6 +11,8 @@ import AddonControl from '../components/AddonControl'
 import CrsCursorReadout from '../components/CrsCursorReadout'
 import MapSearch from '../components/MapSearch'
 import ShapeDraw from '../components/ShapeDraw'
+import ShapeActions from '../components/ShapeActions'
+import { useShapeTools } from '../lib/shapeTools'
 import { CRS_DK, DK_MAX_ZOOM, DK_CENTER, DK_DEFAULT_ZOOM, clampDkZoom, mapGridFor, clampMercZoom, MERC_DEFAULT_ZOOM } from '../lib/crsDk'
 import { pointInPolygonLatLng, ringFromFeature } from '../lib/geo'
 
@@ -201,6 +203,7 @@ function DrawHandler({ active, onVertex }) {
 
 export default function SelectionMap() {
   const { allPoints } = useFilter()
+  const { selected, setSelected, editing } = useShapeTools() // #330
   const { selectedPoints, setSelectedPoints, selectedProjects, setSelectedProjects, coordinateSystem, mapAddons, connection } = useApp()
 
   // #238: wipe folder-foreign session state BEFORE the useState initialisers
@@ -821,54 +824,67 @@ export default function SelectionMap() {
         </span>
       </div>
 
-      <div style={{ display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
-        {!drawing ? (
-          <>
-            <button className="btn-secondary" onClick={() => { setVertices([]); setPolyFromAddon(null); setDrawing(true) }} disabled={!map || loading}>
-              ✏️ Draw polygon
+      {/* #330: two-row toolbar — fixed buttons on top, contextual buttons below. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '.4rem', marginBottom: '.5rem' }}>
+        {/* Row 1 — fixed */}
+        <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn-secondary btn-sm" onClick={loadInView} disabled={!map || loading}>
+            {loading ? 'Loading…' : '⬇ Load in view'}
+          </button>
+          {(loaded.length > 0 || jupiter.length > 0) && (
+            <button className="btn-secondary btn-sm" onClick={() => { setLoaded([]); setJupiter([]); setLoadStatus('') }} disabled={loading}>
+              Clear loaded
             </button>
-            <button className="btn-secondary" onClick={loadInView} disabled={!map || loading}>
-              {loading ? 'Loading…' : '⬇ Load in view'}
-            </button>
-            {(loaded.length > 0 || jupiter.length > 0) && (
-              <button className="btn-secondary" onClick={() => { setLoaded([]); setJupiter([]); setLoadStatus('') }} disabled={loading}>
-                Clear loaded
-              </button>
+          )}
+          <span style={{ borderLeft: '1px solid #e2e8f0', height: 20, margin: '0 .1rem' }} />
+          <button
+            className="btn-secondary btn-sm"
+            onClick={() => {
+              if (drawing) { setDrawing(false); setVertices([]); setPolyFromAddon(null) }
+              else { setSelected(null); setVertices([]); setPolyFromAddon(null); setDrawing(true) }
+            }}
+            disabled={!map || loading}
+            style={drawing ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : undefined}
+            title="Draw a polygon to load / select / remove points inside the area"
+          >
+            ✏ Polygon{drawing ? ' — drawing…' : ''}
+          </button>
+          <ShapeDraw map={map} target="selection" />
+          {loadStatus && !drawing && <span className="hint" style={{ margin: 0 }}>{loadStatus}</span>}
+        </div>
+
+        {/* Row 2 — contextual (only when drawing an area, or a shape is selected/edited) */}
+        {(drawing || selected || editing) && (
+          <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {drawing ? (
+              <>
+                <button className="btn-secondary btn-sm" onClick={() => applyPolygon('load')} disabled={vertices.length < 3 || loading}>
+                  ⬇ Load{vertices.length ? ` (${vertices.length})` : ''}
+                </button>
+                <button className="btn-primary btn-sm" onClick={() => applyPolygon('select')} disabled={vertices.length < 3 || loading}>
+                  ✚ Select inside
+                </button>
+                <button className="btn-secondary btn-sm" onClick={() => applyPolygon('remove')} disabled={vertices.length < 3 || loading}>
+                  ✖ Remove inside
+                </button>
+                <button className="btn-secondary btn-sm" onClick={() => applyPolygon('removeProjects')} disabled={vertices.length < 3 || loading}
+                  title="Remove every project with points inside the polygon — the projects AND all their points leave the selection">
+                  🗑 Remove projects
+                </button>
+                <button className="btn-secondary btn-sm" onClick={() => { setDrawing(false); setVertices([]); setPolyFromAddon(null) }} disabled={loading}>
+                  Cancel
+                </button>
+                <span className="hint" style={{ margin: 0 }}>
+                  {polyFromAddon
+                    ? <>Boundary from <strong>{polyFromAddon}</strong> — Load / Select / Remove points inside it</>
+                    : <>Click to drop vertices (zoom/pan freely), then Load / Select / Remove inside</>}
+                </span>
+              </>
+            ) : (
+              <ShapeActions />
             )}
-            {loadStatus && <span className="hint" style={{ margin: 0 }}>{loadStatus}</span>}
-          </>
-        ) : (
-          <>
-            <button className="btn-secondary" onClick={() => applyPolygon('load')} disabled={vertices.length < 3 || loading}>
-              ⬇ Load{vertices.length ? ` (${vertices.length})` : ''}
-            </button>
-            <button className="btn-primary" onClick={() => applyPolygon('select')} disabled={vertices.length < 3 || loading}>
-              ✚ Select inside
-            </button>
-            <button className="btn-secondary" onClick={() => applyPolygon('remove')} disabled={vertices.length < 3 || loading}>
-              ✖ Remove inside
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={() => applyPolygon('removeProjects')}
-              disabled={vertices.length < 3 || loading}
-              title="Remove every project with points inside the polygon — the projects AND all their points leave the selection"
-            >
-              🗑 Remove projects
-            </button>
-            <button className="btn-secondary" onClick={() => { setDrawing(false); setVertices([]); setPolyFromAddon(null) }} disabled={loading}>
-              Cancel
-            </button>
-            <span className="hint" style={{ margin: 0 }}>
-              {polyFromAddon
-                ? <>Boundary from <strong>{polyFromAddon}</strong> — <strong>Load</strong> / <strong>Select</strong> / <strong>Remove</strong> points inside it</>
-                : <>Click to drop vertices (zoom/pan freely), then <strong>Load</strong> / <strong>Select</strong> / <strong>Remove</strong> inside</>}
-            </span>
-          </>
+          </div>
         )}
-        {/* #324: shape tools merged into this toolbar row. */}
-        <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .2rem' }} />
-        <ShapeDraw map={map} target="selection" />
       </div>
 
       <div

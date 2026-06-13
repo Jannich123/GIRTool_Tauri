@@ -14,6 +14,7 @@ import AddonLayers from '../components/AddonLayers'
 import AddonControl from '../components/AddonControl'
 import MapSearch from '../components/MapSearch'
 import ShapeDraw from '../components/ShapeDraw'
+import ShapeActions from '../components/ShapeActions'
 
 const { BaseLayer } = LayersControl
 
@@ -912,9 +913,11 @@ export default function MapPage() {
           </div>
         )}
 
-        {/* #324: shape tools merged into this toolbar row. */}
+        {/* #324/#330: shape tools — draw a line, then edit/offset/delete by
+            clicking a shape. */}
         <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .1rem' }} />
         <ShapeDraw map={projMap} target="project" />
+        <ShapeActions />
 
         <div style={{ flex: 1 }} />
 
