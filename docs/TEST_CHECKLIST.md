@@ -376,6 +376,15 @@ Performance (load a few thousand points first):
 - [ ] Clicking the header expands the dropdown to the full layer list (checkbox, name, up/down reorder, opacity slider); clicking again collapses it. Collapse state is independent per map (Data selection vs Project map).
 - [ ] Project map (MapPage) Map-layers box behaves the same (shared control); nothing else top-right collides with it.
 
+### 6am. Import wizard - per-column unit conversion (#288)
+
+- [ ] In the column mapping, every numeric column with a unit in the Column Reference (qc MPa, fs/u2 kPa, Depth m, UW kN/m3, BDen Mg/m3, MC %, Slope degrees, V1 m/s, Duration min, StressRate MPa/min) shows its **destination unit** and an "in [unit]" dropdown. Columns with unit '-' (E, CA, IL...), counts (SPT N 'blows/300 mm'), or text/no unit show **no** unit control.
+- [ ] The dropdown default is "<unit> - no conversion"; options are the other units of the same dimension (e.g. for MPa: kPa, Pa, bar, atm, psi, ksf, tsf, kgf/cm²; for m: cm, mm, µm, ft, in; for %: fraction, ‰) plus **Custom factor...**.
+- [ ] Selecting a source unit converts each imported value to the destination unit (verify e.g. qc imported in psi -> divided into MPa; Depth in ft -> m; MC as a 0-1 fraction -> %). With "no conversion" the value is written unchanged.
+- [ ] **Custom factor...** shows a "x [factor] -> unit" input; empty/zero/non-numeric turns it red, disables Import and lists "<col> factor" in the Fill in: message. The value is multiplied by the factor.
+- [ ] Conversion applies only to numeric values - a blank or text cell in a converted column passes through unchanged; a converted Depth feeds the derived Level (#284) correctly (Level = Z1 - Depth in metres).
+- [ ] Units track the reference sheet: they come from GIRTool_Column_Reference.xlsx via the column dictionary, so editing a unit there (and reloading) changes what the wizard shows - only the conversion factors are coded.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

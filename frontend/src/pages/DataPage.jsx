@@ -5,6 +5,7 @@ import { invokeAndNotify, useDataChanged } from '../lib/dataChanged'
 import { useApp } from '../context/AppContext'
 import { useFilter } from '../context/FilterContext'
 import { applyCoordinateSystem, normaliseEpsg } from '../lib/proj'
+import { unitOptions, factorBetween } from '../lib/units'
 
 // ── CPT data reduction (issue #180, M7 / plan §D1; persisted config #196) ─────
 function CptReduceSection({ datasheets, cfg, onPatch, onDone }) {
@@ -120,7 +121,9 @@ const DEFAULT_IDS = () => ({
 })
 
 function ImportSection({ datasheets, onDone }) {
-  const { setSelectedPoints } = useApp()
+  const { setSelectedPoints, colDict } = useApp()
+  // Destination unit of a datasheet column, straight from the reference sheet.
+  const unitOf = (col) => colDict?.[String(col).trim()]?.unit
   const [path, setPath]           = useState('')
   const [files, setFiles]         = useState([])
   const [grid, setGrid]           = useState([])
@@ -197,6 +200,7 @@ function ImportSection({ datasheets, onDone }) {
   useEffect(() => {
     if (!grid.length) return
     const hdr = hasHeader ? (grid[headerRow - 1] || []) : []
+    // srcUnit '' = no conversion (source already in the destination unit).
     if (destCols.length) {
       // Destination-driven: one row per datasheet column (IDs handled above).
       setMapping(destCols
@@ -204,13 +208,13 @@ function ImportSection({ datasheets, onDone }) {
         .map(c => {
           const i = hdr.findIndex(h => normCol(h) === normCol(c))
           return i >= 0
-            ? { target: cellText(c).trim(), kind: 'column', value: String(i), fixed: true }
-            : { target: cellText(c).trim(), kind: 'skip', value: '', fixed: true }
+            ? { target: cellText(c).trim(), kind: 'column', value: String(i), fixed: true, srcUnit: '', customFactor: '' }
+            : { target: cellText(c).trim(), kind: 'skip', value: '', fixed: true, srcUnit: '', customFactor: '' }
         }))
     } else if (hdr.length) {
       // No known destination: derive editable targets from the source header.
       setMapping(hdr
-        .map((h, i) => ({ target: cellText(h).trim(), kind: 'column', value: String(i), fixed: false }))
+        .map((h, i) => ({ target: cellText(h).trim(), kind: 'column', value: String(i), fixed: false, srcUnit: '', customFactor: '' }))
         .filter(m => m.target && !ID_COL_NAMES.has(normCol(m.target))))
     } else {
       setMapping([])
@@ -230,7 +234,12 @@ function ImportSection({ datasheets, onDone }) {
   const mapErrors = mapping
     .filter(m => m.kind === 'text' && m.target.trim() && !m.value.trim())
     .map(m => m.target.trim())
-  const fillErrors = [...idErrors, ...mapErrors]
+  // A custom unit factor must be a finite non-zero number (#288).
+  const unitErrors = mapping
+    .filter(m => m.kind !== 'skip' && m.srcUnit === 'custom'
+      && !(isFinite(Number(m.customFactor)) && Number(m.customFactor) !== 0))
+    .map(m => `${m.target.trim()} factor`)
+  const fillErrors = [...idErrors, ...mapErrors, ...unitErrors]
   const canImport = !busy && path && grid.length > 0 && fname.trim() && fillErrors.length === 0
 
   async function runImport() {
@@ -249,7 +258,14 @@ function ImportSection({ datasheets, onDone }) {
         columns: destCols,
         mapping: mapping
           .filter(m => m.kind !== 'skip' && m.target.trim())
-          .map(m => ({ target: m.target.trim(), kind: m.kind, value: String(m.value ?? '').trim() })),
+          .map(m => {
+            // Unit conversion (#288): factor turning the source value into the
+            // destination column's unit.  Custom = the user's own multiplier.
+            let factor = 1
+            if (m.srcUnit === 'custom') factor = Number(m.customFactor) || 1
+            else if (m.srcUnit) factor = factorBetween(m.srcUnit, unitOf(m.target))
+            return { target: m.target.trim(), kind: m.kind, value: String(m.value ?? '').trim(), factor }
+          }),
       }
       const r = await invokeAndNotify('datasheets', 'import_data', { req })
       // Merge upserted points back into the live selection — points.xlsx is
@@ -318,7 +334,7 @@ function ImportSection({ datasheets, onDone }) {
   )
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div style={{ maxWidth: 1040 }}>
       <h3 className="section-title">Import data</h3>
       <p className="hint" style={{ marginTop: 0 }}>
         Append CSV / Excel data to a datasheet in <code>Datasheets/</code>. Pick a single file or a
@@ -375,7 +391,7 @@ function ImportSection({ datasheets, onDone }) {
       )}
 
       {grid.length > 0 && (
-        <div className="card" style={{ maxWidth: 760, display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
+        <div className="card" style={{ maxWidth: 1000, display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center' }}>
           <label>Header</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontWeight: 400 }}>
@@ -489,8 +505,11 @@ function ImportSection({ datasheets, onDone }) {
               </div>
             )}
             {mapping.length === 0 && <p className="hint" style={{ margin: 0 }}>No columns yet — add one below.</p>}
-            {mapping.map((m, i) => (
-              <div key={i} style={{ display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' }}>
+            {mapping.map((m, i) => {
+              const du = unitOf(m.target)
+              const uo = m.kind !== 'skip' ? unitOptions(du) : null
+              return (
+              <div key={i} style={{ display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem', flexWrap: 'wrap' }}>
                 {m.fixed
                   ? <code style={{ width: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={m.target}>{m.target}</code>
                   : <input
@@ -509,6 +528,40 @@ function ImportSection({ datasheets, onDone }) {
                     style={{ width: 180, borderColor: m.value.trim() ? undefined : '#dc2626' }}
                   />
                 )}
+                {/* Unit of measurement + conversion (#288) — only for numeric
+                    columns with an expected unit (not text / '-' / counts). */}
+                {uo && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.3rem', flexWrap: 'wrap' }}>
+                    <span style={{ color: '#64748b' }}>in</span>
+                    <select
+                      value={m.srcUnit || ''}
+                      onChange={e => patchMapping(i, { srcUnit: e.target.value })}
+                      title={`Unit of the imported data — converted to the datasheet's ${du}`}
+                      style={{ width: 160 }}
+                    >
+                      <option value="">{du} — no conversion</option>
+                      {uo.units.map(u => <option key={u} value={u}>{u}</option>)}
+                      <option value="custom">Custom factor…</option>
+                    </select>
+                    {m.srcUnit === 'custom'
+                      ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.2rem', color: '#64748b' }}>
+                          ×
+                          <input
+                            value={m.customFactor || ''}
+                            onChange={e => patchMapping(i, { customFactor: e.target.value })}
+                            placeholder="factor"
+                            title={`Multiplier applied to each value to get ${du}`}
+                            style={{ width: 78, borderColor: (isFinite(Number(m.customFactor)) && Number(m.customFactor) !== 0) ? undefined : '#dc2626' }}
+                          />
+                          → {du}
+                        </span>
+                      )
+                      : (m.srcUnit
+                          ? <span style={{ color: '#64748b' }}>→ {du}</span>
+                          : null)}
+                  </span>
+                )}
                 {!m.fixed && (
                   <button
                     className="btn-secondary btn-sm"
@@ -519,15 +572,18 @@ function ImportSection({ datasheets, onDone }) {
                   </button>
                 )}
               </div>
-            ))}
+              )
+            })}
             <div style={{ display: 'flex', gap: '.5rem', marginTop: '.4rem' }}>
-              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', kind: 'skip', value: '', fixed: false }])}>
+              <button className="btn-secondary btn-sm" onClick={() => setMapping(arr => [...arr, { target: '', kind: 'skip', value: '', fixed: false, srcUnit: '', customFactor: '' }])}>
                 + Add destination column
               </button>
             </div>
             <p className="hint" style={{ margin: '.35rem 0 0' }}>
               Each column can come from a source column, the file name, or custom text
               (<code>{'{PointNo}'}</code> is replaced per row — handy for IDs like <code>TestId</code>).
+              Numeric columns show their datasheet unit; pick the unit your data is in (or a custom
+              factor) to convert it — leave it as <em>no conversion</em> if it already matches.
               If a <code>Level</code> column is left unmapped, it's filled as <code>Z1 − Depth</code>{' '}
               (the point's Z1 from <code>points.xlsx</code>, else <code>−Depth</code>).
             </p>
