@@ -866,6 +866,9 @@ export default function SelectionMap() {
             </span>
           </>
         )}
+        {/* #324: shape tools merged into this toolbar row. */}
+        <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .2rem' }} />
+        <ShapeDraw map={map} target="selection" />
       </div>
 
       <div
@@ -924,7 +927,6 @@ export default function SelectionMap() {
           {/* Live cursor X/Y in the project coordinate system (#217). */}
           <CrsCursorReadout targetEpsg={coordinateSystem?.target_epsg} />
           <MapSearch />
-          <ShapeDraw target="selection" />
         </MapContainer>
 
         {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}
