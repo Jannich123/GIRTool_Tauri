@@ -31,6 +31,22 @@ function wmsBaseUrl(raw) {
   }
 }
 
+// #342: build a WFS 2.0 GetFeature (GeoJSON) URL for a WFS overlay addon.  OGC
+// param names are case-insensitive, so only add the canonical ones the addon's
+// URL doesn't already carry.  Fetched server-side via wfs_proxy (CORS).
+function wfsGetFeatureUrl(a) {
+  let url
+  try { url = new URL(a.url) } catch { return a.url }
+  const has = (k) => [...url.searchParams.keys()].some(x => x.toLowerCase() === k)
+  if (!has('service')) url.searchParams.set('SERVICE', 'WFS')
+  if (!has('version')) url.searchParams.set('VERSION', '2.0.0')
+  if (!has('request')) url.searchParams.set('REQUEST', 'GetFeature')
+  if (a.layer && !has('typenames') && !has('typename')) url.searchParams.set('TYPENAMES', a.layer)
+  if (!has('outputformat')) url.searchParams.set('outputFormat', 'application/json')
+  if (a.token && !has('token')) url.searchParams.set('token', a.token)
+  return url.toString()
+}
+
 // One mounted GeoJSON file addon.  Colour/opacity changes restyle the layer
 // IN PLACE (#218) — the old approach baked them into the React key, so every
 // transparency-slider tick re-added all features.  react-leaflet's GeoJSON
@@ -208,20 +224,26 @@ export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
 
   useEffect(() => {
     for (const a of (mapAddons || [])) {
-      if (!a || a.type !== 'geojson' || a.visible === false || !a.maps?.[target]) continue
+      if (!a || a.visible === false || !a.maps?.[target]) continue
+      // #342: GeoJSON file addons load from disk; WFS addons fetch live features.
+      if (a.type !== 'geojson' && a.type !== 'wfs') continue
       if (geoCache[a.id] || loadingRef.current.has(a.id)) continue
-      if (geoFileCache.has(a.id)) {
+      // Only file addons use the persistent module cache; WFS refetches per mount.
+      if (a.type === 'geojson' && geoFileCache.has(a.id)) {
         setGeoCache(prev => ({ ...prev, [a.id]: geoFileCache.get(a.id) }))
         continue
       }
       loadingRef.current.add(a.id)
-      invoke('load_addon_geojson', { file: a.file })
+      const load = a.type === 'wfs'
+        ? invoke('wfs_proxy', { url: wfsGetFeatureUrl(a) })
+        : invoke('load_addon_geojson', { file: a.file })
+      load
         .then(gj => {
           const reprojected = reprojectGeoJSON(gj, a.epsg ?? 25832)
-          geoFileCache.set(a.id, reprojected)
+          if (a.type === 'geojson') geoFileCache.set(a.id, reprojected)
           setGeoCache(prev => ({ ...prev, [a.id]: reprojected }))
         })
-        .catch(err => console.warn(`addon ${a.name}: failed to load GeoJSON:`, err))
+        .catch(err => console.warn(`addon ${a.name}: failed to load:`, err))
         .finally(() => loadingRef.current.delete(a.id))
     }
   }, [mapAddons, target, reloadTick]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -247,7 +269,7 @@ export default function AddonLayers({ target, grid = 'dk', onPolygonClick }) {
         )
       }
 
-      if (a.type === 'geojson') {
+      if (a.type === 'geojson' || a.type === 'wfs') {
         const cached = geoCache[a.id]
         if (!cached) return null
         return (

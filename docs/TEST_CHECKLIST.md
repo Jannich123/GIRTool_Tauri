@@ -565,6 +565,15 @@ Performance (load a few thousand points first):
 - [ ] Group assignment still works via the polygon flow: draw a ✏ Polygon -> pick group -> 🏷 Assign inside; and select a polygon -> pick group -> 🏷 Assign inside.
 - [ ] Clicking a single point opens its popup (it no longer assigns a group).
 
+### 6bk. WFS as a Map addon; project-map Settings panel removed (#342)
+
+- [ ] Settings -> Map addons: the service dropdown now has **WFS**. Pick WFS, enter a service URL, **Connect** lists the feature types; choose one, set the geometry CRS (default EPSG:25832), pick Project/Selection, **Add addon**.
+- [ ] The WFS layer's features render as a vector overlay on each enabled map; it appears in the on-map "Map layers" panel with visibility / opacity / reorder (same as WMS/GeoJSON).
+- [ ] A WFS addon set to both maps shows on the Project map AND the Selection map. The user-addons table shows type **WFS** and lets you edit the feature type / token.
+- [ ] **Project map**: the gear "Settings" button and its panel (Coordinate CRS + WFS URL) are gone, and so is the "Load WFS" button. Points still plot correctly (per-point Projection1, falling back to EPSG:25832); the point count reads "... with downloaded data".
+- [ ] Coordinate systems are configured only in Settings -> Coordinate system; the "no map coordinates" hint points there.
+- [ ] Regression: existing WMS / WMTS / local-file (GeoJSON) addons still add and render on both maps.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
