@@ -22,3 +22,4 @@ pub mod session;
 pub mod windows;
 pub mod xlsx_fills;
 pub mod import;
+pub mod geocode;

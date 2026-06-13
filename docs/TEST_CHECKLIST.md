@@ -397,6 +397,16 @@ Performance (load a few thousand points first):
 - [ ] Cross-window: editing data in one window refreshes a chart open in another window.
 - [ ] Charts with no data loaded yet are not force-loaded by the refresh; opening them still loads fresh data. Only charts that already show data re-pull.
 
+### 6ap. Address / place search on both maps (#294)
+
+- [ ] Data Selection map and Project map each show a search box top-left, beside the +/- zoom buttons.
+- [ ] Typing >=2 chars autocompletes Danish addresses (house icon) and place names (pin icon); results appear within ~1 s (Dataforsyningen / DAWA).
+- [ ] Clicking a suggestion - or pressing Enter (picks the highlighted / first hit) - flies the map to the location and drops a 📍 pin with the address as a tooltip; arrow keys move the highlight, Esc closes the list, ✕ clears.
+- [ ] Fly-to lands correctly whether the map is on the Danish grid (EPSG:25832) or a web-mercator base (OSM/Esri) - the zoom is picked from a ~600 m box, not a fixed level.
+- [ ] Typing / clicking in the box does NOT pan, zoom, or select points on the map underneath; scrolling the suggestion list doesn't zoom the map.
+- [ ] A search with no matches shows nothing; with no internet the box just returns no results (no crash). Danish letters æøå in the query work.
+- [ ] The pin and box clear when leaving the map; opening a pop-out map window has its own working search.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
