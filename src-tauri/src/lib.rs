@@ -76,6 +76,7 @@ pub fn run() {
             commands::geocode::geocode_search,
             // AI assistant (issues #300, #302, #304)
             commands::ai::ai_status,
+            commands::ai::ai_health,
             commands::ai::get_agents_md,
             commands::ai::ai_chat,
             commands::ai::ai_pick_file,

@@ -95,6 +95,43 @@ pub async fn ai_status(app: AppHandle) -> Result<Value, String> {
     }))
 }
 
+/// Live check that the assistant is actually usable — used to enable/grey the
+/// sidebar button (#310).  Validates the configured chat endpoint with a cheap
+/// `GET {base_url}/models` (also validates the key).  Always returns a result
+/// (never an Err) so the caller gets `{ ok, reason }`.  Only the confident
+/// "won't work" cases disable it: missing config, 401/403 (missing/invalid
+/// key), or an unreachable host — anything else is treated as available.
+#[tauri::command]
+pub async fn ai_health(app: AppHandle) -> Result<Value, String> {
+    let cfg = read_config(&app);
+    if cfg.chat.base_url.trim().is_empty() || cfg.chat.model.trim().is_empty() {
+        return Ok(json!({ "ok": false, "reason": "not configured" }));
+    }
+    let client = match reqwest::Client::builder().timeout(Duration::from_secs(8)).build() {
+        Ok(c) => c,
+        Err(e) => return Ok(json!({ "ok": false, "reason": format!("client error: {e}") })),
+    };
+    let url = join_url(&cfg.chat.base_url, "models");
+    let mut req = client.get(&url);
+    if !cfg.chat.api_key.trim().is_empty() {
+        req = req.bearer_auth(cfg.chat.api_key.trim());
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let s = resp.status();
+            if s == reqwest::StatusCode::UNAUTHORIZED || s == reqwest::StatusCode::FORBIDDEN {
+                Ok(json!({ "ok": false, "reason": "missing or invalid API key" }))
+            } else {
+                Ok(json!({ "ok": true, "reason": "" }))
+            }
+        }
+        Err(e) => {
+            let reason = if e.is_timeout() { "API timed out" } else { "API unreachable" };
+            Ok(json!({ "ok": false, "reason": reason }))
+        }
+    }
+}
+
 /// System preprompt: a user override at `%APPDATA%/GIRTool/AGENTS.md` wins,
 /// otherwise the bundled resource; empty when neither exists.
 pub(crate) fn read_agents_md(app: &AppHandle) -> String {

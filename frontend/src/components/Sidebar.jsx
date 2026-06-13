@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { invoke } from '../tauri-api'
 import { useApp } from '../context/AppContext'
 import Logo from './Logo'
@@ -36,6 +36,17 @@ function folderBasename(path) {
 export default function Sidebar({ page, setPage }) {
   const { connection, selectedProjects, bumpRefresh } = useApp()
   const [refreshing, setRefreshing] = useState(false)
+
+  // #310: only enable the AI assistant button when the configured endpoint +
+  // key actually work (checked once on mount). null = still checking.
+  const [aiHealth, setAiHealth] = useState({ ok: null, reason: 'checking…' })
+  useEffect(() => {
+    let alive = true
+    invoke('ai_health')
+      .then(r => { if (alive) setAiHealth({ ok: !!r?.ok, reason: r?.reason || '' }) })
+      .catch(() => { if (alive) setAiHealth({ ok: false, reason: 'unavailable' }) })
+    return () => { alive = false }
+  }, [])
 
   // #244: icon-only mode.  A per-window VIEW preference (deliberately not on
   // the sync bus); persisted so it survives restarts.
@@ -137,12 +148,24 @@ export default function Sidebar({ page, setPage }) {
         )}
 
         <div className="sidebar-divider" />
-        {/* #300: AI assistant — opens in its own window (a dedicated chat). */}
+        {/* #300/#310: AI assistant — opens in its own window. Disabled + greyed
+            when the API key is missing or not working. */}
         <button
           className="nav-item"
-          onClick={() => invoke('open_window', { page: 'ai', title: 'GIRTool — AI assistant' })
-            .catch(err => console.warn('open_window failed:', err))}
-          title={collapsed ? 'AI assistant' : 'Open the AI assistant in its own window'}
+          disabled={aiHealth.ok !== true}
+          onClick={() => {
+            if (aiHealth.ok !== true) return
+            invoke('open_window', { page: 'ai', title: 'GIRTool — AI assistant' })
+              .catch(err => console.warn('open_window failed:', err))
+          }}
+          title={
+            aiHealth.ok === true
+              ? (collapsed ? 'AI assistant' : 'Open the AI assistant in its own window')
+              : aiHealth.ok === null
+                ? 'AI assistant — checking availability…'
+                : `AI assistant unavailable — ${aiHealth.reason || 'not configured'}`
+          }
+          style={aiHealth.ok !== true ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
         >
           <span className="nav-icon">🤖</span>
           <span className="nav-label">AI assistant</span>
