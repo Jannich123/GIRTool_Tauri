@@ -1347,7 +1347,22 @@ export default function ChartsPage() {
 
   // #266: drop shared chart-query results when data may have changed.
   useEffect(() => { chartQueryCache.clear() }, [refreshKey])
-  useDataChanged('datasheets', () => chartQueryCache.clear(), { includeSelf: true })
+  // #292: a datasheet changed (download / append / reduce / import, or a
+  // manual "↻ Reload data") — clearing the shared cache alone leaves the
+  // already-plotted charts showing stale rows.  Re-pull every chart that
+  // currently holds data so the plots AND their statistics refresh.  Debounced
+  // so a multi-file download's burst of events coalesces into one refetch.
+  const datasheetRefetchTimer = useRef(null)
+  useEffect(() => () => clearTimeout(datasheetRefetchTimer.current), [])
+  useDataChanged('datasheets', () => {
+    chartQueryCache.clear()
+    clearTimeout(datasheetRefetchTimer.current)
+    datasheetRefetchTimer.current = setTimeout(() => {
+      chartsRef.current
+        .filter(c => c.queryName && c.columns.length > 0)
+        .forEach(c => fetchData(c.id))
+    }, 200)
+  }, { includeSelf: true })
   const { groupSystems, groupAssignments, filteredPtIds, checkedStrataPrimary, checkedStrataSecondary } = useFilter()
 
   const [charts,   setCharts]   = useState(() => [newChart()])

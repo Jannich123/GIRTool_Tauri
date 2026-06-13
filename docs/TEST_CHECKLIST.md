@@ -390,6 +390,13 @@ Performance (load a few thousand points first):
 - [ ] Change a datasheet's row count out-of-band (edit the .xlsx in Excel and save, or reduce/append it in another window), then click **↻ Reload data**: the count on that datasheet's pill updates to match the file (previously it stayed stale because list_datasheets trusts the persisted meta).
 - [ ] The active preview still re-reads correctly; switching between datasheet pills after a reload shows the right rows and counts.
 
+### 6ao. Charts + statistics refresh on datasheet changes (#292)
+
+- [ ] With a chart open showing data, change the underlying datasheet (↻ Reload data after an external Excel edit, or download/append/reduce/import that sheet) -> the plot AND its statistics table update without re-touching an axis.
+- [ ] A multi-file download fires one coalesced refetch (debounced), not one per file; charts don't flicker repeatedly.
+- [ ] Cross-window: editing data in one window refreshes a chart open in another window.
+- [ ] Charts with no data loaded yet are not force-loaded by the refresh; opening them still loads fresh data. Only charts that already show data re-pull.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
