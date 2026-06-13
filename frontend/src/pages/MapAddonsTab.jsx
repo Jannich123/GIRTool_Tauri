@@ -169,6 +169,8 @@ export default function MapAddonsTab() {
       setPreview(pv)
       setFf(f => ({
         ...f, path, name: stem, infoCols: [],
+        // GeoJSON preview suggests a source EPSG (crs member / coordinate range).
+        epsg: pv?.epsg ? String(pv.epsg) : f.epsg,
         xCol: guess(['x', 'x1', 'easting', 'east', 'xcoord', 'x-koordinat', 'x_koordinat']) || hs[0] || '',
         yCol: guess(['y', 'y1', 'northing', 'north', 'ycoord', 'y-koordinat', 'y_koordinat']) || hs[1] || '',
       }))
@@ -472,11 +474,11 @@ export default function MapAddonsTab() {
       </div>
 
       {/* ── Add local file (M4.5b) ── */}
-      <h4 style={{ margin: '1.5rem 0 .5rem' }}>Add local file (shapefile / CSV / Excel)</h4>
+      <h4 style={{ margin: '1.5rem 0 .5rem' }}>Add local file (shapefile / GeoJSON / CSV / Excel)</h4>
       <p className="hint" style={{ marginTop: 0 }}>
         Converted to GeoJSON on import and cached in the project's <code>map addons/</code> folder.
-        CSV/Excel become points from your chosen X/Y columns (first sheet for Excel); shapefiles keep
-        the attributes they carry.
+        CSV/Excel become points from your chosen X/Y columns (first sheet for Excel); shapefiles and
+        GeoJSON/JSON keep the geometry &amp; attributes they carry (EPSG auto-detected for GeoJSON).
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.5rem .75rem', alignItems: 'center', maxWidth: 720 }}>
         <label>File</label>
@@ -544,6 +546,20 @@ export default function MapAddonsTab() {
               {(preview.headers || []).length
                 ? `carried as-is: ${(preview.headers || []).join(', ')}`
                 : 'no attribute table found — geometry only'}
+            </span>
+          </>
+        )}
+        {preview?.kind === 'geojson' && (
+          <>
+            <label>Properties</label>
+            <span className="hint" style={{ margin: 0 }}>
+              {(preview.headers || []).length
+                ? `carried as-is: ${(preview.headers || []).join(', ')}`
+                : 'no properties — geometry only'}
+              {preview.feature_count != null
+                ? ` · ${preview.feature_count} feature${preview.feature_count === 1 ? '' : 's'}`
+                : ''}
+              {' · EPSG auto-detected — adjust above if needed'}
             </span>
           </>
         )}

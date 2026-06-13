@@ -38,8 +38,9 @@ pub async fn pick_addon_file(app: AppHandle) -> Result<PickedFile, String> {
         app.dialog()
             .file()
             .set_title("Select map data file")
-            .add_filter("Map data (shp / csv / Excel)", &["shp", "csv", "xlsx", "xlsm", "xls"])
+            .add_filter("Map data (shp / GeoJSON / csv / Excel)", &["shp", "geojson", "json", "csv", "xlsx", "xlsm", "xls"])
             .add_filter("Shapefile", &["shp"])
+            .add_filter("GeoJSON / JSON", &["geojson", "json"])
             .add_filter("CSV", &["csv"])
             .add_filter("Excel", &["xlsx", "xlsm", "xls"])
             .blocking_pick_file()
@@ -296,11 +297,119 @@ fn read_shapefile_features(path: &str) -> Result<Vec<Value>, String> {
     Ok(features)
 }
 
+// ── GeoJSON / JSON ──────────────────────────────────────────────────────────
+
+/// Parse a .geojson/.json file into a flat list of GeoJSON Features plus a
+/// suggested source EPSG.  Accepts a FeatureCollection, a single Feature, a
+/// bare geometry, a GeometryCollection, or a top-level array of any of those.
+/// The EPSG is taken from an explicit `crs` member when present, otherwise
+/// inferred from coordinate magnitude (lon/lat range → 4326, else the Danish
+/// default 25832); the user can override it before importing.
+fn read_geojson_features(path: &str) -> Result<(Vec<Value>, i64), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("Cannot read file: {e}"))?;
+    let text = decode_bytes(&bytes);
+    let root: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("Not valid JSON / GeoJSON: {e}"))?;
+
+    let mut features = Vec::new();
+    collect_geojson_features(&root, &mut features);
+    if features.is_empty() {
+        return Err("No GeoJSON features with geometry found in the file.".into());
+    }
+
+    let epsg = crs_epsg(&root).unwrap_or_else(|| guess_epsg(&features));
+    Ok((features, epsg))
+}
+
+/// Flatten any GeoJSON shape into Features (recurses into FeatureCollections /
+/// bare arrays; wraps bare geometries).  Features without a geometry are
+/// dropped — they can't be drawn.
+fn collect_geojson_features(v: &Value, out: &mut Vec<Value>) {
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("FeatureCollection") => {
+            if let Some(arr) = v.get("features").and_then(|f| f.as_array()) {
+                for f in arr {
+                    collect_geojson_features(f, out);
+                }
+            }
+        }
+        Some("Feature") => {
+            if v.get("geometry").map(|g| !g.is_null()).unwrap_or(false) {
+                out.push(v.clone());
+            }
+        }
+        Some("Point") | Some("LineString") | Some("Polygon") | Some("MultiPoint")
+        | Some("MultiLineString") | Some("MultiPolygon") | Some("GeometryCollection") => {
+            out.push(json!({ "type": "Feature", "properties": {}, "geometry": v.clone() }));
+        }
+        _ => {
+            // Bare array of features / geometries (non-spec but common).
+            if let Some(arr) = v.as_array() {
+                for f in arr {
+                    collect_geojson_features(f, out);
+                }
+            }
+        }
+    }
+}
+
+/// EPSG from a GeoJSON-2008 `crs` member (`urn:ogc:def:crs:EPSG::25832`,
+/// `EPSG:4326`, `…/CRS84`, …) — None when absent / unrecognised.
+fn crs_epsg(root: &Value) -> Option<i64> {
+    let name = root.get("crs")?.get("properties")?.get("name")?.as_str()?;
+    if name.to_ascii_uppercase().contains("CRS84") {
+        return Some(4326); // OGC CRS84 = WGS84 lon/lat
+    }
+    // The EPSG code is the trailing run of digits.
+    let mut digits = String::new();
+    for ch in name.chars().rev() {
+        if ch.is_ascii_digit() {
+            digits.insert(0, ch);
+        } else if !digits.is_empty() {
+            break;
+        }
+    }
+    digits.parse::<i64>().ok()
+}
+
+/// Infer the source EPSG from the first coordinate: lon/lat range → 4326,
+/// otherwise assume the Danish projected default (25832).
+fn guess_epsg(features: &[Value]) -> i64 {
+    if let Some((x, y)) = features.first().and_then(|f| first_coord(f.get("geometry"))) {
+        if x.abs() <= 180.0 && y.abs() <= 90.0 {
+            return 4326;
+        }
+    }
+    25832
+}
+
+fn first_coord(geom: Option<&Value>) -> Option<(f64, f64)> {
+    let g = geom?;
+    if g.get("type").and_then(|t| t.as_str()) == Some("GeometryCollection") {
+        return g
+            .get("geometries")?
+            .as_array()?
+            .iter()
+            .find_map(|gg| first_coord(Some(gg)));
+    }
+    first_number_pair(g.get("coordinates")?)
+}
+
+/// Descend nested coordinate arrays to the first `[x, y, …]` pair.
+fn first_number_pair(v: &Value) -> Option<(f64, f64)> {
+    let arr = v.as_array()?;
+    if arr.len() >= 2 && arr[0].is_number() && arr[1].is_number() {
+        return Some((arr[0].as_f64()?, arr[1].as_f64()?));
+    }
+    arr.iter().find_map(first_number_pair)
+}
+
 // ── Preview ───────────────────────────────────────────────────────────────────
 
 /// Return enough of the file for the column-mapping UI: CSV/Excel → headers +
 /// first 5 rows (kind "table"); shapefile → attribute field names (kind
-/// "shapefile").
+/// "shapefile"); GeoJSON → property field names + suggested EPSG (kind
+/// "geojson").
 #[tauri::command]
 pub async fn addon_file_preview(path: String) -> Result<Value, String> {
     tokio::task::spawn_blocking(move || {
@@ -334,6 +443,22 @@ pub async fn addon_file_preview(path: String) -> Result<Value, String> {
                     }
                 }
                 Ok(json!({ "kind": "shapefile", "headers": headers, "rows": [] }))
+            }
+            "geojson" | "json" => {
+                let (features, epsg) = read_geojson_features(&path)?;
+                let headers: Vec<String> = features
+                    .first()
+                    .and_then(|f| f.get("properties"))
+                    .and_then(|p| p.as_object())
+                    .map(|o| o.keys().cloned().collect())
+                    .unwrap_or_default();
+                Ok(json!({
+                    "kind": "geojson",
+                    "headers": headers,
+                    "rows": [],
+                    "epsg": epsg,
+                    "feature_count": features.len(),
+                }))
             }
             other => Err(format!("Unsupported file type: .{other}")),
         }
@@ -386,6 +511,7 @@ pub async fn import_addon_file(
         let ext = file_ext(&req.path);
         let features: Vec<Value> = match ext.as_str() {
             "shp" => read_shapefile_features(&req.path)?,
+            "geojson" | "json" => read_geojson_features(&req.path)?.0,
             "csv" | "xlsx" | "xlsm" | "xls" => {
                 let t = if ext == "csv" { read_csv_table(&req.path)? } else { read_xlsx_table(&req.path)? };
                 let x_name = req.x_col.clone().unwrap_or_default();
@@ -495,4 +621,60 @@ pub async fn delete_addon_file(file: String, state: State<'_, AppState>) -> Resu
         std::fs::remove_file(&path).map_err(|e| format!("Cannot delete addon file: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod geojson_tests {
+    use super::*;
+
+    #[test]
+    fn collects_featurecollection_and_guesses_4326() {
+        let root = json!({
+            "type": "FeatureCollection",
+            "features": [
+                { "type": "Feature", "properties": { "n": 1 },
+                  "geometry": { "type": "Point", "coordinates": [12.5, 55.7] } }
+            ]
+        });
+        let mut f = Vec::new();
+        collect_geojson_features(&root, &mut f);
+        assert_eq!(f.len(), 1);
+        assert_eq!(guess_epsg(&f), 4326);
+    }
+
+    #[test]
+    fn wraps_bare_geometry_and_guesses_25832() {
+        let root = json!({ "type": "Point", "coordinates": [725000.0, 6175000.0] });
+        let mut f = Vec::new();
+        collect_geojson_features(&root, &mut f);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0]["type"], "Feature");
+        assert_eq!(guess_epsg(&f), 25832);
+    }
+
+    #[test]
+    fn reads_crs_member() {
+        let root = json!({
+            "type": "FeatureCollection",
+            "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:EPSG::25832" } },
+            "features": []
+        });
+        assert_eq!(crs_epsg(&root), Some(25832));
+        let crs84 = json!({ "crs": { "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } } });
+        assert_eq!(crs_epsg(&crs84), Some(4326));
+    }
+
+    #[test]
+    fn skips_features_without_geometry() {
+        let root = json!({
+            "type": "FeatureCollection",
+            "features": [
+                { "type": "Feature", "properties": {}, "geometry": null },
+                { "type": "Feature", "properties": {}, "geometry": { "type": "Point", "coordinates": [1.0, 2.0] } }
+            ]
+        });
+        let mut f = Vec::new();
+        collect_geojson_features(&root, &mut f);
+        assert_eq!(f.len(), 1);
+    }
 }

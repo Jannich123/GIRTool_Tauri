@@ -414,6 +414,14 @@ Performance (load a few thousand points first):
 - [ ] A Danish query with few DAWA matches is topped up with global hits (DAWA ones stay on top); a query DAWA covers well shows DAWA only (Photon not called).
 - [ ] No key / config needed; Danish letters and non-ASCII (ü, ø) render correctly. Offline -> "unavailable" message, no crash.
 
+### 6ar. GeoJSON / JSON map addons (#298)
+
+- [ ] Settings -> Map addons -> Add local file: Browse now lists GeoJSON/JSON (the filter reads "shp / GeoJSON / csv / Excel"); picking a .geojson/.json shows a "geojson" preview ("carried as-is: <props> · N features") with NO X/Y column pickers.
+- [ ] EPSG auto-fills: a lon/lat GeoJSON (coords like 10.2, 56.1) suggests 4326; a projected one (coords like 725000, 6175000) or a file with a crs member suggests that code; the field stays editable.
+- [ ] Import draws the features on the chosen map(s) at the right location (4326 file renders without reprojection; 25832 file reprojects); hover shows the GeoJSON properties; polygons remain clickable as selection boundaries.
+- [ ] FeatureCollection, a single Feature, a bare geometry, and a top-level array all import; features with null geometry are skipped; a non-GeoJSON .json gives a clear "No GeoJSON features" error.
+- [ ] The imported layer behaves like other geojson addons (reorder / opacity / colour / delete, cross-window sync, persists across restart).
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
