@@ -393,7 +393,6 @@ export default function MapPage() {
   // ── Grouping mode (#262): assign the active group system's groups straight
   // from the map — click a point, draw a polygon, or click an addon polygon.
   const UNASSIGN = '__unknown__'
-  const [grpMode,      setGrpMode]      = useState(false)
   const [grpTarget,    setGrpTarget]    = useState('')
   const [grpDrawing,   setGrpDrawing]   = useState(false)
   const [grpVerts,     setGrpVerts]     = useState([]) // [[lat, lng], …]
@@ -613,19 +612,16 @@ export default function MapPage() {
     }
   }
 
-  // ── Grouping-mode logic (#262) ─────────────────────────────────────────────
-  // Keep the target group valid + leave the mode when group colouring is off.
+  // ── Grouping logic (#262) ──────────────────────────────────────────────────
+  // Keep the target group valid for the polygon-assign flow.
   useEffect(() => {
-    if (!activeGroupSystem) {
-      if (grpMode) { setGrpMode(false); setGrpDrawing(false); setGrpVerts([]) }
-      return
-    }
+    if (!activeGroupSystem) return
     const names = activeGroupSystem.groups.map(g => g.name)
     if (!grpTarget || (grpTarget !== UNASSIGN && !names.includes(grpTarget))) {
       setGrpTarget(names[0] || UNASSIGN)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeGroupSystem, grpMode])
+  }, [activeGroupSystem])
 
   async function assignGroupToPoints(mapPts) {
     if (!activeGroupSystem || !grpTarget || !mapPts.length || !projectId) return
@@ -717,13 +713,6 @@ export default function MapPage() {
   // ref so it never goes stale.  (#338: the old addon-polygon click handler was
   // dead since #330 — assignment via a polygon now goes through the shape
   // selection → assignInsideSelectedPolygon — so it was removed.)
-  const assignRef = useRef(null)
-  assignRef.current = assignGroupToPoints
-  const mapPointClickRef = useRef(null)
-  mapPointClickRef.current = (grpMode && !grpDrawing)
-    ? (pt) => assignRef.current?.([pt])
-    : null
-
   // Memoised marker tree (#218): unrelated context churn (e.g. addon
   // transparency drags) re-renders this component; a referentially stable
   // marker array lets React skip reconciling every point marker.  Popups get
@@ -750,31 +739,25 @@ export default function MapPage() {
       const crsLine = crsTip(pt)
       const srcLine = srcCrs(pt.srcProj)
       return (
-        <PointMarker
-          key={pt.id} pt={pt} color={color} symbol={symbol}
-          eventHandlers={{ click: () => mapPointClickRef.current?.(pt) }}
-        >
-          {/* #262: no popup while assigning — clicks assign the group. */}
-          {!grpMode && (
-            <Popup>
-              <strong>{pt.PointNo}</strong><br />
-              Type: {pt.PointType}
-              {activeGroupSystem && (
-                <><br />
-                  {activeGroupSystem.name}:{' '}
-                  {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
-                </>
-              )}
-              {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
-              {srcLine && <><br />Source CRS: {srcLine}</>}
-              {crsLine && <><br />{crsLine}</>}
-            </Popup>
-          )}
+        <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}>
+          <Popup>
+            <strong>{pt.PointNo}</strong><br />
+            Type: {pt.PointType}
+            {activeGroupSystem && (
+              <><br />
+                {activeGroupSystem.name}:{' '}
+                {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
+              </>
+            )}
+            {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
+            {srcLine && <><br />Source CRS: {srcLine}</>}
+            {crsLine && <><br />{crsLine}</>}
+          </Popup>
         </PointMarker>
       )
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem, grpMode])
+  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem])
 
   // ── Legend entries derived from color mode ────────────────────────────────
 
@@ -885,39 +868,9 @@ export default function MapPage() {
 
         {/* #262: grouping mode — only offered while a group system colours
             the map. */}
-        {activeGroupSystem && (
-          <button
-            className="btn-secondary btn-sm"
-            style={grpMode ? { background: '#1d4ed8', borderColor: '#1d4ed8', color: '#fff' } : undefined}
-            onClick={() => {
-              setGrpMode(m => !m)
-              setGrpDrawing(false); setGrpVerts([]); setGrpMsg('')
-            }}
-            title="Click points on the map to assign this group system's groups (use ✏ Polygon, or select a polygon, to assign an area)"
-          >
-            🏷 {grpMode ? 'Exit grouping' : 'Assign groups'}
-          </button>
-        )}
-        {grpMode && activeGroupSystem && (
-          <>
-            {/* #338: the draw/assign/cancel buttons moved to the reserved row;
-                this just picks the target group for click-to-assign. */}
-            <select
-              value={grpTarget}
-              onChange={e => setGrpTarget(e.target.value)}
-              className="map-color-select"
-              title="Group to assign"
-            >
-              {activeGroupSystem.groups.map(g => (
-                <option key={g.name} value={g.name}>{g.name}</option>
-              ))}
-              <option value={UNASSIGN}>Unknown (clear)</option>
-            </select>
-            <span className="hint" style={{ margin: 0 }}>
-              Click a point to assign · or ✏ Polygon / select a polygon to assign an area
-            </span>
-          </>
-        )}
+        {/* #340: no always-on "Assign groups" mode — group assignment happens
+            only via the polygon flow (draw a ✏ Polygon or select one, then
+            🏷 Assign inside, in the reserved row below). */}
 
         {/* Settings */}
         <button className="btn-secondary btn-sm" onClick={() => setSettingsOpen(o => !o)}>
