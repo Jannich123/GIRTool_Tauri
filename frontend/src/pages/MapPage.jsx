@@ -183,6 +183,14 @@ function PointMarker({ pt, color, symbol, children, eventHandlers }) {
   )
 }
 
+// #324: capture the Leaflet map instance so the toolbar (outside MapContainer)
+// can drive the shape tools.
+function MapInstanceRef({ onMap }) {
+  const map = useMap()
+  useEffect(() => { onMap(map) }, [map, onMap])
+  return null
+}
+
 // ── Polygon draw for grouping mode (#262 — mirrors SelectionMap's) ───────────
 
 function DrawHandler({ active, onVertex }) {
@@ -383,6 +391,7 @@ export default function MapPage() {
   const [grpDrawing,   setGrpDrawing]   = useState(false)
   const [grpVerts,     setGrpVerts]     = useState([]) // [[lat, lng], …]
   const [grpFromAddon, setGrpFromAddon] = useState(null)
+  const [projMap, setProjMap] = useState(null) // #324: captured Leaflet map for the toolbar shape tools
   const [grpMsg,       setGrpMsg]       = useState('')
 
   // Active project for session lookups.
@@ -903,6 +912,10 @@ export default function MapPage() {
           </div>
         )}
 
+        {/* #324: shape tools merged into this toolbar row. */}
+        <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .1rem' }} />
+        <ShapeDraw map={projMap} target="project" />
+
         <div style={{ flex: 1 }} />
 
         {wfsUrl && (
@@ -973,7 +986,7 @@ export default function MapPage() {
           {/* Live cursor X/Y in the project coordinate system (#217). */}
           <CrsCursorReadout targetEpsg={coordinateSystem?.target_epsg} />
           <MapSearch />
-          <ShapeDraw target="project" />
+          <MapInstanceRef onMap={setProjMap} />
         </MapContainer>
 
         {/* Overlay control (top-right): WMS addon visibility / order / opacity. */}

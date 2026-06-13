@@ -493,6 +493,13 @@ Performance (load a few thousand points first):
 - [ ] In select mode, clicking a shape does NOT trigger the old polygon-as-boundary selection or move the map point-selection; outside select mode, polygon-addon boundary clicks still work.
 - [ ] Drawing a line + saving still works; selecting works on both maps and on the Danish + web-mercator grids.
 
+### 6bb. Merged map toolbars + restored polygon draw (#324)
+
+- [ ] On both maps the shape tools (✏ Polygon, ／ Line, ☝ Select) live in the SAME button row above the map as the existing controls (Data Selection: Draw polygon / Load in view / Select inside…; Project map: grouping + settings) — no separate floating toolbar on the canvas.
+- [ ] ✏ Polygon is back: draw a polygon, double-click to finish, name + Save -> a map addon.
+- [ ] The old per-map controls still work unchanged (Data Selection draw->Select/Load inside; Project map grouping draw/assign).
+- [ ] Select + Delete still work from the merged toolbar; the toolbar only appears once the map is ready.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.
