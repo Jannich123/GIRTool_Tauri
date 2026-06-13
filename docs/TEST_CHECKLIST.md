@@ -385,6 +385,11 @@ Performance (load a few thousand points first):
 - [ ] Conversion applies only to numeric values - a blank or text cell in a converted column passes through unchanged; a converted Depth feeds the derived Level (#284) correctly (Level = Z1 - Depth in metres).
 - [ ] Units track the reference sheet: they come from GIRTool_Column_Reference.xlsx via the column dictionary, so editing a unit there (and reloading) changes what the wizard shows - only the conversion factors are coded.
 
+### 6an. Data preview - Reload refreshes the row-count pills (#290)
+
+- [ ] Change a datasheet's row count out-of-band (edit the .xlsx in Excel and save, or reduce/append it in another window), then click **↻ Reload data**: the count on that datasheet's pill updates to match the file (previously it stayed stale because list_datasheets trusts the persisted meta).
+- [ ] The active preview still re-reads correctly; switching between datasheet pills after a reload shows the right rows and counts.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

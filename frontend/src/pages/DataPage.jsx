@@ -778,6 +778,14 @@ export default function DataPage() {
     // would keep showing the old data because activeTab didn't change).
     setReloadTick(t => t + 1)
     await preloadDatasheets(datasheets.map(d => d.fname), { force: true })
+    // #290: the count pills read ds.row_count from list_datasheets, which is
+    // served from the persisted meta in settings.json and can lag the file on
+    // disk (an external Excel edit never updates that meta).  Reconcile each
+    // count from the rows we just re-read so Reload refreshes the badges too.
+    setDatasheets(prev => prev.map(d => {
+      const data = previewCacheRef.current.get(d.fname)
+      return (data && Array.isArray(data.rows)) ? { ...d, row_count: data.rows.length } : d
+    }))
   }
 
   // Initial + connection-change load.  Pre-existing files surface before the
