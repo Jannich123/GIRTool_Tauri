@@ -514,6 +514,14 @@ Performance (load a few thousand points first):
 - [ ] Cancel discards the edits and the shape snaps back to its original geometry (no file change).
 - [ ] Double-click no longer zooms the map on a shape; editing works on the Danish + web-mercator grids; only one shape edits at a time.
 
+### 6be. Shape toolbar rework (#330)
+
+- [ ] Data Selection toolbar: all buttons are the same (small) size; the old big "Draw polygon" button is gone — a uniform "✏ Polygon" replaces it.
+- [ ] "✏ Polygon" draws the temporary selection polygon (shows the filled area while drawing); the Load / Select inside / Remove inside / Remove projects / Cancel buttons appear in a SECOND row BELOW the fixed row (the top row doesn't shift). It does NOT save the polygon.
+- [ ] No "Select" button: clicking a shape on the map selects it (highlighted) and the second row shows ✎ Edit, 🗑 Delete (and ↔ Offset for lines); clicking empty map deselects.
+- [ ] Double-click a shape still enters edit mode (Save/Cancel in the second row); offset/delete/edit all still work.
+- [ ] ／ Line still draws + saves a line addon; the project map shows the same shape tools (edit/offset/delete) in its toolbar.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

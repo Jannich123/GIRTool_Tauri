@@ -104,17 +104,14 @@ function GeoFileLayer({ addon, data, polyClickRef }) {
         layer.bindTooltip(html, { sticky: true })
         // Click: in shape-tools 'select' mode → select this addon (#322);
         // otherwise polygons double as clickable selection boundaries (#209).
+        // #330: clicking a shape selects it (no select mode). It still doubles
+        // as a boundary when the page wires onPolygonClick AND nothing is
+        // selected yet via the page flow — but selection takes priority here.
         layer.on('click', (e) => {
           const st = shapeToolsRef.current
-          if (st?.mode === 'select') {
-            L.DomEvent.stop(e)
-            st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file, epsg: addon.epsg })
-            return
-          }
-          const gt = feature?.geometry?.type
-          if (gt === 'Polygon' || gt === 'MultiPolygon') {
-            polyClickRef?.current?.(feature, e.latlng, addon.name)
-          }
+          if (st?.editing) return
+          L.DomEvent.stop(e)
+          st.setSelected?.({ id: addon.id, name: addon.name, type: feature?.geometry?.type, file: addon.file, epsg: addon.epsg })
         })
         // #328: double-click a shape → enter edit mode (unless already editing).
         layer.on('dblclick', (e) => {
