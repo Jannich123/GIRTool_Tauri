@@ -882,12 +882,16 @@ export default function DataPage() {
   // Issue #194: Download runs ONE BACKEND CALL PER DATASHEET, sequentially —
   // the per-sheet status badges tick over live and one failing sheet can't
   // block the rest.  Results aggregate into the same summary box.
+  // #352: the DB downloads stay sequential (they don't overlap), but each
+  // datasheet's CPT reduction/calculation is kicked off WITHOUT awaiting, so it
+  // runs while the NEXT datasheet downloads — pipelining the slow calc step.
   async function handleSave() {
     setSavingData(true); setSaveResult(null); setAppendResult(null); setReaddResult(null); setError('')
     const queryNames = Object.entries(selected).filter(([, v]) => v).map(([k]) => k)
     markStatuses(queryNames, { state: 'pending', text: '⏳ queued…' })
     const base = buildPayload([])
     const agg = { folder: '', saved: [], errors: [] }
+    const reduceJobs = []   // background CPT reductions overlapping later downloads
     for (const name of queryNames) {
       markStatuses([name], { state: 'pending', text: '⏳ downloading…' })
       try {
@@ -896,13 +900,18 @@ export default function DataPage() {
         for (const f of (res?.saved ?? [])) agg.saved.push(f)
         for (const e of (res?.errors ?? [])) agg.errors.push(e)
         applyResultStatuses(res, f => `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`)
-        if ((res?.saved ?? []).length) await maybeAutoReduce(name)
+        // Start the reduction but DON'T await it — let the next sheet download
+        // while this one's calc runs (maybeAutoReduce reports its own status).
+        if ((res?.saved ?? []).length) reduceJobs.push(maybeAutoReduce(name))
       } catch (err) {
         console.error(err)
         agg.errors.push({ file: `${name}.xlsx`, error: String(err) })
         markStatuses([name], { state: 'err', text: String(err).slice(0, 80) })
       }
     }
+    // Downloads are done; wait for any reductions still running before the
+    // preview refresh so it reflects the reduced files.
+    if (reduceJobs.length) await Promise.allSettled(reduceJobs)
     setSaveResult(agg)
     // Issue #113: refresh subtab list + invalidate cache for files just rewritten.
     const touched = new Set(agg.saved.map(s => s.file.replace(/\.xlsx$/i, '')))
@@ -919,6 +928,7 @@ export default function DataPage() {
     markStatuses(queryNames, { state: 'pending', text: '⏳ queued…' })
     const base = buildPayload([])
     const agg = { folder: '', results: [], errors: [] }
+    const reduceJobs = []   // #352: background reductions overlap later appends
     for (const name of queryNames) {
       markStatuses([name], { state: 'pending', text: '⏳ appending…' })
       try {
@@ -929,13 +939,14 @@ export default function DataPage() {
         applyResultStatuses(res, f => (f.appended != null
           ? `✓ +${f.appended} · ${f.skipped ?? 0} skipped`
           : `✓ ${Number(f.rows ?? 0).toLocaleString()} rows`))
-        if ((res?.saved ?? res?.results ?? []).length) await maybeAutoReduce(name)
+        if ((res?.saved ?? res?.results ?? []).length) reduceJobs.push(maybeAutoReduce(name))
       } catch (err) {
         console.error(err)
         agg.errors.push({ file: `${name}.xlsx`, error: String(err) })
         markStatuses([name], { state: 'err', text: String(err).slice(0, 80) })
       }
     }
+    if (reduceJobs.length) await Promise.allSettled(reduceJobs)
     setAppendResult(agg)
     const touched = new Set(agg.results.map(s => s.file.replace(/\.xlsx$/i, '')))
     await refreshDatasheets({ keepActive: true, invalidate: touched })

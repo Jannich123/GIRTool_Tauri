@@ -611,6 +611,14 @@ Performance (load a few thousand points first):
 - [ ] Drawing a polygon OR selecting a polygon turns that same button into 🏷 Assign inside (same spot); there is no longer a separate Assign-inside button in the row below (that row keeps Save / Cancel while drawing, and edit/delete for a selected shape).
 - [ ] Switching colour mode to "Color by Type" turns assign mode off.
 
+### 6bp. Legend position / Colors subtabs / download pipelining (#352)
+
+- [ ] **Project Map**: the colour legend is now bottom-LEFT (was bottom-right); it doesn't overlap the coordinate readout (bottom-right). The Selection map's source legend is unchanged.
+- [ ] **Colors & Symbols**: the sub-tab bar (Primary/Secondary Layer, Point Type, group systems) sits OUTSIDE the white box now; only the table content is inside the box, matching the other pages. Switching tabs still works.
+- [ ] **Recent-folder chips** (Settings -> Project selection) are white with navy text (verify the #350/#351 fix held).
+- [ ] **Download pipelining**: with auto CPT reduction on, downloading several datasheets keeps the DB downloads sequential (one at a time), but the CPT reduction of a finished datasheet runs WHILE the next datasheet downloads. The per-sheet status badges still tick over correctly (downloading -> rows -> reduced), the summary box is correct, and the preview refresh waits for the reductions. Same for Append.
+- [ ] A failing download/reduction still doesn't block the others; errors still aggregate into the summary.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

@@ -335,8 +335,9 @@ export default function ColorsPage() {
       {loading ? (
         <p className="hint">Loading…</p>
       ) : (
-        <div className="grp-cs-container">
-          {/* Sub-tab bar — order: Primary Layer | Secondary Layer | Point Type | group systems */}
+        <>
+          {/* #352: sub-tab bar OUTSIDE the white box (like the other pages). */}
+          {/* order: Primary Layer | Secondary Layer | Point Type | group systems */}
           <div className="grp-cs-tabs">
             <button
               className={`grp-cs-tab${csTab === '__strata_primary__' ? ' active' : ''}`}
@@ -361,6 +362,7 @@ export default function ColorsPage() {
             ))}
           </div>
 
+          <div className="grp-cs-container">
           {/* ── Strata Layer panels ── */}
           {(csTab === '__strata_primary__' || csTab === '__strata_secondary__') ? (() => {
             const type   = csTab === '__strata_primary__' ? 'primary' : 'secondary'
@@ -584,6 +586,7 @@ export default function ColorsPage() {
             )
           ) : null}
         </div>
+        </>
       )}
     </div>
   )
