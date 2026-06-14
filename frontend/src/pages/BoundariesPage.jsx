@@ -253,7 +253,6 @@ export default function BoundariesPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page">
-        <h2 className="page-title">Boundaries</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )
@@ -270,7 +269,6 @@ export default function BoundariesPage() {
     <div className="page bnd-page">
       <div className="bnd-page-header">
         <div>
-          <h2 className="page-title" style={{ marginBottom: '.15rem' }}>Boundaries</h2>
           <p className="hint" style={{ margin: 0 }}>
             Define named line series from coordinate data. Select them in Charts to overlay them on plots.
           </p>

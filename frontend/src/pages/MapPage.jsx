@@ -757,7 +757,6 @@ export default function MapPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page">
-        <h2 className="page-title">Map</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )

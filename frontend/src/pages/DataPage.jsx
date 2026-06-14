@@ -967,7 +967,6 @@ export default function DataPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page page-wide">
-        <h2 className="page-title">Data</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )
@@ -978,13 +977,10 @@ export default function DataPage() {
 
   return (
     <div className="page page-wide">
-      <div className="page-header">
-        <h2 className="page-title">Data</h2>
-        {/*
-          The legacy in-page "Query config" tab moved to Settings → Query Config
-          in issue #47.  The Save data tab is the only one left here.
-        */}
-      </div>
+      {/*
+        The legacy in-page "Query config" tab moved to Settings → Query Config
+        in issue #47.  The Save data tab is the only one left here.
+      */}
 
       <p
         className="hint"
@@ -1001,39 +997,22 @@ export default function DataPage() {
 
       {error && <p className="msg err" style={{ marginBottom: '1rem' }}>{error}</p>}
 
-      {/* ══ TOP VIEW TABS (issue #115) ═════════════════════════════════════ */}
-      <div style={{
-        display: 'flex', gap: '.4rem', marginBottom: '1rem',
-        borderBottom: '1px solid var(--border, #e5e7eb)', paddingBottom: '.4rem',
-      }}>
+      {/* ══ TOP VIEW TABS (issue #115) — shared subtab style (#348) ═════════ */}
+      <div className="subtabs">
         {[
           { key: 'download', label: '⬇ Download menu' },
           { key: 'preview',  label: `📊 Data preview${datasheets.length > 0 ? ` (${datasheets.length})` : ''}` },
           { key: 'reduce',   label: '🔬 CPT reduction' },
           { key: 'import',   label: '📥 Import' },
-        ].map(t => {
-          const active = viewTab === t.key
-          return (
-            <button
-              key={t.key}
-              onClick={() => { setViewTab(t.key); viewTabTouchedRef.current = true }}
-              style={{
-                padding:      '.45rem .9rem',
-                borderRadius: '6px 6px 0 0',
-                border:       active ? '1px solid var(--border, #d1d5db)' : '1px solid transparent',
-                borderBottom: active ? '1px solid #fff' : '1px solid transparent',
-                background:   active ? '#fff' : 'transparent',
-                color:        active ? 'var(--accent)' : '#374151',
-                cursor:       'pointer',
-                fontSize:     '.88rem',
-                fontWeight:   active ? 600 : 500,
-                marginBottom: '-1px',
-              }}
-            >
-              {t.label}
-            </button>
-          )
-        })}
+        ].map(t => (
+          <button
+            key={t.key}
+            className={`subtab ${viewTab === t.key ? 'active' : ''}`}
+            onClick={() => { setViewTab(t.key); viewTabTouchedRef.current = true }}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {/* ══ SAVE DATA ═════════════════════════════════════════════════════ */}

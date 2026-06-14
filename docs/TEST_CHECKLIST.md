@@ -592,6 +592,16 @@ Performance (load a few thousand points first):
 - [ ] **AI chat and Help pop-outs** now match the app: navy titles, app-grey surfaces, accent message bubbles (no more cool-slate "different product" look).
 - [ ] Nothing functional changed — every page/dialog still works exactly as before; only styling moved to shared tokens/classes.
 
+### 6bn. Tabs / titles / cards streamlining (#348)
+
+- [ ] **Chat bubbles**: your (user) messages in the AI chat are now navy (matching the brand), not the accent blue.
+- [ ] **No redundant page titles**: the big page heading (Data, Strata, Points, Map, Settings, etc.) is gone — the sidebar/subtab already shows where you are. Guard/empty-state hints remain.
+- [ ] **Unified subtabs**: every page's subtab bar (Data Selection, Settings, Strata, CPT, Colors, and Data's Download/Preview/Reduce/Import) uses the same pill style at button height. Data no longer has its own folder-tab look.
+- [ ] **Active subtab is bright**: the selected subtab is filled with the accent (clearly highlighted) like selecting a main tab; inactive subtabs are plain white pills.
+- [ ] **White-box tab content**: the Coordinate-system and Map-addons settings tabs now sit in a white panel like the Query-config tab (previously bare on the background).
+- [ ] Card / panel / edit-panel surfaces share one radius + shadow (tokenised); nothing regressed on pages that already used cards.
+- [ ] Regression: all pages still navigate, all subtabs still switch, all actions still work.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

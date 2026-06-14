@@ -1683,7 +1683,6 @@ export default function ChartsPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page">
-        <h2 className="page-title">Charts</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )

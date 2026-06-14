@@ -437,7 +437,6 @@ export default function PointsPage({ setPage }) {
   if (selectedProjects.length === 0) {
     return (
       <div className="page page-wide">
-        <h2 className="page-title">Points</h2>
         <p className="hint">Select one or more projects first.</p>
       </div>
     )
@@ -456,7 +455,6 @@ export default function PointsPage({ setPage }) {
   return (
     <div className="page page-wide">
       <div className="page-header">
-        <h2 className="page-title">Points</h2>
         <div className="page-actions">
           <button onClick={() => fetchPoints(true)} className="btn-secondary btn-sm"
                   title="Re-query the databases (otherwise the cached points are used)">

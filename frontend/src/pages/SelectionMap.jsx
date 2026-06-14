@@ -865,8 +865,6 @@ export default function SelectionMap() {
 
   return (
     <div className="page page-wide" style={{ display: 'flex', flexDirection: 'column' }}>
-      <h2 className="page-title">Selection map</h2>
-
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.5rem' }}>
         <span className="hint" style={{ margin: 0 }}>
           Jupiter: {jupiter.length

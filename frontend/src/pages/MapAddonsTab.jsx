@@ -234,7 +234,7 @@ export default function MapAddonsTab() {
   }
 
   return (
-    <div style={{ maxWidth: 920 }}>
+    <div className="panel" style={{ maxWidth: 920 }}>
       <h3 className="section-title">Map addons</h3>
       <p className="hint" style={{ marginTop: 0 }}>
         Overlay layers for the Project map and the Selection map: <strong>WMS</strong> / <strong>WMTS</strong> raster

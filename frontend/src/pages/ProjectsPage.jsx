@@ -446,7 +446,6 @@ export default function ProjectsPage({ setPage }) {
   if (!connected) {
     return (
       <div className="page page-wide">
-        <h2 className="page-title">Projects</h2>
         <p className="hint">Go to <strong>Settings</strong> and connect to the database first.</p>
       </div>
     )
@@ -457,7 +456,6 @@ export default function ProjectsPage({ setPage }) {
   return (
     <div className="page page-wide">
       <div className="page-header">
-        <h2 className="page-title">Projects</h2>
         <div className="page-actions">
           <button onClick={() => fetchProjects(true)} className="btn-secondary btn-sm" title="Re-query the databases (otherwise the cached list is used)">↻ Refresh list</button>
           <button onClick={handleOpenXlsx} disabled={!connection?.output_folder}
