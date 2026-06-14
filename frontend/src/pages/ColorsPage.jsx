@@ -324,9 +324,9 @@ export default function ColorsPage() {
         >
           {refreshing ? '⏳ Refreshing…' : '↺ Refresh from Excel'}
         </button>
-        {xlsxSaveStatus === 'saving' && <span style={{ fontSize: '.75rem', color: '#6b7280', marginRight: '0.5rem' }}>☁ Saving xlsx…</span>}
-        {xlsxSaveStatus === 'saved'  && <span style={{ fontSize: '.75rem', color: '#16a34a', marginRight: '0.5rem' }}>☁ xlsx saved</span>}
-        {xlsxSaveStatus === 'error'  && <span style={{ fontSize: '.75rem', color: '#dc2626', marginRight: '0.5rem' }}>☁ xlsx error</span>}
+        {xlsxSaveStatus === 'saving' && <span style={{ fontSize: '.75rem', color: 'var(--muted)', marginRight: '0.5rem' }}>☁ Saving xlsx…</span>}
+        {xlsxSaveStatus === 'saved'  && <span style={{ fontSize: '.75rem', color: 'var(--ok-fg)', marginRight: '0.5rem' }}>☁ xlsx saved</span>}
+        {xlsxSaveStatus === 'error'  && <span style={{ fontSize: '.75rem', color: 'var(--err-fg)', marginRight: '0.5rem' }}>☁ xlsx error</span>}
         <SaveChip
           status={saveStatus}
           error={saveError}

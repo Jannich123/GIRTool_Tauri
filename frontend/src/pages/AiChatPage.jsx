@@ -113,9 +113,9 @@ export default function AiChatPage() {
   const configured = status?.configured
 
   return (
-    <div style={{ display: 'flex', height: '100vh', maxHeight: '100vh', background: '#f8fafc' }}>
+    <div style={{ display: 'flex', height: '100vh', maxHeight: '100vh', background: 'var(--light)' }}>
       {/* ── Left: chat list ─────────────────────────────────────────────── */}
-      <aside style={{ width: 230, flex: '0 0 230px', borderRight: '1px solid #e2e8f0', background: '#f1f5f9', display: 'flex', flexDirection: 'column' }}>
+      <aside style={{ width: 230, flex: '0 0 230px', borderRight: '1px solid var(--border)', background: 'var(--light)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '.6rem' }}>
           <button className="btn-primary" style={{ width: '100%' }} onClick={startNewChat}>＋ New chat</button>
         </div>
@@ -129,7 +129,7 @@ export default function AiChatPage() {
               style={{
                 display: 'flex', alignItems: 'center', gap: '.3rem',
                 padding: '.4rem .45rem', marginBottom: '.2rem', borderRadius: 6, cursor: 'pointer',
-                background: c.id === activeId ? '#dbeafe' : 'transparent',
+                background: c.id === activeId ? 'rgba(37, 99, 235, 0.12)' : 'transparent',
                 fontSize: '.82rem',
               }}
             >
@@ -148,10 +148,10 @@ export default function AiChatPage() {
 
       {/* ── Right: conversation ─────────────────────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <div style={{ padding: '.55rem .9rem', borderBottom: '1px solid #e2e8f0', background: '#fff', display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+        <div style={{ padding: '.55rem .9rem', borderBottom: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', gap: '.5rem' }}>
           <strong>🤖 GIRTool assistant</strong>
           {status && (
-            <span style={{ fontSize: '.76rem', color: configured ? '#64748b' : '#dc2626' }}>
+            <span style={{ fontSize: '.76rem', color: configured ? 'var(--muted)' : '#dc2626' }}>
               {configured ? status.model : 'not set up'}
             </span>
           )}
@@ -159,7 +159,7 @@ export default function AiChatPage() {
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '.7rem' }}>
           {messages.length === 0 && (
-            <div style={{ margin: 'auto', textAlign: 'center', color: '#64748b', maxWidth: 440 }}>
+            <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--muted)', maxWidth: 440 }}>
               <div style={{ fontSize: '2rem', marginBottom: '.3rem' }}>🤖</div>
               {configured
                 ? <>Ask how to use GIRTool — e.g. <em>"How do I import CSV data in feet?"</em></>
@@ -170,16 +170,16 @@ export default function AiChatPage() {
             <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
               <div style={{
                 padding: '.55rem .8rem', borderRadius: 12,
-                background: m.role === 'user' ? '#2563eb' : (m.error ? '#fef2f2' : '#fff'),
-                color: m.role === 'user' ? '#fff' : '#0f172a',
-                border: m.role === 'user' ? 'none' : '1px solid #e2e8f0',
+                background: m.role === 'user' ? 'var(--accent)' : (m.error ? '#fef2f2' : 'var(--surface)'),
+                color: m.role === 'user' ? '#fff' : 'var(--text)',
+                border: m.role === 'user' ? 'none' : '1px solid var(--border)',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '.87rem', lineHeight: 1.5,
               }}>
                 {m.role === 'user' ? (m.display ?? m.content) : (m.error ? '⚠ (see error below)' : m.content)}
               </div>
             </div>
           ))}
-          {busy && <div style={{ alignSelf: 'flex-start', color: '#64748b', fontSize: '.85rem', padding: '.3rem .5rem' }}>thinking…</div>}
+          {busy && <div style={{ alignSelf: 'flex-start', color: 'var(--muted)', fontSize: '.85rem', padding: '.3rem .5rem' }}>thinking…</div>}
           <div ref={endRef} />
         </div>
 
@@ -190,7 +190,7 @@ export default function AiChatPage() {
         {attachments.length > 0 && (
           <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', padding: '.4rem .9rem 0' }}>
             {attachments.map((a, i) => (
-              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '.3rem', background: '#e2e8f0', borderRadius: 999, padding: '.15rem .5rem', fontSize: '.78rem' }}>
+              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '.3rem', background: 'var(--border)', borderRadius: 999, padding: '.15rem .5rem', fontSize: '.78rem' }}>
                 📎 {a.name}{a.truncated ? ' (truncated)' : ''}
                 <span onClick={() => setAttach(arr => arr.filter((_, j) => j !== i))} style={{ cursor: 'pointer', opacity: .6 }}>✕</span>
               </span>
@@ -198,7 +198,7 @@ export default function AiChatPage() {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '.5rem', alignItems: 'flex-end', padding: '.6rem .9rem', borderTop: '1px solid #e2e8f0', background: '#fff' }}>
+        <div style={{ display: 'flex', gap: '.5rem', alignItems: 'flex-end', padding: '.6rem .9rem', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button className="btn-secondary" onClick={attachFile} disabled={busy} title="Attach a text file as context">📎</button>
           <textarea
             value={input}
@@ -207,7 +207,7 @@ export default function AiChatPage() {
             placeholder={configured ? 'Ask a question…  (Enter to send, Shift+Enter for a new line)' : 'The assistant is not configured.'}
             rows={1}
             disabled={!configured}
-            style={{ flex: 1, resize: 'none', maxHeight: 140, padding: '.5rem .6rem', borderRadius: 8, border: '1px solid #cbd5e1', fontFamily: 'inherit', fontSize: '.9rem' }}
+            style={{ flex: 1, resize: 'none', maxHeight: 140, padding: '.5rem .6rem', borderRadius: 8, border: '1px solid var(--border)', fontFamily: 'inherit', fontSize: '.9rem' }}
           />
           <button className="btn-primary" onClick={send} disabled={busy || (!input.trim() && !attachments.length)}>
             {busy ? '…' : 'Send'}

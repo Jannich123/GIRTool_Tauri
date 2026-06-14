@@ -95,7 +95,7 @@ function CoordTable({ points, onChange }) {
         >📋 Paste from clipboard</button>
         <button className="btn-secondary btn-sm" onClick={addRow}>＋ Add row</button>
         {points.length > 0 && (
-          <button className="btn-secondary btn-sm" style={{ color: '#991b1b' }}
+          <button className="btn-secondary btn-sm btn-danger"
             onClick={() => onChange([])}>🗑 Clear all</button>
         )}
       </div>
@@ -140,7 +140,7 @@ function CoordTable({ points, onChange }) {
                     </td>
                   ))}
                   <td>
-                    <button className="btn-icon btn-sm" style={{ color: '#991b1b' }}
+                    <button className="btn-icon btn-sm btn-danger"
                       onClick={() => deleteRow(i)} title="Delete row">✕</button>
                   </td>
                 </tr>
@@ -328,8 +328,8 @@ export default function BoundariesPage() {
                 {b.points.length}pt
               </span>
               <button
-                className="btn-icon btn-sm"
-                style={{ color: '#991b1b', marginLeft: 'auto' }}
+                className="btn-icon btn-sm btn-danger"
+                style={{ marginLeft: 'auto' }}
                 title="Delete boundary"
                 onClick={e => { e.stopPropagation(); deleteBoundary(b.id) }}
               >✕</button>

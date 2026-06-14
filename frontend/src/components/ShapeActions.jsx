@@ -83,7 +83,7 @@ export default function ShapeActions() {
         <span className="hint" style={{ margin: 0 }}>Editing <strong>{selected?.name || 'shape'}</strong> — drag a vertex; drag a segment midpoint to add one</span>
         <button className="btn-primary btn-sm" disabled={busy} onClick={saveEdit}>{busy ? '…' : '✓ Save'}</button>
         <button className="btn-secondary btn-sm" disabled={busy} onClick={cancelEdit}>✕ Cancel</button>
-        {msg && <span style={{ color: '#dc2626', fontSize: '.8rem' }}>{msg}</span>}
+        {msg && <span className="inline-err">{msg}</span>}
       </span>
     )
   }
@@ -97,14 +97,14 @@ export default function ShapeActions() {
         <>
           <span className="hint" style={{ margin: 0 }}>offset</span>
           <input value={offsetM} onChange={e => setOffsetM(e.target.value)} title="Offset in metres (each side)"
-            style={{ width: 52, padding: '.2rem .35rem', borderRadius: 4, border: '1px solid #cbd5e1' }} />
+            style={{ width: 52, padding: '.2rem .35rem', borderRadius: 4, border: '1px solid var(--border)' }} />
           <span className="hint" style={{ margin: 0 }}>m</span>
           <button className="btn-secondary btn-sm" disabled={busy} onClick={offsetSelected} title="Offset the line both sides into a corridor polygon">↔ Offset → polygon</button>
         </>
       )}
-      <button className="btn-secondary btn-sm" style={{ color: '#b91c1c' }} disabled={busy} onClick={deleteSelected}>🗑 Delete</button>
+      <button className="btn-secondary btn-sm" style={{ color: 'var(--err-fg)' }} disabled={busy} onClick={deleteSelected}>🗑 Delete</button>
       <button className="btn-secondary btn-sm" disabled={busy} onClick={() => setSelected(null)}>Clear</button>
-      {msg && <span style={{ color: '#dc2626', fontSize: '.8rem' }}>{msg}</span>}
+      {msg && <span className="inline-err">{msg}</span>}
     </span>
   )
 }

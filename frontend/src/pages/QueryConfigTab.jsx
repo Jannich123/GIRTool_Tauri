@@ -444,7 +444,7 @@ export default function QueryConfigTab() {
         style={{
           display: 'flex', alignItems: 'center', gap: '0.5rem',
           marginBottom: '1rem', padding: '0.6rem 0.8rem',
-          background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 6,
+          background: '#f3f4f6', border: '1px solid var(--border)', borderRadius: 6,
         }}
       >
         <label style={{ marginBottom: 0, fontWeight: 600 }}>Query type:</label>
@@ -512,7 +512,7 @@ export default function QueryConfigTab() {
         )}
 
         <span style={{ flex: 1 }} />
-        <span style={{ color: '#6b7280', fontSize: '.78rem' }}>
+        <span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>
           {activeQt === GEOGIS
             ? 'Built-in defaults shown below; edit to override.'
             : `Custom flavour — leave a section blank to fall back to the backend's hardcoded default.`}
@@ -537,7 +537,7 @@ export default function QueryConfigTab() {
               return next
             })
           }}
-          style={{ marginBottom: '0.75rem', border: '1px solid #e5e7eb', borderRadius: 6 }}
+          style={{ marginBottom: '0.75rem', border: '1px solid var(--border)', borderRadius: 6 }}
         >
           <summary style={{
             cursor: 'pointer', padding: '0.55rem 0.8rem', background: '#f9fafb',
@@ -547,14 +547,14 @@ export default function QueryConfigTab() {
             <span>{sec.title}</span>
             {overridden && (
               <span title="Override active for current query type"
-                style={{ color: '#16a34a', fontSize: '.8rem' }}>● override</span>
+                style={{ color: 'var(--ok-fg)', fontSize: '.8rem' }}>● override</span>
             )}
             {isDirtySection && (
               <span title="Unsaved edits"
-                style={{ color: '#d97706', fontSize: '.8rem' }}>● unsaved</span>
+                style={{ color: 'var(--warn-fg)', fontSize: '.8rem' }}>● unsaved</span>
             )}
             <span style={{ flex: 1 }} />
-            <span style={{ color: '#6b7280', fontSize: '.78rem', fontWeight: 400 }}>
+            <span style={{ color: 'var(--muted)', fontSize: '.78rem', fontWeight: 400 }}>
               {sec.drives}
             </span>
           </summary>
@@ -647,6 +647,7 @@ export default function QueryConfigTab() {
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '1rem' }}>
         <button
           type="button"
+          className="btn-primary"
           onClick={saveAll}
           disabled={busy || !anyDirty}
           title={anyDirty ? 'Persist all edits to GIRTool_settings.json' : 'No unsaved edits'}

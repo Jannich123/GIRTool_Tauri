@@ -661,7 +661,7 @@ export default function SettingsPage({ setPage }) {
           the folder later restores everything.
         </p>
         {!form.output_folder && (
-          <p className="hint" style={{ color: '#b45309', marginBottom: '0.75rem' }}>
+          <p className="hint" style={{ color: 'var(--warn-fg)', marginBottom: '0.75rem' }}>
             ⚠ Pick a project folder first on the <strong>Project selection</strong> tab —
             credentials are stored there, not in the registry.
           </p>
@@ -673,7 +673,7 @@ export default function SettingsPage({ setPage }) {
           gridTemplateColumns: '24px 110px 90px 1fr 64px 64px 36px 28px',
           gap: '0.4rem', alignItems: 'center',
           padding: '0.25rem 0.5rem', fontWeight: 600, fontSize: '.78rem',
-          color: '#374151', borderBottom: '1px solid #e5e7eb',
+          color: 'var(--muted)', borderBottom: '1px solid var(--border)',
         }}>
           <div></div>
           <div>ID</div>
@@ -692,7 +692,7 @@ export default function SettingsPage({ setPage }) {
           const open  = openDbRows.has(row.id)
           const labelStyle = {
             display: 'flex', flexDirection: 'column', gap: '0.2rem',
-            fontWeight: 600, fontSize: '.76rem', color: '#374151', marginBottom: 0,
+            fontWeight: 600, fontSize: '.76rem', color: 'var(--muted)', marginBottom: 0,
           }
           return (
           <div key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -709,10 +709,10 @@ export default function SettingsPage({ setPage }) {
                 background: open ? '#f8fafc' : undefined,
               }}
             >
-              <span style={{ color: '#64748b', fontSize: '.68rem' }}>{open ? '▼' : '▶'}</span>
+              <span style={{ color: 'var(--muted)', fontSize: '.68rem' }}>{open ? '▼' : '▶'}</span>
               {/* Auto-generated ID (issue #73); legacy custom ids kept. */}
               <span
-                style={{ fontFamily: 'monospace', fontWeight: 600, color: isDup || isBad ? '#dc2626' : '#111827' }}
+                style={{ fontFamily: 'monospace', fontWeight: 600, color: isDup || isBad ? 'var(--err-fg)' : '#111827' }}
                 title={isDup ? 'Duplicate ID — every database needs a unique ID'
                      : isBad ? 'Invalid ID — only letters, digits, _ and - are allowed'
                      : undefined}
@@ -720,14 +720,14 @@ export default function SettingsPage({ setPage }) {
                 {row.id}
               </span>
               <span>{row.type === 'access' ? 'Access' : 'MSSQL'}</span>
-              <span style={{ color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {rowSummary(row)}
               </span>
               <span style={{ fontSize: '1.05rem', textAlign: 'center' }}>
                 {st === undefined ? '—' :
                  st.ok === null    ? '…' :
-                 st.ok             ? <span title={st.message} style={{ color: '#16a34a' }}>✅</span>
-                                   : <span title={st.message} style={{ color: '#dc2626' }}>⚠️</span>}
+                 st.ok             ? <span title={st.message} style={{ color: 'var(--ok-fg)' }}>✅</span>
+                                   : <span title={st.message} style={{ color: 'var(--err-fg)' }}>⚠️</span>}
               </span>
               <button
                 type="button"
@@ -744,7 +744,7 @@ export default function SettingsPage({ setPage }) {
                 title="Copy this connection (new ID, same settings) — handy when only e.g. the database name differs"
                 style={{
                   background: 'transparent', border: 'none', cursor: 'pointer',
-                  color: '#2563eb', fontSize: '.95rem', padding: 0,
+                  color: 'var(--accent)', fontSize: '.95rem', padding: 0,
                 }}
               >
                 ⧉
@@ -755,7 +755,7 @@ export default function SettingsPage({ setPage }) {
                 title="Remove this database"
                 style={{
                   background: 'transparent', border: 'none', cursor: 'pointer',
-                  color: '#dc2626', fontSize: '1rem', padding: 0,
+                  color: 'var(--err-fg)', fontSize: '1rem', padding: 0,
                 }}
               >
                 ×
@@ -899,7 +899,7 @@ export default function SettingsPage({ setPage }) {
                 {st?.message && (
                   <div style={{
                     gridColumn: '1 / -1', fontSize: '.78rem',
-                    color: st.ok ? '#16a34a' : st.ok === null ? '#6b7280' : '#dc2626',
+                    color: st.ok ? 'var(--ok-fg)' : st.ok === null ? 'var(--muted)' : 'var(--err-fg)',
                   }}>
                     {st.message}
                   </div>
@@ -940,7 +940,7 @@ export default function SettingsPage({ setPage }) {
 
         {/* Legacy single-DB compat hint */}
         <details style={{ marginTop: '1rem' }}>
-          <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: '.78rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: '.78rem' }}>
             Older settings files (single <code>db</code> block)
           </summary>
           <p className="hint" style={{ marginTop: '0.5rem', fontSize: '.78rem' }}>

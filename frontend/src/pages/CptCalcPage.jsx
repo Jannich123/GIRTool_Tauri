@@ -319,7 +319,7 @@ export default function CptCalcPage() {
             const someSel = entries.some(c => selectedSet.has(c.name))
             return (
             <div key={g} style={{ marginBottom: '1rem' }}>
-              <h4 style={{ margin: '0 0 .35rem' }}>
+              <h4 className="section-title">
                 {g}{' '}
                 <span className="hint" style={{ fontWeight: 400 }}>
                   ({entries.filter(c => selectedSet.has(c.name)).length}/{entries.length} selected)
@@ -375,7 +375,7 @@ export default function CptCalcPage() {
                           />
                         ) : <span className="hint">text</span>}
                       </td>
-                      <td style={{ fontSize: '.78em', color: '#475569' }}>{c.reference}</td>
+                      <td style={{ fontSize: '.78em', color: 'var(--muted)' }}>{c.reference}</td>
                     </tr>
                   ))}
                 </tbody>

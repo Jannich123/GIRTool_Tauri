@@ -13,6 +13,31 @@
   --red:    #ef4444;
   --orange: #f59e0b;
   --row-sel:#e8f0fe;
+
+  /* #346: shared design tokens — one vocabulary so every screen matches.
+     Previously these were missing and pages hardcoded ad-hoc values (8 radii,
+     6 shadows, stray blues, repeated status hex). */
+  --surface: #fff;
+  --hover:   #f4f7fb;          /* one subtle row/hover background */
+
+  --accent:  #2563eb;          /* interactive "active/selected" highlight */
+  --primary: var(--navy);      /* brand primary (was referenced-but-undefined) */
+
+  --radius-sm: 4px;
+  --radius:    6px;
+  --radius-lg: 8px;
+
+  --shadow-sm:  0 1px 4px rgba(0,0,0,.08);
+  --shadow-md:  0 2px 8px rgba(0,0,0,.12);
+  --shadow-pop: 0 6px 24px rgba(0,0,0,.18);
+
+  /* Status colours — text + matching tint background. */
+  --ok-fg:   #16a34a;  --ok-bg:   #dcfce7;
+  --warn-fg: #d97706;  --warn-bg: #fef3c7;
+  --err-fg:  #dc2626;  --err-bg:  #fee2e2;
+  --info-fg: var(--blue);
+
+  --font-mono: 'Consolas', 'Courier New', monospace;
 }
 
 body { font-family: system-ui, sans-serif; background: var(--light); color: var(--text); font-size: 14px; }
@@ -183,7 +208,7 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
   vertical-align: middle;
 }
 .colfilter-btn:hover  { color: #374151; }
-.colfilter-btn.active { color: #2563eb; font-weight: 700; }
+.colfilter-btn.active { color: var(--accent); font-weight: 700; }
 
 .colfilter-pop {
   position: fixed;
@@ -225,7 +250,7 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
   cursor: pointer;
 }
 .colfilter-actions button:hover { background: #e5e7eb; }
-.colfilter-flag { margin-left: auto; color: #2563eb; font-size: .72rem; font-weight: 600; }
+.colfilter-flag { margin-left: auto; color: var(--accent); font-size: .72rem; font-weight: 600; }
 .colfilter-list {
   overflow-y: auto;
   flex: 1;
@@ -304,7 +329,7 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
 }
 .settings-tab.active {
   color: #0f172a;
-  border-bottom-color: #2563eb;
+  border-bottom-color: var(--accent);
   background: transparent;
 }
 
@@ -518,8 +543,12 @@ code { background: #f0f4f8; padding: .1rem .35rem; border-radius: 3px; font-size
 .btn-icon:hover { background: var(--light); }
 
 .btn-sm   { padding: .25rem .6rem !important; font-size: .8rem !important; }
-.btn-danger { background: #fee2e2 !important; color: #991b1b !important; border: 1px solid #fca5a5 !important; }
+.btn-lg   { padding: .9rem 1rem !important; font-size: 1rem !important; min-width: 170px; }
+.btn-danger { background: var(--err-bg) !important; color: #991b1b !important; border: 1px solid #fca5a5 !important; }
 .btn-danger:hover { background: #fecaca !important; }
+
+/* Small inline error text used beside on-map toolbars/forms (#346). */
+.inline-err { color: var(--err-fg); font-size: .8rem; }
 
 .edit-panel {
   background: #fff;
@@ -571,7 +600,7 @@ textarea:focus { border-color: var(--navy); }
 }
 .chart-tab { cursor: grab; }
 .chart-tab:hover  { background: #fff; color: var(--text); }
-.chart-tab.drag-over { border: 2px dashed #1A3A5C; box-sizing: border-box; }
+.chart-tab.drag-over { border: 2px dashed var(--navy); box-sizing: border-box; }
 .chart-tab.active {
   background: #fff;
   color: var(--navy);
@@ -677,7 +706,7 @@ textarea:focus { border-color: var(--navy); }
   flex: 0 0 33.33%;
   min-height: 0;
   overflow-y: auto;
-  border-top: 2px solid #1A3A5C;
+  border-top: 2px solid var(--navy);
   margin-top: 1rem;
   transition: flex-basis 0.25s ease, opacity 0.25s ease;
 }
@@ -1434,14 +1463,29 @@ textarea:focus { border-color: var(--navy); }
 }
 .wfs-config-row input:focus { border-color: var(--blue); outline: none; }
 
+/* ── Map chrome (#346) — one shared floating-overlay box for every on-map
+   control (status, legend, layers panel, search, coordinate readout) so they
+   all share the same surface, radius and shadow. */
+.map-overlay {
+  position: absolute;
+  z-index: 1000;
+  background: rgba(255,255,255,.95);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  font-size: .78rem;
+  color: var(--text);
+}
+
 .map-status {
   position: absolute;
   bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(255,255,255,.9);
+  background: rgba(255,255,255,.95);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
   padding: .3rem .75rem;
   font-size: .8rem;
   z-index: 1000;
@@ -1453,9 +1497,10 @@ textarea:focus { border-color: var(--navy); }
   position: absolute;
   bottom: 28px;
   right: 10px;
-  background: rgba(255,255,255,.92);
+  background: rgba(255,255,255,.95);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
   padding: .45rem .65rem;
   font-size: .78rem;
   z-index: 1000;
@@ -1463,7 +1508,6 @@ textarea:focus { border-color: var(--navy); }
   display: flex;
   flex-direction: column;
   gap: .3rem;
-  box-shadow: 0 1px 4px rgba(0,0,0,.15);
 }
 .map-legend-row {
   display: flex;
@@ -1496,7 +1540,7 @@ textarea:focus { border-color: var(--navy); }
   transition: background .15s;
 }
 .fp-open-btn:hover { background: var(--blue); }
-.fp-open-btn.fp-active { background: #2563eb; }
+.fp-open-btn.fp-active { background: var(--accent); }
 .fp-open-icon { font-size: .9rem; writing-mode: horizontal-tb; }
 .fp-open-label { writing-mode: vertical-rl; letter-spacing: .05em; }
 .fp-badge {
@@ -1849,7 +1893,7 @@ input.bnd-cell-field {
 }
 .hover-default-chip {
   background: #1a3a5c22;
-  color: #1a3a5c;
+  color: var(--navy);
   border-radius: 12px;
   padding: 2px 8px;
   font-size: 11px;

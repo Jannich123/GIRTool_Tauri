@@ -377,7 +377,7 @@ function ImportSection({ datasheets, onDone }) {
                     <td
                       onClick={() => clickHeaderRow(r1)}
                       title="Click to use this row as the header row"
-                      style={{ cursor: 'pointer', fontWeight: 600, color: '#6b7280' }}
+                      style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--muted)' }}
                     >
                       {r1}
                     </td>
@@ -481,7 +481,7 @@ function ImportSection({ datasheets, onDone }) {
                       value={s.value}
                       onChange={e => setIds(prev => ({ ...prev, [f.key]: { kind: 'text', value: e.target.value } }))}
                       placeholder="required"
-                      style={{ width: 200, borderColor: s.value.trim() ? undefined : '#dc2626' }}
+                      style={{ width: 200, borderColor: s.value.trim() ? undefined : 'var(--err-fg)' }}
                     />
                   )}
                   <span className="hint" style={{ margin: 0 }}>{f.hint}</span>
@@ -498,7 +498,7 @@ function ImportSection({ datasheets, onDone }) {
           <label style={{ alignSelf: 'start', paddingTop: '.3rem' }}>Columns</label>
           <div>
             {mapping.length > 0 && (
-              <div style={{ display: 'flex', gap: '.4rem', marginBottom: '.25rem', fontSize: '.78rem', color: '#6b7280' }}>
+              <div style={{ display: 'flex', gap: '.4rem', marginBottom: '.25rem', fontSize: '.78rem', color: 'var(--muted)' }}>
                 <span style={{ width: 200 }}>Datasheet column</span>
                 <span style={{ width: 16 }}></span>
                 <span>insert from</span>
@@ -518,21 +518,21 @@ function ImportSection({ datasheets, onDone }) {
                       placeholder="datasheet column"
                       style={{ width: 200 }}
                     />}
-                <span style={{ color: '#6b7280', width: 16, textAlign: 'center' }}>←</span>
+                <span style={{ color: 'var(--muted)', width: 16, textAlign: 'center' }}>←</span>
                 {kindSelect(m, i)}
                 {m.kind === 'text' && (
                   <input
                     value={m.value}
                     onChange={e => patchMapping(i, { value: e.target.value })}
                     placeholder="required"
-                    style={{ width: 180, borderColor: m.value.trim() ? undefined : '#dc2626' }}
+                    style={{ width: 180, borderColor: m.value.trim() ? undefined : 'var(--err-fg)' }}
                   />
                 )}
                 {/* Unit of measurement + conversion (#288) — only for numeric
                     columns with an expected unit (not text / '-' / counts). */}
                 {uo && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.3rem', flexWrap: 'wrap' }}>
-                    <span style={{ color: '#64748b' }}>in</span>
+                    <span style={{ color: 'var(--muted)' }}>in</span>
                     <select
                       value={m.srcUnit || ''}
                       onChange={e => patchMapping(i, { srcUnit: e.target.value })}
@@ -545,20 +545,20 @@ function ImportSection({ datasheets, onDone }) {
                     </select>
                     {m.srcUnit === 'custom'
                       ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.2rem', color: '#64748b' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.2rem', color: 'var(--muted)' }}>
                           ×
                           <input
                             value={m.customFactor || ''}
                             onChange={e => patchMapping(i, { customFactor: e.target.value })}
                             placeholder="factor"
                             title={`Multiplier applied to each value to get ${du}`}
-                            style={{ width: 78, borderColor: (isFinite(Number(m.customFactor)) && Number(m.customFactor) !== 0) ? undefined : '#dc2626' }}
+                            style={{ width: 78, borderColor: (isFinite(Number(m.customFactor)) && Number(m.customFactor) !== 0) ? undefined : 'var(--err-fg)' }}
                           />
                           → {du}
                         </span>
                       )
                       : (m.srcUnit
-                          ? <span style={{ color: '#64748b' }}>→ {du}</span>
+                          ? <span style={{ color: 'var(--muted)' }}>→ {du}</span>
                           : null)}
                   </span>
                 )}
@@ -1023,7 +1023,7 @@ export default function DataPage() {
                 border:       active ? '1px solid var(--border, #d1d5db)' : '1px solid transparent',
                 borderBottom: active ? '1px solid #fff' : '1px solid transparent',
                 background:   active ? '#fff' : 'transparent',
-                color:        active ? 'var(--primary, #1d4ed8)' : '#374151',
+                color:        active ? 'var(--accent)' : '#374151',
                 cursor:       'pointer',
                 fontSize:     '.88rem',
                 fontWeight:   active ? 600 : 500,
@@ -1070,8 +1070,8 @@ export default function DataPage() {
                     <span
                       style={{
                         marginLeft: 'auto', fontSize: '.75rem', whiteSpace: 'nowrap',
-                        color: fileStatus[q.fname].state === 'ok' ? '#15803d'
-                          : fileStatus[q.fname].state === 'err' ? '#b91c1c' : '#b45309',
+                        color: fileStatus[q.fname].state === 'ok' ? 'var(--ok-fg)'
+                          : fileStatus[q.fname].state === 'err' ? 'var(--err-fg)' : 'var(--warn-fg)',
                       }}
                       title={fileStatus[q.fname].text}
                     >
@@ -1132,7 +1132,7 @@ export default function DataPage() {
                         <span style={{ marginLeft: 6, color: '#0369a1', fontSize: '.78rem' }} title="Uploaded to SharePoint">☁</span>
                       )}
                       {f.sp_upload?.error && (
-                        <span style={{ marginLeft: 6, color: '#b91c1c', fontSize: '.78rem' }} title={`SharePoint upload failed: ${f.sp_upload.error}`}>☁⚠</span>
+                        <span style={{ marginLeft: 6, color: 'var(--err-fg)', fontSize: '.78rem' }} title={`SharePoint upload failed: ${f.sp_upload.error}`}>☁⚠</span>
                       )}
                     </div>
                   ))}
@@ -1160,7 +1160,7 @@ export default function DataPage() {
                         <span style={{ marginLeft: 6, color: '#0369a1', fontSize: '.78rem' }} title="Uploaded to SharePoint">☁</span>
                       )}
                       {f.sp_upload?.error && (
-                        <span style={{ marginLeft: 6, color: '#b91c1c', fontSize: '.78rem' }} title={`SharePoint upload failed: ${f.sp_upload.error}`}>☁⚠</span>
+                        <span style={{ marginLeft: 6, color: 'var(--err-fg)', fontSize: '.78rem' }} title={`SharePoint upload failed: ${f.sp_upload.error}`}>☁⚠</span>
                       )}
                     </div>
                   ))}
@@ -1256,8 +1256,8 @@ export default function DataPage() {
                   style={{
                     padding:      '.35rem .8rem',
                     borderRadius: 999,
-                    border:       active ? '1px solid var(--primary, #2563eb)' : '1px solid var(--border, #d1d5db)',
-                    background:   active ? 'var(--primary, #2563eb)' : 'var(--surface, #f9fafb)',
+                    border:       active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    background:   active ? 'var(--accent)' : 'var(--surface)',
                     color:        active ? '#fff' : 'inherit',
                     cursor:       'pointer',
                     fontSize:     '.82rem',

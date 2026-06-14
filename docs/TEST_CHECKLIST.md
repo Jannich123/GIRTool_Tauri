@@ -581,6 +581,17 @@ Performance (load a few thousand points first):
 - [ ] Clicking **✏ Polygon** no longer makes a group dropdown pop out in the row below — that row just shows 🏷 Assign inside / 💾 Save / Cancel.
 - [ ] The group chosen in the top dropdown is what **🏷 Assign inside** applies — both while drawing a polygon and when a polygon addon is selected.
 
+### 6bm. Uniform GUI design pass (#346)
+
+- [ ] Shared design tokens exist in index.css (`--surface`, `--accent`, `--primary`, `--radius*`, `--shadow*`, `--ok/warn/err` colours, `--font-mono`); nothing renders with a missing-variable fallback.
+- [ ] **Active/selected highlights** are the same accent blue everywhere: map ✏ Polygon / ／ Line active buttons, Data view-tabs + CPT sub-tabs, Strata filter toggle, Settings/column-filter active states.
+- [ ] **Map chrome is uniform**: the layers panel, search box + dropdown, coordinate readout, status pill and legend all share one surface / radius / shadow (the `.map-overlay` look) on both maps.
+- [ ] **Section headings** are consistent: subsection titles across Strata, Points, Projects, CPT, Map addons, Help all use the same `.section-title` style (navy, same size) instead of ad-hoc bare headings.
+- [ ] **Status text** (saved / error / warning) uses the same green/red/amber app-wide (Colors, Strata, Query config, Settings, Data, CPT).
+- [ ] **Delete buttons** use the shared red `.btn-danger` style (Boundaries, Grouping, Strata).
+- [ ] **AI chat and Help pop-outs** now match the app: navy titles, app-grey surfaces, accent message bubbles (no more cool-slate "different product" look).
+- [ ] Nothing functional changed — every page/dialog still works exactly as before; only styling moved to shared tokens/classes.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

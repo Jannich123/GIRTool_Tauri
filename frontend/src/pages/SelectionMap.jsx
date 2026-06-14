@@ -901,7 +901,7 @@ export default function SelectionMap() {
               Clear loaded
             </button>
           )}
-          <span style={{ borderLeft: '1px solid #e2e8f0', height: 20, margin: '0 .1rem' }} />
+          <span style={{ borderLeft: '1px solid var(--border)', height: 20, margin: '0 .1rem' }} />
           <button
             className="btn-secondary btn-sm"
             onClick={() => {
@@ -909,7 +909,7 @@ export default function SelectionMap() {
               else { setSelected(null); setVertices([]); setPolyFromAddon(null); setDrawing(true) }
             }}
             disabled={!map || loading}
-            style={drawing ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : undefined}
+            style={drawing ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff' } : undefined}
             title="Draw a polygon to load / select / remove points inside the area"
           >
             ✏ Polygon{drawing ? ' — drawing…' : ''}
@@ -962,7 +962,7 @@ export default function SelectionMap() {
                     <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('remove')} disabled={loading}>✖ Remove inside</button>
                     <button className="btn-secondary btn-sm" onClick={() => applySelectedPolygon('removeProjects')} disabled={loading}
                       title="Remove every project with points inside this polygon">🗑 Remove projects</button>
-                    <span style={{ borderLeft: '1px solid #e2e8f0', height: 18, margin: '0 .1rem' }} />
+                    <span style={{ borderLeft: '1px solid var(--border)', height: 18, margin: '0 .1rem' }} />
                   </>
                 )}
                 <ShapeActions />
