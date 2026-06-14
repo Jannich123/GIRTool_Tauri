@@ -96,11 +96,11 @@ export default function ShapeDraw({ map, target }) {
         <input
           autoFocus value={name} onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') savePending(); if (e.key === 'Escape') discardPending() }}
-          placeholder="name" style={{ width: 120, padding: '.25rem .4rem', borderRadius: 4, border: '1px solid #cbd5e1' }}
+          placeholder="name" style={{ width: 120, padding: '.25rem .4rem', borderRadius: 4, border: '1px solid var(--border)' }}
         />
         <button className="btn-primary btn-sm" disabled={busy || !name.trim()} onClick={savePending}>{busy ? '…' : 'Save'}</button>
         <button className="btn-secondary btn-sm" disabled={busy} onClick={discardPending}>Discard</button>
-        {msg && <span style={{ color: '#dc2626', fontSize: '.8rem' }}>{msg}</span>}
+        {msg && <span className="inline-err">{msg}</span>}
       </span>
     )
   }
@@ -111,7 +111,7 @@ export default function ShapeDraw({ map, target }) {
     <button
       className="btn-secondary btn-sm"
       onClick={() => startDraw('Line')}
-      style={drawing === 'Line' ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : undefined}
+      style={drawing === 'Line' ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff' } : undefined}
       title="Draw a line, double-click to finish; saved as a map addon"
     >
       ／ Line{drawing === 'Line' ? ' — drawing…' : ''}

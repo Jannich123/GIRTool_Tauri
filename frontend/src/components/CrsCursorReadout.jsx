@@ -24,12 +24,12 @@ export default function CrsCursorReadout({ targetEpsg }) {
   const dp = xy ? 1 : 5
   return (
     <div
+      className="map-overlay"
       style={{
-        position: 'absolute', bottom: 12, right: 12, zIndex: 1000,
-        background: 'rgba(255,255,255,0.92)', borderRadius: 6,
-        padding: '.25rem .6rem', boxShadow: '0 1px 4px rgba(0,0,0,.25)',
-        fontFamily: 'monospace', fontSize: '.72rem', fontWeight: 600,
-        color: '#1f2937', pointerEvents: 'none', whiteSpace: 'nowrap',
+        bottom: 12, right: 12,
+        padding: '.25rem .6rem',
+        fontFamily: 'var(--font-mono)', fontWeight: 600,
+        color: 'var(--text)', pointerEvents: 'none', whiteSpace: 'nowrap',
       }}
     >
       {label}: {a.toFixed(dp)} · {b.toFixed(dp)}

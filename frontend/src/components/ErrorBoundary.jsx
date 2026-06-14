@@ -10,7 +10,7 @@ export default class ErrorBoundary extends Component {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: '2rem', color: '#991b1b', background: '#fee2e2', borderRadius: 8, margin: '2rem' }}>
+        <div className="msg err" style={{ margin: '2rem', padding: '2rem' }}>
           <strong>Something went wrong:</strong>
           <pre style={{ marginTop: '1rem', fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}>
             {this.state.error.message}

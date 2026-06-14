@@ -829,7 +829,7 @@ export default function MapPage() {
             group inside or 💾 save) + ／ Line; the contextual actions (assign /
             save / edit / offset / delete) live in the reserved row below so a
             selection doesn't reflow this wrapping toolbar and bounce the map. */}
-        <span style={{ borderLeft: '1px solid #e2e8f0', height: 22, margin: '0 .1rem' }} />
+        <span style={{ borderLeft: '1px solid var(--border)', height: 22, margin: '0 .1rem' }} />
         <button
           className="btn-secondary btn-sm"
           onClick={() => {
@@ -837,7 +837,7 @@ export default function MapPage() {
             else { setShapeSelected(null); setGrpVerts([]); setGrpDrawing(true); setGrpMsg('') }
           }}
           disabled={!projMap}
-          style={grpDrawing ? { background: '#2563eb', borderColor: '#2563eb', color: '#fff' } : undefined}
+          style={grpDrawing ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff' } : undefined}
           title="Draw a polygon — assign a group to points inside, or save it as a map addon"
         >
           ✏ Polygon{grpDrawing ? ' — drawing…' : ''}
@@ -894,7 +894,7 @@ export default function MapPage() {
                   title="Assign the chosen group to every point inside this polygon">
                   🏷 Assign inside
                 </button>
-                <span style={{ borderLeft: '1px solid #e2e8f0', height: 18, margin: '0 .1rem' }} />
+                <span style={{ borderLeft: '1px solid var(--border)', height: 18, margin: '0 .1rem' }} />
               </>
             )}
             <ShapeActions />

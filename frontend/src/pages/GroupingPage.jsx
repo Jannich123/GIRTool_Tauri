@@ -488,8 +488,8 @@ export default function GroupingPage() {
                     title="Rename system"
                   />
                   <button
-                    className="btn-icon btn-sm"
-                    style={{ color: '#991b1b', flexShrink: 0 }}
+                    className="btn-icon btn-sm btn-danger"
+                    style={{ flexShrink: 0 }}
                     onClick={e => { e.stopPropagation(); removeSystem(gs.id) }}
                     title="Delete system"
                   >✕</button>

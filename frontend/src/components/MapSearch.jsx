@@ -93,10 +93,10 @@ export default function MapSearch() {
 
   const ui = (
     <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, width: 280, fontSize: '.8rem' }}>
-      <div style={{
+      <div className="map-overlay" style={{
+        position: 'static',
         display: 'flex', alignItems: 'center', gap: '.3rem',
-        background: 'rgba(255,255,255,0.96)', borderRadius: 6,
-        boxShadow: '0 1px 4px rgba(0,0,0,.28)', padding: '0 .45rem',
+        padding: '0 .45rem',
       }}>
         <span style={{ opacity: 0.55 }}>🔍</span>
         <input
@@ -106,7 +106,7 @@ export default function MapSearch() {
           onFocus={() => { if (results.length) setOpen(true) }}
           placeholder="Search address or place…"
           spellCheck={false}
-          style={{ border: 'none', outline: 'none', flex: 1, padding: '.42rem 0', background: 'transparent', color: '#111827' }}
+          style={{ border: 'none', outline: 'none', flex: 1, padding: '.42rem 0', background: 'transparent', color: 'var(--text)' }}
         />
         {busy && <span style={{ opacity: 0.5 }}>⏳</span>}
         {q && !busy && (
@@ -118,9 +118,9 @@ export default function MapSearch() {
         )}
       </div>
       {open && results.length > 0 && (
-        <ul style={{
+        <ul className="map-overlay" style={{
+          position: 'static',
           listStyle: 'none', margin: '.25rem 0 0', padding: 0,
-          background: '#fff', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,.28)',
           maxHeight: 264, overflowY: 'auto',
         }}>
           {results.map((r, i) => (
@@ -132,7 +132,7 @@ export default function MapSearch() {
                 padding: '.4rem .55rem', cursor: 'pointer',
                 display: 'flex', gap: '.4rem', alignItems: 'center',
                 background: i === active ? '#eff6ff' : 'transparent',
-                borderTop: i === 0 ? 'none' : '1px solid #f1f5f9',
+                borderTop: i === 0 ? 'none' : '1px solid var(--border)',
               }}
             >
               <span style={{ opacity: 0.7, flex: '0 0 auto' }}>{r.kind === 'address' ? '🏠' : '📍'}</span>

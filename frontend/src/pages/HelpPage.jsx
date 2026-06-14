@@ -265,9 +265,9 @@ export default function HelpPage() {
   const active = HELP.find(t => t.key === activeKey) || HELP[0]
 
   return (
-    <div style={{ display: 'flex', height: '100vh', maxHeight: '100vh', background: '#f8fafc' }}>
+    <div style={{ display: 'flex', height: '100vh', maxHeight: '100vh', background: 'var(--light)' }}>
       {/* Left: tab per menu page */}
-      <aside style={{ width: 230, flex: '0 0 230px', borderRight: '1px solid #e2e8f0', background: '#f1f5f9', display: 'flex', flexDirection: 'column' }}>
+      <aside style={{ width: 230, flex: '0 0 230px', borderRight: '1px solid var(--border)', background: 'var(--light)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '.7rem .8rem .4rem', fontWeight: 700, fontSize: '1rem' }}>❓ Help</div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 .4rem .6rem' }}>
           {HELP.map(t => (
@@ -278,8 +278,9 @@ export default function HelpPage() {
                 display: 'flex', alignItems: 'center', gap: '.5rem', width: '100%', textAlign: 'left',
                 padding: '.45rem .55rem', marginBottom: '.15rem', borderRadius: 6, cursor: 'pointer',
                 border: 'none', font: 'inherit',
-                background: t.key === activeKey ? '#dbeafe' : 'transparent',
-                fontWeight: t.key === activeKey ? 600 : 400, color: '#0f172a',
+                background: t.key === activeKey ? 'rgba(37, 99, 235, 0.12)' : 'transparent',
+                fontWeight: t.key === activeKey ? 600 : 400,
+                color: t.key === activeKey ? 'var(--navy)' : 'var(--text)',
               }}
             >
               <span style={{ width: '1.3em', textAlign: 'center' }}>{t.icon}</span>
@@ -292,14 +293,14 @@ export default function HelpPage() {
       {/* Right: detailed content */}
       <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
         <div style={{ maxWidth: 760, padding: '1.4rem 1.6rem' }}>
-          <h2 style={{ margin: '0 0 .4rem', fontSize: '1.4rem' }}>{active.icon} {active.label}</h2>
-          {active.intro && <p style={{ margin: '0 0 1.1rem', color: '#334155', lineHeight: 1.55 }}>{active.intro}</p>}
+          <h2 className="page-title" style={{ margin: '0 0 .4rem' }}>{active.icon} {active.label}</h2>
+          {active.intro && <p style={{ margin: '0 0 1.1rem', color: 'var(--muted)', lineHeight: 1.55 }}>{active.intro}</p>}
           {active.sections.map((s, i) => (
             <section key={i} style={{ marginBottom: '1.1rem' }}>
-              <h4 style={{ margin: '0 0 .35rem', color: '#1e293b' }}>{s.h}</h4>
+              <h4 className="section-title" style={{ margin: '0 0 .35rem' }}>{s.h}</h4>
               {s.ordered
-                ? <ol style={{ margin: 0, paddingLeft: '1.3rem', lineHeight: 1.6, color: '#334155' }}>{s.items.map((it, j) => <Item key={j} it={it} />)}</ol>
-                : <ul style={{ margin: 0, paddingLeft: '1.3rem', lineHeight: 1.6, color: '#334155' }}>{s.items.map((it, j) => <Item key={j} it={it} />)}</ul>}
+                ? <ol style={{ margin: 0, paddingLeft: '1.3rem', lineHeight: 1.6, color: 'var(--text)' }}>{s.items.map((it, j) => <Item key={j} it={it} />)}</ol>
+                : <ul style={{ margin: 0, paddingLeft: '1.3rem', lineHeight: 1.6, color: 'var(--text)' }}>{s.items.map((it, j) => <Item key={j} it={it} />)}</ul>}
             </section>
           ))}
         </div>

@@ -258,7 +258,7 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
       {/* Type selection table */}
       <div className="card" style={{ padding: '0.75rem 1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-          <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>Available Strata Types</h3>
+          <h3 className="section-title" style={{ marginBottom: 0 }}>Available Strata Types</h3>
           <button className="btn-secondary btn-sm" onClick={() => toggleAll(true)}>Select all</button>
           <button className="btn-secondary btn-sm" onClick={() => toggleAll(false)}>Clear</button>
           <div style={{ flex: 1 }} />
@@ -376,7 +376,7 @@ function SelectionTab({ selectedProjects, selectedPoints }) {
       {/* Preview panels — one collapsible section per selected type */}
       {checkedSelections.length > 0 && (
         <div>
-          <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+          <h3 className="section-title">
             Preview{' '}
             {loadingData && <span className="hint" style={{ fontWeight: 400 }}>Loading…</span>}
           </h3>
@@ -569,15 +569,15 @@ function ErrorTab({ onErrorCountChange }) {
 
       {/* Issue summary + hint */}
       {rows.length > 0 && (
-        <div style={{ fontSize: '0.82rem', color: '#374151' }}>
+        <div style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
           <strong>{rows.length}</strong> row{rows.length !== 1 ? 's' : ''} loaded &nbsp;·&nbsp;
           {issues.length === 0
-            ? <span style={{ color: '#16a34a' }}>✔ No issues found</span>
+            ? <span style={{ color: 'var(--ok-fg)' }}>✔ No issues found</span>
             : <>
-                {errorCount > 0 && <span style={{ color: '#dc2626' }}>{errorCount} error{errorCount !== 1 ? 's' : ''}</span>}
+                {errorCount > 0 && <span style={{ color: 'var(--err-fg)' }}>{errorCount} error{errorCount !== 1 ? 's' : ''}</span>}
                 {errorCount > 0 && warningCount > 0 && ' · '}
-                {warningCount > 0 && <span style={{ color: '#d97706' }}>{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>}
-                {filter === 'errors' && warningCount > 0 && <span style={{ color: '#9ca3af' }}> (warnings hidden)</span>}
+                {warningCount > 0 && <span style={{ color: 'var(--warn-fg)' }}>{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>}
+                {filter === 'errors' && warningCount > 0 && <span style={{ color: 'var(--muted)' }}> (warnings hidden)</span>}
               </>
           }
           <span className="hint" style={{ marginLeft: 8 }}>
@@ -588,12 +588,12 @@ function ErrorTab({ onErrorCountChange }) {
 
       {/* Error windows */}
       {rows.length > 0 && filteredIssues.length === 0 && issues.length > 0 && (
-        <p style={{ color: '#16a34a', margin: 0 }}>
+        <p style={{ color: 'var(--ok-fg)', margin: 0 }}>
           ✔ No errors — only warnings remain (switch to "Errors &amp; warnings" to view them).
         </p>
       )}
       {rows.length > 0 && issues.length === 0 && (
-        <p style={{ color: '#16a34a', margin: 0 }}>
+        <p style={{ color: 'var(--ok-fg)', margin: 0 }}>
           ✔ All layers are consistent — no gaps, overlaps, or negative thicknesses.
         </p>
       )}
@@ -722,8 +722,8 @@ function ErrorWindowList({ rows, issues, onDelete, onEdit }) {
                 }}
               >
                 <button
-                  className="btn-secondary btn-sm"
-                  style={{ color: '#dc2626', borderColor: '#dc2626', padding: '1px 6px' }}
+                  className="btn-secondary btn-sm btn-danger"
+                  style={{ padding: '1px 6px' }}
                   title="Delete this layer row"
                   onClick={() => onDelete(rowIdx)}
                 >

@@ -41,21 +41,13 @@ export default function AddonControl({ target }) {
     updateNow(next)
   }
 
-  const btn = {
-    padding: '0 .35rem', lineHeight: 1.5, fontSize: '.8rem',
-    border: '1px solid var(--border, #cbd5e1)', borderRadius: 4,
-    background: '#fff', cursor: 'pointer',
-    color: '#111827', // #224: explicit black — the glyphs inherited an invisible colour
-  }
-
   return (
     <div
+      className="map-overlay"
       style={{
-        position: 'absolute', top: 10, right: 10, zIndex: 1000,
-        background: 'rgba(255,255,255,0.95)', borderRadius: 6,
+        top: 10, right: 10,
         padding: open ? '.5rem .6rem' : '.3rem .55rem',
-        boxShadow: '0 1px 4px rgba(0,0,0,.25)',
-        fontSize: '.75rem', width: open ? 220 : 'auto',
+        width: open ? 220 : 'auto',
       }}
     >
       <div
@@ -67,9 +59,9 @@ export default function AddonControl({ target }) {
           marginBottom: open ? '.3rem' : 0,
         }}
       >
-        <span style={{ width: 9, color: '#475569', fontSize: '.7rem' }}>{open ? '▾' : '▸'}</span>
+        <span style={{ width: 9, color: 'var(--muted)', fontSize: '.7rem' }}>{open ? '▾' : '▸'}</span>
         Map layers
-        <span style={{ fontWeight: 400, color: '#64748b' }}>
+        <span style={{ fontWeight: 400, color: 'var(--muted)' }}>
           {open ? '(top = in front)' : `(${list.length})`}
         </span>
       </div>
@@ -83,8 +75,8 @@ export default function AddonControl({ target }) {
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.name}>
               {a.name}
             </span>
-            <button style={btn} disabled={i === 0} onClick={() => move(a.id, +1)} title="Bring forward (draw above)">↑</button>
-            <button style={btn} disabled={i === display.length - 1} onClick={() => move(a.id, -1)} title="Send backward (draw below)">↓</button>
+            <button className="btn-xs" disabled={i === 0} onClick={() => move(a.id, +1)} title="Bring forward (draw above)">↑</button>
+            <button className="btn-xs" disabled={i === display.length - 1} onClick={() => move(a.id, -1)} title="Send backward (draw below)">↓</button>
           </div>
           {a.visible !== false && (
             <input

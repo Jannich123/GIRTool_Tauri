@@ -500,7 +500,7 @@ export default function ProjectsPage({ setPage }) {
               padding: '0.4rem 0', borderBottom: '1px solid #e5e7eb',
               marginBottom: '0.4rem',
             }}>
-              <h3 style={{ margin: 0, fontSize: '.95rem', fontWeight: 600 }}>
+              <h3 className="section-title" style={{ marginBottom: 0 }}>
                 Selected projects
               </h3>
               <span className="hint" style={{ fontSize: '.78rem' }}>
@@ -534,7 +534,7 @@ export default function ProjectsPage({ setPage }) {
               padding: '0.4rem 0', borderBottom: '1px solid #e5e7eb',
               marginBottom: '0.4rem',
             }}>
-              <h3 style={{ margin: 0, fontSize: '.95rem', fontWeight: 600 }}>
+              <h3 className="section-title" style={{ marginBottom: 0 }}>
                 Available projects
               </h3>
               <span className="hint" style={{ fontSize: '.78rem' }}>
