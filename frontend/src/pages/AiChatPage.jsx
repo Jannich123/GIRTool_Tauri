@@ -170,7 +170,7 @@ export default function AiChatPage() {
             <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
               <div style={{
                 padding: '.55rem .8rem', borderRadius: 12,
-                background: m.role === 'user' ? 'var(--accent)' : (m.error ? '#fef2f2' : 'var(--surface)'),
+                background: m.role === 'user' ? 'var(--navy)' : (m.error ? '#fef2f2' : 'var(--surface)'),
                 color: m.role === 'user' ? '#fff' : 'var(--text)',
                 border: m.role === 'user' ? 'none' : '1px solid var(--border)',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '.87rem', lineHeight: 1.5,

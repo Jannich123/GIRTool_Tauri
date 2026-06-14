@@ -304,33 +304,40 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
   flex-wrap: wrap;
 }
 
-/* ── Settings subtabs ───────────────────────── */
-.settings-tabs {
+/* ── Subtabs (#348) — ONE look for every page's subtab bar: button-height
+   pills that go bright accent when active.  Shared by .subtabs / .settings-tabs
+   / .grp-cs-tabs so all subtab bars match (Data, Settings, Data Selection,
+   Strata, CPT, Colors).  !important beats the broad global `button` navy rule. */
+.subtabs, .settings-tabs, .grp-cs-tabs {
   display: flex;
-  gap: .25rem;
-  border-bottom: 2px solid #e2e8f0;
+  gap: .4rem;
+  flex-wrap: wrap;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .55rem;
   margin-bottom: 1rem;
+  overflow-x: auto;
 }
-.settings-tab {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -2px;     /* overlap the parent border so active tab joins it */
-  padding: .55rem 1rem;
-  font-size: .92rem;
-  font-weight: 500;
-  color: #64748b;
+.subtab, .settings-tab, .grp-cs-tab {
+  padding: .45rem 1rem !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  background: var(--surface) !important;
+  color: var(--muted) !important;
+  font-size: .875rem !important;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  transition: color .15s, border-color .15s, background .15s;
+  transition: background .15s, color .15s, border-color .15s;
 }
-.settings-tab:hover {
-  background: #f1f5f9;
-  color: #1e293b;
+.subtab:hover:not(.active), .settings-tab:hover:not(.active), .grp-cs-tab:hover:not(.active) {
+  background: var(--light) !important;
+  color: var(--text) !important;
 }
-.settings-tab.active {
-  color: #0f172a;
-  border-bottom-color: var(--accent);
-  background: transparent;
+.subtab.active, .settings-tab.active, .grp-cs-tab.active {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
 }
 
 /* ── Recent folders (Settings page) ─────────────── */
@@ -418,15 +425,23 @@ body { font-family: system-ui, sans-serif; background: var(--light); color: var(
 }
 .btn-secondary:hover { background: var(--light); }
 
-/* ── Card ────────────────────────────────────── */
+/* ── Card / panel (#346/#348) — the shared "white box with content" surface.
+   .card is flex-column (gap between fields); .panel is plain block flow for
+   wrapping a tab's existing content without reflowing it.  Same look. */
 .card {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
   gap: .5rem;
+}
+.panel {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.5rem;
 }
 
 label { font-size: .8rem; font-weight: 600; color: var(--muted); margin-top: .3rem; }
@@ -551,11 +566,11 @@ code { background: #f0f4f8; padding: .1rem .35rem; border-radius: 3px; font-size
 .inline-err { color: var(--err-fg); font-size: .8rem; }
 
 .edit-panel {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 1.5rem;
-  box-shadow: 0 2px 8px rgba(0,0,0,.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .form-grid { display: grid; grid-template-columns: 1fr 160px; gap: 1rem; }
@@ -1203,30 +1218,7 @@ textarea:focus { border-color: var(--navy); }
   overflow: hidden;
 }
 
-.grp-cs-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--light);
-  overflow-x: auto;
-}
-.grp-cs-tab {
-  padding: .5rem 1rem;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: .83rem;
-  font-weight: 500;
-  color: var(--muted);
-  white-space: nowrap;
-  border-bottom: 2px solid transparent;
-  transition: color .15s, border-color .15s;
-}
-.grp-cs-tab.active {
-  color: var(--navy);
-  border-bottom-color: var(--blue);
-  background: #fff;
-}
-.grp-cs-tab:hover:not(.active) { color: var(--text); }
+/* .grp-cs-tabs / .grp-cs-tab styling moved into the shared .subtabs block (#348). */
 
 /* Table of group rows */
 .grp-cs-table { padding: .75rem 1rem; }

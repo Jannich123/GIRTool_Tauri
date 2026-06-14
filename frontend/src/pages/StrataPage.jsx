@@ -822,7 +822,6 @@ export default function StrataPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page page-wide">
-        <h2 className="page-title">Strata</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )
@@ -830,10 +829,6 @@ export default function StrataPage() {
 
   return (
     <div className="page page-wide">
-      <div className="page-header" style={{ marginBottom: '0.75rem' }}>
-        <h2 className="page-title" style={{ marginBottom: 0 }}>Strata</h2>
-      </div>
-
       {/* Sub-tab bar */}
       <div className="grp-cs-tabs" style={{ marginBottom: '1rem' }}>
         <button

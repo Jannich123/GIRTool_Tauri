@@ -279,7 +279,6 @@ export default function ColorsPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page">
-        <h2 className="page-title">Colors & Symbols</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )
@@ -302,7 +301,6 @@ export default function ColorsPage() {
     <div className="page grouping-page">
 
       <div className="grp-topbar">
-        <h2 className="page-title" style={{ marginBottom: 0 }}>Colors & Symbols</h2>
         <div style={{ flex: 1 }} />
         <button
           className="btn-secondary btn-sm"

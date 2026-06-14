@@ -239,7 +239,6 @@ export default function CptCalcPage() {
   if (!selectedProjects.length) {
     return (
       <div className="page page-wide">
-        <h2 className="page-title">CPT – Calculations</h2>
         <p className="hint">Select a project first.</p>
       </div>
     )
@@ -270,8 +269,6 @@ export default function CptCalcPage() {
 
   return (
     <div className="page page-wide">
-      <h2 className="page-title">CPT – Calculations</h2>
-
       <div className="grp-cs-tabs" style={{ marginBottom: '1rem' }}>
         <button className={`grp-cs-tab${sub === 'calc' ? ' active' : ''}`} onClick={() => setSub('calc')}>
           CPT calculations

@@ -605,8 +605,6 @@ export default function SettingsPage({ setPage }) {
 
   return (
     <div className="page">
-      <h2 className="page-title">Settings</h2>
-
       {/* ── Subtab bar ── */}
       <div className="settings-tabs" style={{ maxWidth: 920, marginBottom: '1rem' }}>
         <button

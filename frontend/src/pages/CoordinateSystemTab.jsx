@@ -111,7 +111,7 @@ export default function CoordinateSystemTab() {
   if (!loaded) return <p className="hint">Loading…</p>
 
   return (
-    <div style={{ maxWidth: 920 }}>
+    <div className="panel" style={{ maxWidth: 920 }}>
       <h3 className="section-title">Coordinate system</h3>
       <p className="hint" style={{ marginTop: 0 }}>
         Choose the target horizontal CRS and per-elevation-system Z offsets for this project.
