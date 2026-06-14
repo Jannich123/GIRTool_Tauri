@@ -1490,7 +1490,7 @@ textarea:focus { border-color: var(--navy); }
 .map-legend {
   position: absolute;
   bottom: 28px;
-  right: 10px;
+  left: 10px;                 /* #352: project-map colour legend → bottom-left */
   background: rgba(255,255,255,.95);
   border: 1px solid var(--border);
   border-radius: var(--radius);
