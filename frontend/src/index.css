@@ -20,7 +20,7 @@
   --surface: #fff;
   --hover:   #f4f7fb;          /* one subtle row/hover background */
 
-  --accent:  var(--accent);          /* interactive "active/selected" highlight */
+  --accent:  #2563eb;          /* interactive "active/selected" highlight */
   --primary: var(--navy);      /* brand primary (was referenced-but-undefined) */
 
   --radius-sm: 4px;
