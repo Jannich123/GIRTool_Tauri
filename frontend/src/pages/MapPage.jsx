@@ -363,6 +363,8 @@ export default function MapPage() {
   // from the map — click a point, draw a polygon, or click an addon polygon.
   const UNASSIGN = '__unknown__'
   const [grpTarget,    setGrpTarget]    = useState('')
+  // #350: re-introduced — toggle to assign the chosen group by clicking points.
+  const [grpMode,      setGrpMode]      = useState(false)
   const [grpDrawing,   setGrpDrawing]   = useState(false)
   const [grpVerts,     setGrpVerts]     = useState([]) // [[lat, lng], …]
   const [projMap, setProjMap] = useState(null) // #324: captured Leaflet map for the toolbar shape tools
@@ -580,7 +582,7 @@ export default function MapPage() {
   // ── Grouping logic (#262) ──────────────────────────────────────────────────
   // Keep the target group valid for the polygon-assign flow.
   useEffect(() => {
-    if (!activeGroupSystem) return
+    if (!activeGroupSystem) { setGrpMode(false); return }  // #350: leave click-to-assign
     const names = activeGroupSystem.groups.map(g => g.name)
     if (!grpTarget || (grpTarget !== UNASSIGN && !names.includes(grpTarget))) {
       setGrpTarget(names[0] || UNASSIGN)
@@ -674,10 +676,16 @@ export default function MapPage() {
     }
   }
 
-  // Point click-to-assign (grouping mode): reached from memoised markers via a
-  // ref so it never goes stale.  (#338: the old addon-polygon click handler was
-  // dead since #330 — assignment via a polygon now goes through the shape
-  // selection → assignInsideSelectedPolygon — so it was removed.)
+  // #350: point click-to-assign — while grpMode is on (and not drawing a
+  // polygon), clicking a point assigns it to the chosen group.  Reached from the
+  // memoised markers via a ref so it never goes stale.
+  const assignRef = useRef(null)
+  assignRef.current = assignGroupToPoints
+  const mapPointClickRef = useRef(null)
+  mapPointClickRef.current = (grpMode && !grpDrawing)
+    ? (pt) => assignRef.current?.([pt])
+    : null
+
   // Memoised marker tree (#218): unrelated context churn (e.g. addon
   // transparency drags) re-renders this component; a referentially stable
   // marker array lets React skip reconciling every point marker.  Popups get
@@ -704,25 +712,29 @@ export default function MapPage() {
       const crsLine = crsTip(pt)
       const srcLine = srcCrs(pt.srcProj)
       return (
-        <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}>
-          <Popup>
-            <strong>{pt.PointNo}</strong><br />
-            Type: {pt.PointType}
-            {activeGroupSystem && (
-              <><br />
-                {activeGroupSystem.name}:{' '}
-                {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
-              </>
-            )}
-            {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
-            {srcLine && <><br />Source CRS: {srcLine}</>}
-            {crsLine && <><br />{crsLine}</>}
-          </Popup>
+        <PointMarker key={pt.id} pt={pt} color={color} symbol={symbol}
+          eventHandlers={{ click: () => mapPointClickRef.current?.(pt) }}>
+          {/* #350: no popup while click-to-assign is on — a click assigns. */}
+          {!grpMode && (
+            <Popup>
+              <strong>{pt.PointNo}</strong><br />
+              Type: {pt.PointType}
+              {activeGroupSystem && (
+                <><br />
+                  {activeGroupSystem.name}:{' '}
+                  {groupAssignments[pt.PointId]?.[activeGroupSystem.id] || 'Unknown'}
+                </>
+              )}
+              {pt.ProjectNo && <><br />Project: {pt.ProjectNo}</>}
+              {srcLine && <><br />Source CRS: {srcLine}</>}
+              {crsLine && <><br />{crsLine}</>}
+            </Popup>
+          )}
         </PointMarker>
       )
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem])
+  }, [visiblePoints, activeGroupSystem, groupAssignments, typeStyles, allPoints, coordinateSystem, grpMode])
 
   // ── Legend entries derived from color mode ────────────────────────────────
 
@@ -775,9 +787,9 @@ export default function MapPage() {
   const groupTargetSelect = activeGroupSystem ? (
     <label
       style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem' }}
-      title="The group that 🏷 Assign inside applies to the points within a polygon"
+      title="The group that 🏷 Assign group / Assign inside applies"
     >
-      <span className="hint" style={{ margin: 0 }}>Assign group:</span>
+      <span className="hint" style={{ margin: 0 }}>Group:</span>
       <select
         value={grpTarget}
         onChange={e => setGrpTarget(e.target.value)}
@@ -791,38 +803,62 @@ export default function MapPage() {
     </label>
   ) : null
 
+  // #350: ONE contextual assign button next to the group picker.  Default it
+  // toggles click-to-assign (click points → assign the chosen group); while
+  // drawing or with a polygon selected it becomes "Assign inside" in the same
+  // spot, so no separate Assign-inside button is needed in the row below.
+  const assignButton = !activeGroupSystem ? null
+    : grpDrawing ? (
+      <button className="btn-primary btn-sm" disabled={grpVerts.length < 3} onClick={assignInsidePolygon}
+        title="Assign the chosen group to every point inside the polygon you're drawing">
+        🏷 Assign inside{grpVerts.length >= 3 ? '' : ` (${grpVerts.length})`}
+      </button>
+    ) : polySelected ? (
+      <button className="btn-primary btn-sm" onClick={assignInsideSelectedPolygon}
+        title="Assign the chosen group to every point inside the selected polygon">
+        🏷 Assign inside
+      </button>
+    ) : (
+      <button
+        className="btn-secondary btn-sm"
+        style={grpMode ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff' } : undefined}
+        onClick={() => setGrpMode(m => !m)}
+        title="Toggle on, then click points on the map to assign them to the chosen group"
+      >
+        🏷 Assign group{grpMode ? ' — click points' : ''}
+      </button>
+    )
+
   return (
     <div className="map-page">
 
       {/* ── Toolbar ── */}
       <div className="map-toolbar">
-        <h2>Map</h2>
+        {/* #350: no page title (the sidebar shows the page); the two dropdowns
+            sit side by side, with the contextual assign button beside them. */}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
+          <select
+            value={colorMode}
+            onChange={e => setColorMode(e.target.value)}
+            className="map-color-select"
+            title="Color points by…"
+          >
+            <option value="type">Color by Type</option>
+            {groupSystems.length > 0 && (
+              <optgroup label="Color by Group">
+                {groupSystems.map(gs => (
+                  <option key={gs.id} value={gs.id}>{gs.name}</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          {groupTargetSelect}
+          {assignButton}
+        </div>
 
-        {/* #344: colour mode (left) + group-to-assign (right), side by side. */}
-        <select
-          value={colorMode}
-          onChange={e => setColorMode(e.target.value)}
-          className="map-color-select"
-          title="Color points by…"
-        >
-          <option value="type">Color by Type</option>
-          {groupSystems.length > 0 && (
-            <optgroup label="Color by Group">
-              {groupSystems.map(gs => (
-                <option key={gs.id} value={gs.id}>{gs.name}</option>
-              ))}
-            </optgroup>
-          )}
-        </select>
-        {groupTargetSelect}
-
-        {/* #262: grouping mode — only offered while a group system colours
-            the map. */}
-        {/* #340: no always-on "Assign groups" mode — group assignment happens
-            only via the polygon flow (draw a ✏ Polygon or select one, then
-            🏷 Assign inside, in the reserved row below).
-            #342: the per-map Settings panel is gone — coordinate systems live in
-            Settings → Coordinate system, and WFS is now a Map addon. */}
+        {/* #350: the one 🏷 Assign group / Assign inside button lives beside the
+            dropdowns above. #342: the per-map Settings panel is gone (coordinate
+            systems live in Settings → Coordinate system; WFS is a Map addon). */}
 
         {/* #324/#330/#334/#338: shape tools — one ✏ Polygon (temp draw: assign a
             group inside or 💾 save) + ／ Line; the contextual actions (assign /
@@ -864,14 +900,9 @@ export default function MapPage() {
         borderBottom: '1px solid var(--border)', flexShrink: 0,
       }}>
         {grpDrawing ? (
-          /* Drawing the ✏ Polygon: assign a group inside and/or save it.
-             (#344: the group picker now lives beside the colour selector.) */
+          /* Drawing the ✏ Polygon: 🏷 Assign inside lives in the toolbar button
+             above now (#350); the row keeps Save / Cancel. */
           <>
-            {activeGroupSystem && (
-              <button className="btn-primary btn-sm" disabled={grpVerts.length < 3} onClick={assignInsidePolygon}>
-                🏷 Assign inside{grpVerts.length >= 3 ? '' : ` (${grpVerts.length})`}
-              </button>
-            )}
             <button className="btn-secondary btn-sm" disabled={grpVerts.length < 3} onClick={savePolygonAsAddon}
               title="Save the drawn polygon as a map addon (or double-click the map)">
               💾 Save
@@ -880,24 +911,13 @@ export default function MapPage() {
               Cancel
             </button>
             <span className="hint" style={{ margin: 0 }}>
-              Click to drop vertices, then {activeGroupSystem ? '🏷 Assign inside · ' : ''}💾 Save · double-click saves
+              Click to drop vertices, then {activeGroupSystem ? '🏷 Assign inside (toolbar) · ' : ''}💾 Save · double-click saves
             </span>
           </>
         ) : polySelected ? (
-          /* A polygon addon is selected → assign a group to points inside it.
-             (#344: the group picker now lives beside the colour selector.) */
-          <>
-            {activeGroupSystem && (
-              <>
-                <button className="btn-primary btn-sm" onClick={assignInsideSelectedPolygon}
-                  title="Assign the chosen group to every point inside this polygon">
-                  🏷 Assign inside
-                </button>
-                <span style={{ borderLeft: '1px solid var(--border)', height: 18, margin: '0 .1rem' }} />
-              </>
-            )}
-            <ShapeActions />
-          </>
+          /* A polygon addon is selected → 🏷 Assign inside is the toolbar button
+             above (#350); the row keeps the shape edit/offset/delete actions. */
+          <ShapeActions />
         ) : (shapeSelected || shapeEditing) ? (
           <ShapeActions />
         ) : (

@@ -602,6 +602,15 @@ Performance (load a few thousand points first):
 - [ ] Card / panel / edit-panel surfaces share one radius + shadow (tokenised); nothing regressed on pages that already used cards.
 - [ ] Regression: all pages still navigate, all subtabs still switch, all actions still work.
 
+### 6bo. Map-addons rows / project-selection boxes / project-map assign button (#350)
+
+- [ ] **Settings -> Map addons**: the Built-in background maps table fits inside the white panel. Each row is collapsed (Name / Type / Project / Selection / Visible); click a row to drop down its Service URL / Layer / Format (the multi-layer dropdown still works there). Checkboxes still toggle without expanding the row.
+- [ ] **Settings -> Project selection**: the recent-folder ("previous projects") items now have the white card background with navy (button-coloured) text; the SharePoint info box is the same width as the selection box above it.
+- [ ] **Project Map**: no "Map" title in the toolbar; the Color-by and Group dropdowns sit side by side; an 🏷 Assign group button sits beside them.
+- [ ] Toggling 🏷 Assign group on, then clicking points on the map, assigns them to the chosen group (point popups are suppressed while it's on); toggling it off restores popups.
+- [ ] Drawing a polygon OR selecting a polygon turns that same button into 🏷 Assign inside (same spot); there is no longer a separate Assign-inside button in the row below (that row keeps Save / Cancel while drawing, and edit/delete for a selected shape).
+- [ ] Switching colour mode to "Color by Type" turns assign mode off.
+
 ## 7. Quick regression sweep
 
 - [ ] Startup screen → open project → lands on Data Selection; selection restored.

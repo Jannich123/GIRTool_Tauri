@@ -1071,7 +1071,7 @@ export default function SettingsPage({ setPage }) {
       </div>
 
       {/* ── SharePoint via OneDrive sync ── */}
-      <div className="card" style={{ maxWidth: 520, marginTop: '1.5rem' }}>
+      <div className="card" style={{ maxWidth: 920, marginTop: '1.5rem' }}>
         <h3 className="section-title">Working with a SharePoint folder</h3>
         <p className="hint" style={{ marginBottom: '0.5rem' }}>
           GIRTool reads and writes ordinary files in the output folder above.
