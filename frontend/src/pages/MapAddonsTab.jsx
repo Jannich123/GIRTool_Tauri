@@ -36,6 +36,8 @@ export default function MapAddonsTab() {
   const [layers, setLayers] = useState([])           // [{ name, title }] from GetCapabilities
   const [connecting, setConnecting] = useState(false)
   const [connectMsg, setConnectMsg] = useState(null)
+  // #350: which built-in row is expanded to show its URL / layer / format.
+  const [expandedBuiltin, setExpandedBuiltin] = useState(null)
 
   async function connect() {
     setConnectMsg(null); setConnecting(true); setWmtsInfo(null)
@@ -252,47 +254,69 @@ export default function MapAddonsTab() {
         it runs web-mercator and the Danish maps use their WMS variant; with only Danish layers on,
         it runs the Danish 25832 grid and serves the faster WMTS tiles.
       </p>
+      {/* #350: compact rows — click a row to drop down its Service URL / Layer /
+          Format so the table fits inside the panel instead of overflowing. */}
       <table className="data-table" style={{ maxWidth: 900, marginBottom: '1.25rem' }}>
         <thead>
           <tr>
-            <th>Name</th><th>Type</th><th>Service URL</th><th>Layer</th><th>Format</th>
+            <th style={{ width: 24 }}></th>
+            <th>Name</th><th>Type</th>
             <th style={{ width: 70, textAlign: 'center' }}>Project</th>
             <th style={{ width: 80, textAlign: 'center' }}>Selection</th>
             <th style={{ width: 70, textAlign: 'center' }}>Visible</th>
           </tr>
         </thead>
         <tbody>
-          {addons.filter(a => a?.builtin).map(a => (
-            <tr key={a.id}>
-              <td>{a.name}</td>
-              <td>{(a.type || 'wms').toUpperCase()}</td>
-              <td style={{ fontSize: '.72rem', fontFamily: 'monospace', wordBreak: 'break-all' }} title={a.url}>
-                {a.url}
-              </td>
-              {/* #232: services exposing several layers get a dropdown. */}
-              <td style={{ fontSize: '.8rem' }}>
-                {Array.isArray(a.layers) && a.layers.length > 1 ? (
-                  <select
-                    value={a.layer}
-                    onChange={e => update(a.id, { layer: e.target.value })}
-                    style={{ marginBottom: 0, maxWidth: 220 }}
-                  >
-                    {a.layers.map(l => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                ) : (a.layer || '—')}
-              </td>
-              <td style={{ fontSize: '.8rem' }}>{a.format || (a.type === 'xyz' ? 'tiles' : '—')}</td>
-              <td style={{ textAlign: 'center' }}>
-                <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
-              </td>
-              <td style={{ textAlign: 'center' }}>
-                <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
-              </td>
-              <td style={{ textAlign: 'center' }}>
-                <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
-              </td>
-            </tr>
-          ))}
+          {addons.filter(a => a?.builtin).map(a => {
+            const open = expandedBuiltin === a.id
+            return (
+              <Fragment key={a.id}>
+                <tr
+                  onClick={() => setExpandedBuiltin(open ? null : a.id)}
+                  style={{ cursor: 'pointer' }}
+                  title={open ? 'Hide details' : 'Show Service URL / Layer / Format'}
+                >
+                  <td style={{ textAlign: 'center', color: 'var(--muted)' }}>{open ? '▾' : '▸'}</td>
+                  <td>{a.name}</td>
+                  <td>{(a.type || 'wms').toUpperCase()}</td>
+                  <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={!!a.maps?.project} onChange={() => toggleMap(a.id, 'project')} />
+                  </td>
+                  <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={!!a.maps?.selection} onChange={() => toggleMap(a.id, 'selection')} />
+                  </td>
+                  <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={a.visible !== false} onChange={() => update(a.id, { visible: a.visible === false })} />
+                  </td>
+                </tr>
+                {open && (
+                  <tr>
+                    <td colSpan={6} style={{ background: 'var(--light)' }} onClick={e => e.stopPropagation()}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.4rem .85rem', alignItems: 'center', padding: '.35rem .3rem' }}>
+                        <strong style={{ fontSize: '.8rem' }}>Service URL</strong>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '.72rem', wordBreak: 'break-all' }}>{a.url}</span>
+                        <strong style={{ fontSize: '.8rem' }}>Layer</strong>
+                        <span style={{ fontSize: '.8rem' }}>
+                          {/* #232: services exposing several layers get a dropdown. */}
+                          {Array.isArray(a.layers) && a.layers.length > 1 ? (
+                            <select
+                              value={a.layer}
+                              onChange={e => update(a.id, { layer: e.target.value })}
+                              style={{ marginBottom: 0, maxWidth: 260 }}
+                            >
+                              {a.layers.map(l => <option key={l} value={l}>{l}</option>)}
+                            </select>
+                          ) : (a.layer || '—')}
+                        </span>
+                        <strong style={{ fontSize: '.8rem' }}>Format</strong>
+                        <span style={{ fontSize: '.8rem' }}>{a.format || (a.type === 'xyz' ? 'tiles' : '—')}</span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
 
